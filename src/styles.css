@@ -775,6 +775,76 @@ button {
   font-weight: 600;
 }
 
+.curl-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #d9e0ea;
+  border-radius: 14px;
+  background: #ffffff;
+}
+
+.curl-panel__header,
+.curl-panel__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.curl-panel__header span,
+.curl-field span {
+  display: block;
+  color: #7a869a;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.curl-panel__header h2 {
+  margin: 4px 0 0;
+  color: #172033;
+  font-size: 16px;
+  line-height: 1.1;
+}
+
+.curl-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.curl-field {
+  display: grid;
+  gap: 8px;
+}
+
+.curl-field textarea {
+  width: 100%;
+  min-height: 118px;
+  padding: 12px;
+  border: 1px solid #d9e0ea;
+  border-radius: 12px;
+  background: #fbfdff;
+  color: #172033;
+  font-family: "SF Mono", "SFMono-Regular", "JetBrains Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.curl-panel__actions {
+  justify-content: flex-start;
+}
+
+.curl-panel__actions span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .request-content {
   min-height: 0;
 }

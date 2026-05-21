@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import {
+  exportCurl,
+  importCurl,
   listenBridgeEvents,
   loadBootstrapState,
   saveEnvironment,
@@ -33,6 +35,28 @@ const sidebarPanels = [
   { key: "environments", short: "EN", label: "Environments", caption: "Variables and Secrets" },
   { key: "settings", short: "ST", label: "Settings", caption: "Local Runtime" },
 ] as const;
+
+const requestMethods: RequestMethod[] = [
+  "GET",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+  "HEAD",
+  "OPTIONS",
+];
+
+function commandErrorMessage(error: unknown, action: string) {
+  if (error instanceof Error) {
+    if (error.message.includes("reading 'invoke'")) {
+      return `${action} requires the Tauri desktop runtime.`;
+    }
+
+    return error.message;
+  }
+
+  return `Failed to ${action.toLowerCase()}.`;
+}
 
 function safePathname(url: string) {
   try {
@@ -121,6 +145,12 @@ export default function App() {
   const [expandedCollections, setExpandedCollections] = useState<Record<string, boolean>>({});
   const [bridgeEvents, setBridgeEvents] = useState<BridgeEvent[]>([]);
   const [isBridgeListenerReady, setIsBridgeListenerReady] = useState(false);
+  const [isCurlPanelOpen, setIsCurlPanelOpen] = useState(false);
+  const [curlInput, setCurlInput] = useState(
+    "curl -X GET 'https://api.example.com/v1/workspaces?page=1' -H 'Accept: application/json'",
+  );
+  const [curlOutput, setCurlOutput] = useState("");
+  const [curlMessage, setCurlMessage] = useState("");
 
   const activeRequest =
     requests.find((request) => request.id === activeRequestId) ?? requests[0];
@@ -368,6 +398,69 @@ export default function App() {
     }
   };
 
+  const handleImportCurl = async () => {
+    if (!activeRequest) {
+      return;
+    }
+
+    setCurlMessage("Importing cURL...");
+    try {
+      const imported = await importCurl({
+        command: curlInput,
+        requestId: activeRequest.id,
+        collection: activeRequest.collection,
+        collectionFile: activeRequest.collectionFile,
+      });
+      const method = imported.method.toUpperCase();
+      if (!requestMethods.includes(method as RequestMethod)) {
+        setCurlMessage(`Imported method ${method} is not supported by the editor yet.`);
+        return;
+      }
+
+      replaceRequest({
+        id: imported.id,
+        name: imported.name,
+        collection: imported.collection,
+        collectionFile: imported.collectionFile,
+        method: method as RequestMethod,
+        url: imported.url,
+        params: normalizeRows(imported.params, `${imported.id}-param`),
+        headers: normalizeRows(imported.headers, `${imported.id}-header`),
+        body: imported.body,
+        authType: imported.authType as "none" | "bearer",
+        authToken: imported.authToken,
+      });
+      setCurlMessage("Imported into the active request. Use Save to persist it.");
+      setIsCurlPanelOpen(true);
+    } catch (error) {
+      setCurlMessage(commandErrorMessage(error, "Import cURL"));
+    }
+  };
+
+  const handleExportCurl = async () => {
+    if (!activeRequest) {
+      return;
+    }
+
+    setCurlMessage("Exporting active request...");
+    try {
+      const command = await exportCurl({
+        method: activeRequest.method,
+        url: activeRequest.url,
+        params: activeRequest.params,
+        headers: activeRequest.headers,
+        body: activeRequest.body,
+        authType: activeRequest.authType,
+        authToken: activeRequest.authToken,
+      });
+      setCurlOutput(command);
+      setCurlMessage("Exported cURL command from the active request.");
+      setIsCurlPanelOpen(true);
+    } catch (error) {
+      setCurlMessage(commandErrorMessage(error, "Export cURL"));
+    }
+  };
+
   return (
     <main className="postman-shell">
       <header className="postman-topbar">
@@ -397,10 +490,19 @@ export default function App() {
             {bootstrap.loaded ? "Local Data Ready" : "Seed Mode"}
           </span>
           <button type="button" className="ghost-button">
+            Import Postman
+          </button>
+          <button type="button" className="ghost-button" onClick={() => setIsCurlPanelOpen(true)}>
             Import cURL
           </button>
-          <button type="button" className="ghost-button">
-            Import Postman
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => {
+              void handleExportCurl();
+            }}
+          >
+            Export cURL
           </button>
         </div>
       </header>
@@ -654,10 +756,11 @@ export default function App() {
                   updateRequestMethod(event.target.value as RequestMethod)
                 }
               >
-                <option value="GET">GET</option>
-                <option value="POST">POST</option>
-                <option value="PUT">PUT</option>
-                <option value="DELETE">DELETE</option>
+                {requestMethods.map((method) => (
+                  <option key={method} value={method}>
+                    {method}
+                  </option>
+                ))}
               </select>
               <input
                 className="request-url-input"
@@ -702,6 +805,62 @@ export default function App() {
             </div>
 
             {lastError ? <div className="request-error-banner">{lastError}</div> : null}
+
+            {isCurlPanelOpen ? (
+              <section className="curl-panel">
+                <div className="curl-panel__header">
+                  <div>
+                    <span>cURL Import / Export</span>
+                    <h2>Command Interop</h2>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => setIsCurlPanelOpen(false)}
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="curl-panel__grid">
+                  <label className="curl-field">
+                    <span>Import cURL</span>
+                    <textarea
+                      value={curlInput}
+                      onChange={(event) => setCurlInput(event.target.value)}
+                    />
+                  </label>
+                  <label className="curl-field">
+                    <span>Exported cURL</span>
+                    <textarea
+                      readOnly
+                      value={curlOutput}
+                      placeholder="Use Export cURL to generate a command from the active request."
+                    />
+                  </label>
+                </div>
+                <div className="curl-panel__actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => {
+                      void handleImportCurl();
+                    }}
+                  >
+                    Import into Request
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => {
+                      void handleExportCurl();
+                    }}
+                  >
+                    Export Active Request
+                  </button>
+                  {curlMessage ? <span>{curlMessage}</span> : null}
+                </div>
+              </section>
+            ) : null}
 
             <div className="request-tabs">
               {requestTabs.map((tab) => (

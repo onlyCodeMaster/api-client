@@ -125,6 +125,27 @@ pub struct SaveRequestInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CurlImportInput {
+    pub command: String,
+    pub request_id: String,
+    pub collection: String,
+    pub collection_file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CurlExportInput {
+    pub method: String,
+    pub url: String,
+    pub params: Vec<RequestKeyValue>,
+    pub headers: Vec<RequestKeyValue>,
+    pub body: String,
+    pub auth_type: String,
+    pub auth_token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SendRequestInput {
     pub request_id: String,
     pub request_name: String,

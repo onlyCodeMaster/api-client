@@ -115,11 +115,52 @@
     - Task 4 已完成大型检查并形成一个可构建、可测试的整体基线；本轮按完整基线方式暂存项目文件，准备创建初始提交，而不是只提交少量 touched 文件形成残缺历史。
   - 自信度检查：我是否对当前实现 100% 有信心？对于 Task 4 的范围是有信心的：事件时序风险已修复，前端构建、Rust check、storage 单测、HTTP 行为测试、Tauri dev 启动和浏览器 seed 模式检查均有真实证据。剩余缺口已明确记录为后续 Task 5+ 的目标，不属于本轮全面检查必须一次性完成的内容。
 
-- [ ] Task 5: 补齐下一项核心能力缺口
+- [x] Task 5: 补齐下一项核心能力缺口
   - 目标：根据 Task 4 的结论选择下一个最有价值的能力闭环，例如导入导出、上传下载、Proxy/TLS、Cookie/Auth 或日志缓存。
   - 独立验证：该能力有明确 UI/Bridge/Core/Data 证据或被清晰标记为不属于当前基础版本。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：补齐 cURL 导入/导出的第一条真实闭环，使顶部 `Import cURL` 从静态按钮变成可交互面板，并新增 `Export cURL` 能力。
+  - 具体改动：
+    - `src-tauri/src/curl.rs`
+      - 新增 cURL tokenizer、导入 parser、导出 generator。
+      - 支持常见 `curl` 形式：`-X/--request`、`-H/--header`、`-d/--data/--data-raw/--data-binary/--data-urlencode`、`-G/--get`、`-I/--head`、`--url`、长参数 `--flag=value`。
+      - 导入时拆分 URL query 到 params，解析 headers，把 `Authorization: Bearer ...` 转成 auth 配置。
+      - 导出时从 method、url、params、headers、body、bearer auth 生成可复制的 cURL 命令。
+      - 新增 3 个 Rust 单测覆盖常见 POST 导入、`-G` query 导入和导出命令。
+    - `src-tauri/src/models.rs`
+      - 新增 `CurlImportInput` 和 `CurlExportInput`。
+    - `src-tauri/src/commands.rs`
+      - 新增 `import_curl` 和 `export_curl` command。
+      - 两个 command 均接入 `api-client://bridge-event`，在 completed / failed 阶段发出事件。
+    - `src-tauri/src/lib.rs`
+      - 注册 `import_curl` / `export_curl` 到 Tauri invoke handler。
+    - `src/lib/tauri.ts`
+      - 新增 `StoredRequest` 类型别名。
+      - 新增 `importCurl` / `exportCurl` invoke 封装。
+    - `src/store/requestStore.ts`
+      - 扩展 `RequestMethod` 到 `GET / POST / PUT / PATCH / DELETE / HEAD / OPTIONS`，避免 cURL 导入常见方法后 UI 状态不一致。
+    - `src/App.tsx`
+      - 顶部新增 `Export cURL` 按钮。
+      - `Import cURL` 打开 cURL Import / Export 面板。
+      - cURL 导入结果会替换当前 active request 的 method、url、params、headers、body、auth；持久化仍复用已有 `Save` 按钮。
+      - cURL 导出会基于当前 active request 生成命令并显示在面板中。
+      - seed 浏览器模式下若没有 Tauri runtime，会显示友好提示 `requires the Tauri desktop runtime`，不再暴露内部 `invoke` 异常。
+    - `src/styles.css`
+      - 新增 cURL 面板、双 textarea、动作区和状态提示样式。
+  - 验证结果：
+    - `cargo fmt --manifest-path src-tauri/Cargo.toml` 已执行。
+    - `npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-Bq6FJuy7.css`、`dist/assets/index-YXMYuBeU.js`。
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过。
+    - `cargo test --manifest-path src-tauri/Cargo.toml curl::tests::` 通过，3 个 cURL 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过，4 个 storage 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml http::tests::` 默认沙箱仍因 `127.0.0.1` bind 权限失败；提权重跑后通过，1 个 HTTP 测试成功。
+    - `rg` 复核确认 `import_curl`、`export_curl`、`CurlImportInput`、`requestMethods`、友好 Tauri runtime 提示等落到实际代码。
+    - `npm run dev` 启动后用 in-app browser 打开 `http://localhost:1420/`，点击 `Import cURL` / `Export Active Request`，确认 cURL 面板可见、扩展方法 `PATCH` / `OPTIONS` 可见、seed 模式显示友好 runtime 提示且不再出现原始 `Cannot read properties of undefined`。
+    - 验证结束后执行 `pkill -f "npm run dev"`，`curl -s http://localhost:1420` 返回连接失败，确认 dev server 未继续占用端口。
+  - 当前边界：
+    - cURL 导入/导出已形成 UI / Bridge / Rust Core 闭环。
+    - 当前导入不会自动写 collection 文件，用户仍需点击现有 `Save` 按钮持久化；这是有意保留的安全边界，避免导入命令时立即覆盖文件。
+    - Postman Collection 导入、文件上传下载、真实 Cookie jar、Proxy/TLS 应用、YAML 环境文件、日志和缓存仍是后续缺口。
+  - 自信度检查：我是否对当前实现 100% 有信心？对 Task 5 的边界有信心：cURL 解析/生成有 Rust 单测覆盖，Tauri command 已注册并接入事件，前端构建通过，浏览器 seed 模式验证 UI 和降级提示，storage 与 HTTP 回归未发现新问题。剩余缺口不属于本 task 范围，已明确留给后续任务。
 
 - [ ] Task 6: 完成最终交付审计前的必要修缮
   - 目标：处理剩余必须修复的问题，避免最终审计时存在已知阻断项。

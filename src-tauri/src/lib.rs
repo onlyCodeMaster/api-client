@@ -1,4 +1,5 @@
 mod commands;
+mod curl;
 mod error;
 mod http;
 mod models;
@@ -25,6 +26,8 @@ pub fn run() {
             commands::save_secret,
             commands::save_environment,
             commands::save_request,
+            commands::import_curl,
+            commands::export_curl,
             commands::send_request
         ])
         .run(tauri::generate_context!())

@@ -1,7 +1,14 @@
 import { create } from "zustand";
 import { sendRequest } from "../lib/tauri";
 
-export type RequestMethod = "GET" | "POST" | "PUT" | "DELETE";
+export type RequestMethod =
+  | "GET"
+  | "POST"
+  | "PUT"
+  | "PATCH"
+  | "DELETE"
+  | "HEAD"
+  | "OPTIONS";
 export type AuthType = "none" | "bearer";
 
 export type KeyValueRow = {

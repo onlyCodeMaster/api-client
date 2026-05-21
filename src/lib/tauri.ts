@@ -76,6 +76,8 @@ export type SendRequestInput = {
   environment: BootstrapState["environments"][number];
 };
 
+export type StoredRequest = BootstrapState["collections"][number]["requests"][number];
+
 export type SendRequestResult = {
   status: string;
   durationMs: number;
@@ -127,9 +129,30 @@ export async function saveEnvironment(input: {
 }
 
 export async function saveRequest(
-  input: BootstrapState["collections"][number]["requests"][number],
+  input: StoredRequest,
 ) {
   return invoke<BootstrapState["collections"][number]>("save_request", { input });
+}
+
+export async function importCurl(input: {
+  command: string;
+  requestId: string;
+  collection: string;
+  collectionFile: string;
+}) {
+  return invoke<StoredRequest>("import_curl", { input });
+}
+
+export async function exportCurl(input: {
+  method: string;
+  url: string;
+  params: Array<{ key: string; value: string; enabled: boolean }>;
+  headers: Array<{ key: string; value: string; enabled: boolean }>;
+  body: string;
+  authType: string;
+  authToken: string;
+}) {
+  return invoke<string>("export_curl", { input });
 }
 
 export async function sendRequest(input: SendRequestInput) {

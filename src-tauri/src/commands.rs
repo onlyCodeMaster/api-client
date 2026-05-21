@@ -2,12 +2,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::{AppHandle, Emitter, State};
 
+use crate::curl;
 use crate::error::AppError;
 use crate::http;
 use crate::models::{
-    BootstrapState, BridgeEvent, CollectionSummary, EnvironmentSummary, RecordHistoryInput,
-    SaveEnvironmentInput, SaveRequestInput, SaveSecretInput, SecretStatus, SendRequestInput,
-    SendRequestResult,
+    BootstrapState, BridgeEvent, CollectionSummary, CurlExportInput, CurlImportInput,
+    EnvironmentSummary, RecordHistoryInput, SaveEnvironmentInput, SaveRequestInput,
+    SaveSecretInput, SecretStatus, SendRequestInput, SendRequestResult, StoredRequest,
 };
 use crate::secrets;
 use crate::storage::{self, StoragePaths};
@@ -275,6 +276,60 @@ pub fn save_request(
                 "save_request",
                 "failed",
                 "Failed to save request",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn import_curl(app: AppHandle, input: CurlImportInput) -> Result<StoredRequest, String> {
+    match curl::import_command(input) {
+        Ok(request) => {
+            emit_bridge_event(
+                &app,
+                "import_curl",
+                "completed",
+                "cURL command imported",
+                Some(format!("{} {}", request.method, request.url)),
+            );
+            Ok(request)
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                "import_curl",
+                "failed",
+                "Failed to import cURL command",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn export_curl(app: AppHandle, input: CurlExportInput) -> Result<String, String> {
+    match curl::export_command(input) {
+        Ok(command) => {
+            emit_bridge_event(
+                &app,
+                "export_curl",
+                "completed",
+                "cURL command exported",
+                None,
+            );
+            Ok(command)
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                "export_curl",
+                "failed",
+                "Failed to export cURL command",
                 Some(message.clone()),
             );
             Err(message)
