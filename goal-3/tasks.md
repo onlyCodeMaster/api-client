@@ -46,11 +46,36 @@
     - 检查结束后已执行 `pkill -f "npm run dev"`，`curl -s http://localhost:1420` 返回连接失败，确认 dev server 已停止。
   - 自信度检查：对 Task 2 的审计结论有 100% 信心：代码证据、运行态 DOM 指标、截图和构建结果共同说明当前页面功能存在但布局与 Postman 类工作台差距明显；下一步应先做主工作台骨架重构，而不是继续添加功能。
 
-- [ ] Task 3: 重构主工作台整体布局骨架
+- [x] Task 3: 重构主工作台整体布局骨架
   - 目标：优先修复最影响“像 Postman”的整体信息架构、分栏比例、主请求区和响应区布局。
   - 独立验证：前端构建通过，浏览器运行态确认主工作台更接近 API Client 专业布局，核心入口仍可见。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：已重构主工作台骨架，使请求编辑器和响应查看器始终作为核心 workbench 渲染；History / Environments / Settings 不再整页替换请求/响应主流程，而是作为辅助 inspector 出现。
+  - 具体改动：
+    - `src/App.tsx`
+      - 将 `.request-editor` 与 `.response-panel` 从 `workspaceMode === "collections"` 条件渲染中移出，包进新的 `.workbench`，保证主请求工作台始终存在。
+      - 非 Collections 模式下新增 `.workspace-inspector`，用于承载 History / Environments / Settings 的辅助内容。
+      - 新增 `handleSidebarPanelChange`，侧栏切换后滚回页面顶部，避免移动端用户点击 History / Settings 后停留在 Explorer 下方而迷路。
+    - `src/styles.css`
+      - 压缩 topbar、主导航、Explorer 的尺寸，降低 dashboard 感。
+      - `.postman-body` 默认改为稳定应用工作区高度，桌面下使用 `58px / 280px / main` 三栏。
+      - 新增 `.workbench`，以请求编辑区 + 响应区的双层工作台作为核心布局。
+      - 新增 `.workspace--with-inspector` 与 `.workspace-inspector`，在非 Collections 模式下用右侧 inspector 承载辅助内容。
+      - 修正 `max-width: 1280px` 时过早拆散 URL bar 的问题，保留 method + URL + Save + Send 的紧凑结构。
+      - 在 `max-width: 980px` 下把 workbench 排在 Explorer 前面，让窄屏优先看到请求/响应，而不是先看到长 Explorer。
+      - 在 `max-width: 700px` 下让 method + URL 保持第一行、Save + Send 第二行，避免四行长表单。
+  - 验证结果：
+    - `npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-DdhUR_KD.css`、`dist/assets/index-Bghjjdxt.js`。
+    - `npm run dev` 启动成功，in-app browser 打开 `http://localhost:1420/` 成功。
+    - 运行态 viewport `599x1329` 下，Task 2 的 `.request-editor` 起点从 y=864 改善为 y=154，`.response-panel` 起点从 y=1774 改善为 y=934。
+    - `.request-editor__bar` 高度从约 `184px` 降为约 `84px`，method + URL / Save + Send 变成两行而不是四段长表单。
+    - `.postman-body` 子元素顺序在窄屏下变为 workspace/workbench 优先，Explorer 后置；用户首屏优先看到主请求流程。
+    - 点击移动 switcher 的 History 后，`scrollY` 回到 0，`.request-editor`、`.response-panel`、Send、Save、Params / Headers / Body / Auth、Body / Headers / Timeline 仍存在；History 内容在 `.workspace-inspector` 中显示。
+    - browser console error 日志为空。
+    - 检查结束后已执行 `pkill -f "npm run dev"`，`curl -s http://localhost:1420` 返回连接失败，确认 dev server 已停止。
+  - 当前边界：
+    - Task 3 聚焦整体骨架和主请求流程，已明显纠正“像纵向 dashboard”的最大问题。
+    - Import / Files / Settings / Environment 等辅助面板的视觉密度和抽屉化程度仍可继续优化，留给 Task 5。
+  - 自信度检查：对 Task 3 的骨架修复有 100% 信心：构建通过，真实浏览器指标显示请求区和响应区大幅前移，History 不再替换主 workbench，核心入口无丢失且控制台无应用错误。剩余辅助面板打磨不阻塞本 task，但会在后续 task 继续处理。
 
 - [ ] Task 4: 大型全面检查 - debug 循环
   - 目标：对 Task 1-3 的布局改动做全面回归，发现并修复明显视觉、响应式或功能入口问题。

@@ -369,6 +369,10 @@ export default function App() {
     }));
   };
   const workspaceMode = activeSidebarPanel;
+  const handleSidebarPanelChange = (panel: (typeof sidebarPanels)[number]["key"]) => {
+    setActiveSidebarPanel(panel);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   const handleSaveEnvironment = async () => {
     setIsSavingEnvironment(true);
@@ -685,7 +689,7 @@ export default function App() {
                 className={`workspace-nav__item ${
                   activeSidebarPanel === panel.key ? "is-active" : ""
                 }`}
-                onClick={() => setActiveSidebarPanel(panel.key)}
+                onClick={() => handleSidebarPanelChange(panel.key)}
               >
                 <strong>{panel.short}</strong>
                 <span>{panel.label}</span>
@@ -717,7 +721,7 @@ export default function App() {
                 className={`mobile-panel-switcher__item ${
                   activeSidebarPanel === panel.key ? "is-active" : ""
                 }`}
-                onClick={() => setActiveSidebarPanel(panel.key)}
+                onClick={() => handleSidebarPanelChange(panel.key)}
               >
                 <strong>{panel.short}</strong>
                 <span>{panel.label}</span>
@@ -892,10 +896,9 @@ export default function App() {
         </aside>
 
         <section
-          className={`workspace ${workspaceMode !== "collections" ? "workspace--single" : ""}`}
+          className={`workspace ${workspaceMode !== "collections" ? "workspace--with-inspector" : ""}`}
         >
-          {workspaceMode === "collections" ? (
-            <>
+          <div className="workbench">
           <div className="request-editor">
             <div className="request-editor__header">
               <div className="request-context">
@@ -1415,8 +1418,11 @@ export default function App() {
               ) : null}
             </div>
           </div>
-            </>
-          ) : null}
+
+          </div>
+
+          {workspaceMode !== "collections" ? (
+            <aside className="workspace-inspector">
 
           {workspaceMode === "history" ? (
             <section className="workspace-panel">
@@ -1663,6 +1669,9 @@ export default function App() {
                 ))}
               </div>
             </section>
+          ) : null}
+
+            </aside>
           ) : null}
         </section>
       </section>
