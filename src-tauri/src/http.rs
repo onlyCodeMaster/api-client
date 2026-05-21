@@ -6,8 +6,7 @@ use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    RequestKeyValue, ResponseHeader, ResponseSummary, ResponseTimelineItem, SendRequestInput,
-    SendRequestResult,
+    ResponseHeader, ResponseSummary, ResponseTimelineItem, SendRequestInput, SendRequestResult,
 };
 use crate::secrets;
 
@@ -160,12 +159,6 @@ fn format_body(body: String) -> String {
 }
 
 #[allow(dead_code)]
-fn _active_rows(rows: &[RequestKeyValue]) -> Vec<&RequestKeyValue> {
-    rows.iter()
-        .filter(|row| row.enabled && !row.key.trim().is_empty())
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -174,7 +167,7 @@ mod tests {
     use std::thread;
 
     use super::*;
-    use crate::models::{EnvironmentSummary, EnvironmentVariable};
+    use crate::models::{EnvironmentSummary, EnvironmentVariable, RequestKeyValue};
 
     #[test]
     fn execute_request_sends_real_http_request_and_maps_response() {

@@ -204,11 +204,56 @@
     - 文件上传下载、真实 Cookie jar、Proxy/TLS 应用、YAML 环境文件、日志和缓存仍是 Task 7-8 审计中的已知剩余缺口。
   - 自信度检查：我是否对当前实现 100% 有信心？对 Task 6 的边界有信心：Postman 导入有 Rust parser 与单测覆盖，command 已注册并接入 bridge event，前端有真实导入入口和 store 合并逻辑，构建、Rust check、Postman/cURL/storage 回归均通过，运行态 UI 也已验证。剩余缺口已经明确记录为后续全面检查和最终 review 的对象，不属于本 task 必须完成的范围。
 
-- [ ] Task 7: 大型全面检查 - debug 循环
+- [x] Task 7: 大型全面检查 - debug 循环
   - 目标：对 Task 5-6 和整体系统做第二轮全面回归。
   - 独立验证：形成完整的真实证据清单，标记所有已完成、部分完成和不在当前边界内的能力。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：完成第二轮大型全面检查 - debug 循环，并修复一个代码卫生问题。
+  - 检查中发现并修复的问题：
+    - `src-tauri/src/http.rs`
+      - 发现 `_active_rows` dead-code helper 只剩调试遗留用途，且删除后暴露 `RequestKeyValue` 在主模块 import 中未使用。
+      - 修复方式：删除 `_active_rows`，并把 `RequestKeyValue` import 移到测试模块内，消除 Rust warning。
+  - 第二轮 prompt-to-artifact 检查表：
+    - 前端 UI 层 - 请求编辑器：`src/App.tsx` 有 method select、URL input、Save / Send；浏览器 DOM 运行态确认 `Send`、7 个 HTTP method、3 个 top tabs 可见。
+    - 前端 UI 层 - Header / Query / Body 表单：`src/App.tsx` 有 Params / Headers / Body / Auth tabs 和对应编辑表单；浏览器 DOM 运行态确认 request tabs 数量为 4。
+    - 前端 UI 层 - 响应查看器：`src/App.tsx` 有 Body / Headers / Timeline response tabs、status、duration、size、protocol、response body；浏览器 DOM 运行态确认 response tabs 数量为 3。
+    - 前端 UI 层 - 历史记录：`src/App.tsx` 有 History sidebar；`src/store/requestStore.ts` 在发送请求后追加本地 history；`src-tauri/src/storage.rs` 持久化 SQLite history。
+    - 前端 UI 层 - 环境变量：`src/App.tsx` 有 Environments sidebar 和 Environment Editor；`src/store/requestStore.ts` 有环境变量更新；`src-tauri/src/storage.rs` 可保存 environment 文件。
+    - 前端 UI 层 - Collection 管理：`src/App.tsx` 从 requests 分组渲染 collection tree；`saveRequest` 写回 collection 文件；storage 单测覆盖 workspace-backed collection 读写。
+    - 前端 UI 层 - 设置页面：`src/App.tsx` 有 Settings 面板、Runtime Contracts、Bridge Events、Keychain Secrets；代码证据充分。浏览器工具对侧边栏点击存在可见性误判，因此 Settings 运行态点击证据弱于主工作台 DOM 证据。
+    - Tauri Bridge - command 暴露：`src-tauri/src/lib.rs` 注册 `load_bootstrap_state`、`record_history_entry`、`save_secret`、`save_environment`、`save_request`、`import_curl`、`export_curl`、`import_postman_collection`、`send_request`。
+    - Tauri Bridge - 参数校验：Rust 层通过 URL parse、method parse、header parse、JSON parse、空 URL / 空 Postman collection / 缺 cURL URL 等错误路径做基础校验；业务级完整 schema 校验仍是后续增强。
+    - Tauri Bridge - 类型转换：`src-tauri/src/models.rs` 与 `src/lib/tauri.ts` 维护 camelCase serde / TypeScript invoke 类型。
+    - Tauri Bridge - 错误封装：`src-tauri/src/error.rs` 定义 `AppError`；`src-tauri/src/commands.rs` 统一转成 command error string；前端 cURL/Postman 操作在非 Tauri runtime 下显示友好提示。
+    - Tauri Bridge - 前后端事件通信：`src-tauri/src/commands.rs` 通过 `app.emit("api-client://bridge-event", BridgeEvent)` 发 command 生命周期事件；`src/lib/tauri.ts` 通过 `listenBridgeEvents` 订阅；`src/App.tsx` Settings 面板展示最近 8 条事件。
+    - Rust Core - HTTP 请求引擎：`src-tauri/src/http.rs` 使用 `reqwest::blocking::Client` 执行真实请求；HTTP 单测覆盖 method、URL、query、header、body、response headers/body/timeline 映射。
+    - Rust Core - 环境变量解析：`src-tauri/src/http.rs` 的 `resolve_template` 支持 `{{key}}`、`{{env.key}}`、`{{secret.name}}`。
+    - Rust Core - Cookie 管理：SQLite schema 有 `cookie_jars` 表，UI 和 response summary 展示 cookie jar；但没有真实 Set-Cookie 解析、持久化和请求注入，仍标记为部分实现。
+    - Rust Core - Auth 处理：HTTP 执行支持 bearer token；cURL 和 Postman 导入也能提取 Bearer auth；其他 auth 类型未实现，仍是基础版边界。
+    - Rust Core - Proxy / TLS 配置：`reqwest` 使用 `rustls-tls`，UI/环境变量展示 proxy；但 proxy/TLS 配置未实际注入 reqwest builder，仍标记为部分实现。
+    - Rust Core - cURL 导入导出：`src-tauri/src/curl.rs`、`commands.rs`、`lib.rs`、`src/lib/tauri.ts`、`src/App.tsx` 形成 UI / Bridge / Core 闭环；cURL 单测覆盖 3 条路径。
+    - Rust Core - Postman Collection 导入：`src-tauri/src/postman.rs`、`commands.rs`、`lib.rs`、`src/lib/tauri.ts`、`src/App.tsx` 形成 UI / Bridge / Core 闭环；Postman 单测覆盖 3 条路径。
+    - Rust Core - 文件上传下载：未发现 upload/download command、模型、UI 文件选择或保存流程，仍是明确未实现项。
+    - 本地数据层 - SQLite：`src-tauri/src/storage.rs` 创建 settings、request_history、cookie_jars；storage 单测覆盖 history 和 collection/environment 文件写回。
+    - 本地数据层 - JSON/YAML 文件：workspace、collection、environment 是 JSON 文件读写；YAML 只有 seed UI 文案 `local.yaml`，没有 `serde_yaml` 或 YAML 解析，仍是明确未实现项。
+    - 本地数据层 - 系统 Keychain：`src-tauri/src/secrets.rs` 使用 `keyring_core::Entry`，Settings 有 Keychain Secrets 保存入口。
+    - 本地数据层 - 本地缓存：除 seed state、settings 和 SQLite history 外没有独立缓存模型或策略，仍是明确未实现项。
+    - 本地数据层 - 日志：没有应用级日志文件写入或日志查看 UI，仍是明确未实现项。
+  - 验证结果：
+    - `cargo fmt --manifest-path src-tauri/Cargo.toml` 通过。
+    - `npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-CVaYjg2s.css`、`dist/assets/index-CJKQNzuP.js`。
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过，清理后无 warning 输出。
+    - `cargo test --manifest-path src-tauri/Cargo.toml curl::tests::` 通过，3 个 cURL 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml postman::tests::` 通过，3 个 Postman 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过，4 个 storage 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml http::tests::` 默认沙箱因 `127.0.0.1` bind 权限失败；提权重跑后通过，1 个 HTTP 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml` 提权运行通过，11 个 Rust 测试成功。
+    - `npm run dev` 启动后用 in-app browser 打开 `http://localhost:1420/`，只读 DOM 检查确认 `API Client`、`Send`、`Import Postman`、`Import cURL`、`Export cURL` 存在；`navItems=4`、`topTabs=3`、`requestTabs=4`、`responseTabs=3`；未出现原始 `Cannot read properties of undefined` invoke 异常。
+    - 验证结束后执行 `pkill -f "npm run dev"`，`curl -s http://localhost:1420` 返回连接失败，确认 dev server 未继续占用端口。
+  - 当前最终审计前剩余缺口：
+    - 必须在 Task 8 中明确判定的未完成项：文件上传下载、真实 Cookie jar、Proxy/TLS 配置应用、YAML 文件解析、本地缓存、日志。
+    - 如果最终目标要求“全部生产级能力完整实现”，则 Task 8 不能标记 goal 完成，必须继续拆新 task 修复这些缺口。
+    - 如果最终目标接受“基础可运行 API Client + 已实现/部分实现/未实现边界清晰”，则 Task 8 可以在审计中给出边界判定，但不能把未实现项写成已完成。
+  - 自信度检查：我是否对当前实现 100% 有信心？对 Task 7 的大型检查范围有信心：代码证据、关键词扫描、前端构建、Rust check、模块测试、全量 Rust 测试和浏览器 DOM 运行态检查都已覆盖，并且检查中发现的小 warning 已修复。对整个 goal 是否可完成还没有 100% 信心，因为原始目标中的上传下载、真实 Cookie jar、Proxy/TLS 应用、YAML、缓存和日志仍缺真实实现，必须在 Task 8 或后续 task 中继续处理。
 
 - [ ] Task 8: 最终最大的 review 与 goal 完成判定
   - 目标：从 C 端体验、代码、安全性、数据持久化、错误处理、测试覆盖和原始目标覆盖度做最终审计。
