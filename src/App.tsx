@@ -995,198 +995,6 @@ export default function App() {
 
             {lastError ? <div className="request-error-banner">{lastError}</div> : null}
 
-            {isPostmanPanelOpen ? (
-              <section className="import-panel">
-                <div className="import-panel__header">
-                  <div>
-                    <span>Postman Collection Import</span>
-                    <h2>Collection Interop</h2>
-                  </div>
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => setIsPostmanPanelOpen(false)}
-                  >
-                    Close
-                  </button>
-                </div>
-                <label className="import-field">
-                  <span>Collection JSON</span>
-                  <textarea
-                    value={postmanInput}
-                    onChange={(event) => setPostmanInput(event.target.value)}
-                  />
-                </label>
-                <div className="import-panel__actions">
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => {
-                      void handleImportPostman();
-                    }}
-                  >
-                    Import Collection
-                  </button>
-                  {postmanMessage ? <span>{postmanMessage}</span> : null}
-                </div>
-              </section>
-            ) : null}
-
-            {isCurlPanelOpen ? (
-              <section className="curl-panel">
-                <div className="curl-panel__header">
-                  <div>
-                    <span>cURL Import / Export</span>
-                    <h2>Command Interop</h2>
-                  </div>
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => setIsCurlPanelOpen(false)}
-                  >
-                    Close
-                  </button>
-                </div>
-                <div className="curl-panel__grid">
-                  <label className="curl-field">
-                    <span>Import cURL</span>
-                    <textarea
-                      value={curlInput}
-                      onChange={(event) => setCurlInput(event.target.value)}
-                    />
-                  </label>
-                  <label className="curl-field">
-                    <span>Exported cURL</span>
-                    <textarea
-                      readOnly
-                      value={curlOutput}
-                      placeholder="Use Export cURL to generate a command from the active request."
-                    />
-                  </label>
-                </div>
-                <div className="curl-panel__actions">
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => {
-                      void handleImportCurl();
-                    }}
-                  >
-                    Import into Request
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => {
-                      void handleExportCurl();
-                    }}
-                  >
-                    Export Active Request
-                  </button>
-                  {curlMessage ? <span>{curlMessage}</span> : null}
-                </div>
-              </section>
-            ) : null}
-
-            {isTransferPanelOpen ? (
-              <section className="transfer-panel">
-                <div className="transfer-panel__header">
-                  <div>
-                    <span>File Upload / Download</span>
-                    <h2>Binary Transfer</h2>
-                  </div>
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => setIsTransferPanelOpen(false)}
-                  >
-                    Close
-                  </button>
-                </div>
-                <div className="transfer-panel__grid">
-                  <div className="transfer-card">
-                    <div>
-                      <span>Upload</span>
-                      <strong>multipart/form-data</strong>
-                    </div>
-                    <label className="transfer-field">
-                      <span>File Path</span>
-                      <input
-                        value={uploadPath}
-                        onChange={(event) => setUploadPath(event.target.value)}
-                        placeholder="/absolute/path/to/file"
-                      />
-                    </label>
-                    <label className="transfer-field">
-                      <span>Field Name</span>
-                      <input
-                        value={uploadFieldName}
-                        onChange={(event) => setUploadFieldName(event.target.value)}
-                        placeholder="file"
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => {
-                        void handleUploadFile();
-                      }}
-                    >
-                      Upload Active Request
-                    </button>
-                  </div>
-                  <div className="transfer-card">
-                    <div>
-                      <span>Download</span>
-                      <strong>Save response body</strong>
-                    </div>
-                    <label className="transfer-field">
-                      <span>URL</span>
-                      <input
-                        value={downloadUrl}
-                        onChange={(event) => setDownloadUrl(event.target.value)}
-                        placeholder="{{base_url}}/file.json"
-                      />
-                    </label>
-                    <label className="transfer-field">
-                      <span>Destination Path</span>
-                      <input
-                        value={downloadPath}
-                        onChange={(event) => setDownloadPath(event.target.value)}
-                        placeholder="/absolute/path/to/download"
-                      />
-                    </label>
-                    <label className="transfer-check">
-                      <input
-                        type="checkbox"
-                        checked={allowDownloadOverwrite}
-                        onChange={() =>
-                          setAllowDownloadOverwrite((current) => !current)
-                        }
-                      />
-                      <span>Allow overwrite</span>
-                    </label>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => {
-                        void handleDownloadFile();
-                      }}
-                    >
-                      Download to Path
-                    </button>
-                  </div>
-                </div>
-                <div className="transfer-panel__footer">
-                  <span>
-                    Upload uses the active request URL, headers and environment. Download defaults
-                    to no-overwrite for safer local files.
-                  </span>
-                  {transferMessage ? <strong>{transferMessage}</strong> : null}
-                </div>
-              </section>
-            ) : null}
-
             <div className="request-tabs">
               {requestTabs.map((tab) => (
                 <button
@@ -1418,6 +1226,217 @@ export default function App() {
               ) : null}
             </div>
           </div>
+
+          {isPostmanPanelOpen || isCurlPanelOpen || isTransferPanelOpen ? (
+            <section className="tool-drawer" aria-label="Request tools">
+              <div className="tool-drawer__rail">
+                <strong>Tools</strong>
+                <span>
+                  {[
+                    isPostmanPanelOpen ? "Postman" : "",
+                    isCurlPanelOpen ? "cURL" : "",
+                    isTransferPanelOpen ? "Files" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" / ")}
+                </span>
+              </div>
+
+              <div className="tool-drawer__content">
+                {isPostmanPanelOpen ? (
+                  <section className="import-panel">
+                    <div className="import-panel__header">
+                      <div>
+                        <span>Postman Collection Import</span>
+                        <h2>Collection Interop</h2>
+                      </div>
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => setIsPostmanPanelOpen(false)}
+                      >
+                        Close
+                      </button>
+                    </div>
+                    <label className="import-field">
+                      <span>Collection JSON</span>
+                      <textarea
+                        value={postmanInput}
+                        onChange={(event) => setPostmanInput(event.target.value)}
+                      />
+                    </label>
+                    <div className="import-panel__actions">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => {
+                          void handleImportPostman();
+                        }}
+                      >
+                        Import Collection
+                      </button>
+                      {postmanMessage ? <span>{postmanMessage}</span> : null}
+                    </div>
+                  </section>
+                ) : null}
+
+                {isCurlPanelOpen ? (
+                  <section className="curl-panel">
+                    <div className="curl-panel__header">
+                      <div>
+                        <span>cURL Import / Export</span>
+                        <h2>Command Interop</h2>
+                      </div>
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => setIsCurlPanelOpen(false)}
+                      >
+                        Close
+                      </button>
+                    </div>
+                    <div className="curl-panel__grid">
+                      <label className="curl-field">
+                        <span>Import cURL</span>
+                        <textarea
+                          value={curlInput}
+                          onChange={(event) => setCurlInput(event.target.value)}
+                        />
+                      </label>
+                      <label className="curl-field">
+                        <span>Exported cURL</span>
+                        <textarea
+                          readOnly
+                          value={curlOutput}
+                          placeholder="Use Export cURL to generate a command from the active request."
+                        />
+                      </label>
+                    </div>
+                    <div className="curl-panel__actions">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => {
+                          void handleImportCurl();
+                        }}
+                      >
+                        Import into Request
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => {
+                          void handleExportCurl();
+                        }}
+                      >
+                        Export Active Request
+                      </button>
+                      {curlMessage ? <span>{curlMessage}</span> : null}
+                    </div>
+                  </section>
+                ) : null}
+
+                {isTransferPanelOpen ? (
+                  <section className="transfer-panel">
+                    <div className="transfer-panel__header">
+                      <div>
+                        <span>File Upload / Download</span>
+                        <h2>Binary Transfer</h2>
+                      </div>
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() => setIsTransferPanelOpen(false)}
+                      >
+                        Close
+                      </button>
+                    </div>
+                    <div className="transfer-panel__grid">
+                      <div className="transfer-card">
+                        <div>
+                          <span>Upload</span>
+                          <strong>multipart/form-data</strong>
+                        </div>
+                        <label className="transfer-field">
+                          <span>File Path</span>
+                          <input
+                            value={uploadPath}
+                            onChange={(event) => setUploadPath(event.target.value)}
+                            placeholder="/absolute/path/to/file"
+                          />
+                        </label>
+                        <label className="transfer-field">
+                          <span>Field Name</span>
+                          <input
+                            value={uploadFieldName}
+                            onChange={(event) => setUploadFieldName(event.target.value)}
+                            placeholder="file"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => {
+                            void handleUploadFile();
+                          }}
+                        >
+                          Upload Active Request
+                        </button>
+                      </div>
+                      <div className="transfer-card">
+                        <div>
+                          <span>Download</span>
+                          <strong>Save response body</strong>
+                        </div>
+                        <label className="transfer-field">
+                          <span>URL</span>
+                          <input
+                            value={downloadUrl}
+                            onChange={(event) => setDownloadUrl(event.target.value)}
+                            placeholder="{{base_url}}/file.json"
+                          />
+                        </label>
+                        <label className="transfer-field">
+                          <span>Destination Path</span>
+                          <input
+                            value={downloadPath}
+                            onChange={(event) => setDownloadPath(event.target.value)}
+                            placeholder="/absolute/path/to/download"
+                          />
+                        </label>
+                        <label className="transfer-check">
+                          <input
+                            type="checkbox"
+                            checked={allowDownloadOverwrite}
+                            onChange={() =>
+                              setAllowDownloadOverwrite((current) => !current)
+                            }
+                          />
+                          <span>Allow overwrite</span>
+                        </label>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => {
+                            void handleDownloadFile();
+                          }}
+                        >
+                          Download to Path
+                        </button>
+                      </div>
+                    </div>
+                    <div className="transfer-panel__footer">
+                      <span>
+                        Upload uses the active request URL, headers and environment. Download
+                        defaults to no-overwrite for safer local files.
+                      </span>
+                      {transferMessage ? <strong>{transferMessage}</strong> : null}
+                    </div>
+                  </section>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
 
           </div>
 

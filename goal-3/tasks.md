@@ -99,11 +99,35 @@
     - 下一步 Task 5 应继续处理辅助面板和交互密度：Import、Files、Settings、History、Environment、Collection 的视觉层级仍可更像 Postman 的工具型面板。
   - 自信度检查：对 Task 4 的全面检查结论有 100% 信心：构建、whitespace、代码搜索、浏览器运行态、窄屏行为、Settings 切换、控制台和端口清理都有真实证据；未发现必须在本 task 内修补的问题。
 
-- [ ] Task 5: 修缮辅助面板和交互密度
+- [x] Task 5: 修缮辅助面板和交互密度
   - 目标：优化导入、Files、Settings、History、Environment、Collection 等辅助面板，使其不干扰主请求流程且更像专业工具。
   - 独立验证：浏览器运行态确认各辅助面板可达、可读、不会挤爆主工作区。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：已优化导入、Files、Settings、History、Environment、Collection 等辅助面板的层级和密度，让它们不再打断主请求流程，更接近 Postman 类工具的“主 workbench + 辅助工具/inspector”模式。
+  - 具体改动：
+    - `src/App.tsx`
+      - 将 Postman import、cURL import/export、Files upload/download 从 `.request-editor` 中移出，改为 `.workbench` 底部的 `.tool-drawer`。
+      - `.tool-drawer` 统一承载已打开的工具面板，左侧 rail 显示当前打开的工具：Postman / cURL / Files。
+      - 保留所有原有工具动作：Import Collection、Import into Request、Export Active Request、Upload Active Request、Download to Path。
+      - History / Environments / Settings 继续通过 `.workspace-inspector` 承载，不再替换主请求/响应工作台。
+    - `src/styles.css`
+      - `.workbench` 增加第三行用于可选工具抽屉。
+      - 新增 `.tool-drawer`、`.tool-drawer__rail`、`.tool-drawer__content`，限制工具抽屉最大高度并让内容内部滚动。
+      - 压缩 cURL / Postman / Files 面板间距、圆角和 textarea 高度，减少大卡片 dashboard 感。
+      - 保持 request editor 和 response panel 的位置稳定，工具面板只在响应区之后出现。
+  - 验证结果：
+    - `npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-BKl13Ah2.css`、`dist/assets/index-CRLW-T0i.js`。
+    - `git diff --check` 通过。
+    - `rg` 确认 `.tool-drawer`、`.workspace-inspector`、`Import into Request`、`Upload Active Request`、`Environment Variables`、`Keychain Secrets` 等关键入口仍存在。
+    - `npm run dev` 启动成功，in-app browser 打开 `http://localhost:1420/` 成功。
+    - 打开 Files 与 Import cURL 后，`.tool-drawer` 出现在 y=1441，主 `.request-editor` 仍在 y=154，`.response-panel` 仍在 y=934；Send / Save 仍存在。
+    - 工具抽屉中确认 `Upload Active Request`、`Download to Path`、`Import into Request` 均可见，rail 文案显示 `Tools cURL / Files`。
+    - 切换 Environments 后，`.workspace-inspector` 可见，`Environment Variables` 表单和 7 个 input 可见，主请求/响应仍存在。
+    - 切换 Settings 后，`.workspace-inspector` 可见，`Local Runtime Overview`、`Keychain Secrets`、4 个 architecture card、2 个 runtime card 可见。
+    - browser console error 日志为空；一次 Statsig/ChatGPT 侧网络超时来自浏览器插件请求，不属于本地应用控制台错误。
+    - 检查结束后执行 `pkill -f "npm run dev"`，`curl -s http://localhost:1420` 返回连接失败，确认 dev server 已停止。
+  - 当前边界：
+    - 辅助面板已不再插入请求编辑器中间，但还未做最终视觉审计和完成判定；Task 6 需要重新按用户目标全量检查。
+  - 自信度检查：对 Task 5 的辅助面板修缮有 100% 信心：工具抽屉、inspector、核心按钮、环境/设置内容、构建、whitespace 和运行态检查均通过，主请求/响应流程没有被工具面板挤掉。
 
 - [ ] Task 6: 最终布局审计与 goal 完成判定
   - 目标：从用户视角和 Postman 类布局标准做最终审计，只有整体布局问题已真实改善且无明显阻断时才标记 goal 完成。

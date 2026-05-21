@@ -626,7 +626,7 @@ button {
 
 .workbench {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) minmax(240px, 34vh);
+  grid-template-rows: minmax(0, 1fr) minmax(240px, 34vh) auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -805,11 +805,52 @@ button {
 .import-panel,
 .transfer-panel {
   display: grid;
-  gap: 12px;
-  padding: 14px;
+  gap: 10px;
+  padding: 12px;
   border: 1px solid #d9e0ea;
-  border-radius: 14px;
+  border-radius: 10px;
   background: #ffffff;
+}
+
+.tool-drawer {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 0;
+  max-height: 34vh;
+  margin: 0 12px 12px;
+  border: 1px solid #d9e0ea;
+  border-radius: 10px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.tool-drawer__rail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border-right: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.tool-drawer__rail strong {
+  color: #172033;
+  font-size: 13px;
+}
+
+.tool-drawer__rail span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.tool-drawer__content {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  overflow: auto;
+  padding: 10px;
 }
 
 .curl-panel__header,
@@ -852,13 +893,13 @@ button {
 .curl-panel__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .transfer-panel__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .transfer-card {
@@ -907,8 +948,8 @@ button {
 .curl-field textarea,
 .import-field textarea {
   width: 100%;
-  min-height: 118px;
-  padding: 12px;
+  min-height: 96px;
+  padding: 10px;
   border: 1px solid #d9e0ea;
   border-radius: 12px;
   background: #fbfdff;
@@ -920,7 +961,7 @@ button {
 }
 
 .import-field textarea {
-  min-height: 180px;
+  min-height: 140px;
 }
 
 .curl-panel__actions,
