@@ -129,8 +129,33 @@
     - 辅助面板已不再插入请求编辑器中间，但还未做最终视觉审计和完成判定；Task 6 需要重新按用户目标全量检查。
   - 自信度检查：对 Task 5 的辅助面板修缮有 100% 信心：工具抽屉、inspector、核心按钮、环境/设置内容、构建、whitespace 和运行态检查均通过，主请求/响应流程没有被工具面板挤掉。
 
-- [ ] Task 6: 最终布局审计与 goal 完成判定
+- [x] Task 6: 最终布局审计与 goal 完成判定
   - 目标：从用户视角和 Postman 类布局标准做最终审计，只有整体布局问题已真实改善且无明显阻断时才标记 goal 完成。
   - 独立验证：完整检查清单全部满足；构建和运行态检查通过；若仍有差距则继续拆新 task。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：完成最终布局审计，确认当前页面已经从“纵向 dashboard / 大卡片堆叠”修正为更接近 Postman 类 API Client 的主 workbench 布局；用户目标可以标记完成。
+  - 用户目标拆解为验收标准：
+    - 整体页面布局不再以 dashboard 卡片为主，而是以 API request workbench 为主。
+    - 左侧 / 资源区应有 Collections、History、Environments、Settings 等清晰导航。
+    - 主区域应突出请求编辑器，包含 method + URL + Save + Send、Params / Headers / Body / Auth。
+    - 响应区域应明确存在，包含 Body / Headers / Timeline。
+    - Import、Files、Settings 等辅助能力不应挤占或替换主请求/响应流程。
+    - 页面需要通过真实浏览器运行态检查，包括窄屏可达性、无横向溢出、无本地应用控制台错误。
+  - prompt-to-artifact 最终检查表：
+    - 主 workbench：已实现。证据：`src/App.tsx` 中 `.request-editor` 与 `.response-panel` 始终渲染在 `.workbench` 内，不再只依赖 `workspaceMode === "collections"`。
+    - 非 dashboard 骨架：已实现。证据：`src/styles.css` 中 `.postman-body` 默认三栏 `58px / 280px / main`，`.workbench` 使用请求/响应/工具抽屉三段结构；旧 `workspace--single` 已不存在。
+    - 左侧资源导航：已实现。证据：`workspace-nav` 和 `explorer-panel` 仍存在；窄屏下 `mobile-panel-switcher` 提供 Collections / History / Environments / Settings。
+    - 请求编辑器：已实现并优先显示。证据：运行态 viewport `599x1329` 下 `.request-editor` y=154；`.request-editor__bar` 可见且高约 `84px`；Send、Save 均存在。
+    - Header / Query / Body / Auth：已实现。证据：运行态 request tabs 为 `Params`、`Headers`、`Body`、`Auth`。
+    - 响应查看器：已实现并前移。证据：运行态 `.response-panel` y=934，高约 `494px`；response tabs 为 `Body`、`Headers`、`Timeline`。
+    - 辅助工具不挤占主流程：已实现。证据：Files 打开后 `.tool-drawer` 出现在 y=1441，`.request-editor` 仍在 y=154，`.response-panel` 仍在 y=934；Upload / Download 可见。
+    - Settings 不替换 workbench：已实现。证据：点击 Settings 后 `scrollY=0`，`.request-editor` 和 `.response-panel` 仍可见，`Local Runtime Overview`、`Keychain Secrets`、`Frontend / Backend Channel` 在 `.workspace-inspector` 中可见。
+    - Environment / History inspector 模式：已实现。证据：Task 5 运行态确认 Environments 显示 `Environment Variables` 表单和 7 个 input，主请求/响应仍存在；Task 4/5 确认 History / Settings 均为 inspector。
+    - 窄屏可达性：已实现。证据：运行态 `documentElement.scrollWidth=584`，无横向溢出；workspace/workbench 在 Explorer 前面，用户先看到主请求流程。
+    - 构建和静态检查：已实现。证据：`npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-BKl13Ah2.css`、`dist/assets/index-CRLW-T0i.js`；`git diff --check` 通过。
+    - 控制台：已通过。证据：browser `tab.dev.logs({ levels: ["error"] })` 返回空；一次 Statsig/ChatGPT 侧网络超时来自浏览器插件请求，不是本地应用 error。
+    - 端口清理：已完成。证据：检查结束后 `pkill -f "npm run dev"`，`curl -s http://localhost:1420` 返回连接失败。
+  - 最终判定：
+    - 原始目标“整体页面布局问题大、和 Postman 差异太大”已被拆解为可验证的布局标准。
+    - 当前实现已满足主 workbench、左侧导航、请求编辑器、响应查看器、辅助工具抽屉、inspector 和窄屏可达性要求。
+    - 仍可继续精修品牌视觉、图标、拖拽 resize、真实桌面大屏截图等，但这些属于增强，不再是本目标的阻断项。
+  - 自信度检查：对 Task 6 的完成判定有 100% 信心：最终审计基于实际代码、构建结果、运行态 DOM 指标、核心入口检查、工具抽屉检查、Settings inspector 检查和控制台结果，不依赖主观感觉或单一代理信号；没有发现未覆盖的明确目标。
