@@ -241,6 +241,10 @@ button {
   background: #ff6c37;
 }
 
+.mobile-panel-switcher {
+  display: none;
+}
+
 .workspace-nav__footer {
   display: flex;
   align-items: center;
@@ -1428,6 +1432,43 @@ button {
 
   .workspace-nav {
     display: none;
+  }
+
+  .mobile-panel-switcher {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .mobile-panel-switcher__item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-height: 58px;
+    padding: 8px 6px;
+    border: 1px solid #d9e0ea;
+    border-radius: 12px;
+    background: #f8fafc;
+    color: #607086;
+    text-align: center;
+  }
+
+  .mobile-panel-switcher__item strong {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+  }
+
+  .mobile-panel-switcher__item span {
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.1;
+  }
+
+  .mobile-panel-switcher__item.is-active {
+    border-color: #dce5ff;
+    background: #eef3ff;
+    color: #2140a3;
   }
 
   .explorer-panel {

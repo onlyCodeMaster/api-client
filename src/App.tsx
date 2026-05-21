@@ -677,6 +677,22 @@ export default function App() {
             </button>
           </div>
 
+          <div className="mobile-panel-switcher" aria-label="Workspace sections">
+            {sidebarPanels.map((panel) => (
+              <button
+                key={panel.key}
+                type="button"
+                className={`mobile-panel-switcher__item ${
+                  activeSidebarPanel === panel.key ? "is-active" : ""
+                }`}
+                onClick={() => setActiveSidebarPanel(panel.key)}
+              >
+                <strong>{panel.short}</strong>
+                <span>{panel.label}</span>
+              </button>
+            ))}
+          </div>
+
           <input
             className="sidebar__search-input"
             placeholder={`Search ${activePanelMeta.label.toLowerCase()}`}

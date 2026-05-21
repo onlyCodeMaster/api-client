@@ -425,11 +425,45 @@
     - `tls_verify=false` / `tls_hostname_verify=false` 属于危险调试能力，已通过显式环境变量触发，不默认关闭。
   - 自信度检查：我是否对当前实现 100% 有信心？对 Task 11 的核心边界有信心：proxy system/disabled/custom、TLS verify/hostname/https-only 配置已经真实进入 reqwest builder，HTTP 和文件传输通道均复用该 builder；配置解析、错误路径和 builder 创建有单测覆盖，全量 Rust 测试、Rust check、前端构建和 whitespace 检查均通过。剩余高级证书管理 UI 属于后续增强，不阻塞本 task。
 
-- [ ] Task 12: 大型全面检查 - debug 循环
+- [x] Task 12: 大型全面检查 - debug 循环
   - 目标：对 Task 9-11 和整体系统做第三轮全面回归。
   - 独立验证：前端构建、Rust check、全量 Rust 测试、关键 UI/运行态检查通过，并更新 prompt-to-artifact checklist。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：完成 Task 9-11 后的第三轮大型全面检查 - debug 循环，并修复一个窄屏导航可达性问题。
+  - 检查中发现并修复的问题：
+    - `src/App.tsx` / `src/styles.css`
+      - 发现风险：在 `max-width: 980px` 下 `.workspace-nav` 被隐藏，但 Settings / History / Environments 没有窄屏替代入口；浏览器运行态 viewport 为 `599px` 时，Settings nav 元素为 `0x0`，用户无法切换到 Settings 面板。
+      - 修复方式：在 explorer panel header 下新增 `mobile-panel-switcher`，复用 `sidebarPanels` 渲染 Collections / History / Environments / Settings；CSS 默认隐藏，仅在窄屏显示。
+      - 效果：窄屏下可打开 Settings，proxy/TLS 说明和 Bridge Events 面板可见；Files 面板仍可从顶部入口打开。
+  - 第三轮 prompt-to-artifact 检查表：
+    - 前端 UI - 请求编辑器：`src/App.tsx` method select、URL input、Save / Send 仍存在；浏览器 DOM 运行态确认 `API Client`、`Send` 可见。
+    - 前端 UI - Header / Query / Body 表单：`src/App.tsx` 的 Params / Headers / Body / Auth tabs 仍存在；浏览器运行态主工作台可见。
+    - 前端 UI - 响应查看器：`src/App.tsx` response tabs、summary、body/header/timeline 结构仍在；前端 build 通过。
+    - 前端 UI - 历史记录 / 环境变量 / Collection 管理：`src/App.tsx` side panel 和 workspace modes 仍映射到 `history`、`environments`、`collections`；新增移动 switcher 后窄屏不再丢入口。
+    - 前端 UI - 设置页面：`src/App.tsx` Settings workspace panel 存在；浏览器运行态通过移动 switcher 打开后确认 `Local Runtime Overview`、`Frontend / Backend Channel`、`proxy=system|disabled|custom`、`tls_verify`、`tls_hostname_verify`、`https_only` 可见。
+    - Tauri Bridge：`src-tauri/src/lib.rs` command 注册、`src-tauri/src/commands.rs` event emit、`src/lib/tauri.ts` invoke/listen 类型仍在；`rg` 与构建通过。
+    - Rust Core - 文件上传下载：`upload_file` / `download_file` command、models、frontend invoke、Files panel 和 Rust core 实现均存在；浏览器运行态确认 `Upload Active Request` 和 `Download to Path` 可见。
+    - Rust Core - Cookie 管理：`load_cookie_header`、`store_set_cookie_headers`、`Set-Cookie` 存储和 `Cookie` 注入在 `storage.rs` / `http.rs` 中存在；storage 和 HTTP 集成测试覆盖。
+    - Rust Core - Proxy / TLS：`transport::build_client` 被 `http.rs`、upload、download 调用；`transport::tests::` 覆盖 system / disabled / custom proxy 和 TLS 配置。
+    - Rust Core - cURL / Postman：`curl::tests::` 和 `postman::tests::` 分别通过，导入导出链路未回归。
+    - 本地数据层 - SQLite / JSON / Keychain：SQLite history/cookie schema 与 tests 通过；JSON collection/environment 读写仍通过 storage tests；Keychain secret UI 和 command 仍存在。
+    - 仍未完成的后续缺口：YAML environment 文件解析、本地缓存、应用级日志仍未实现，分别由 Task 13 和 Task 14 处理；因此不能标记整体 goal 完成。
+  - 验证结果：
+    - `cargo fmt --manifest-path src-tauri/Cargo.toml --check` 通过。
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过。
+    - `npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-Ksj6H0MM.css`、`dist/assets/index-woOLTTUo.js`。
+    - `cargo test --manifest-path src-tauri/Cargo.toml file_transfer::tests::` 通过，3 个 file transfer 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过，6 个 storage 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml transport::tests::` 通过，4 个 transport 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml curl::tests::` 通过，3 个 cURL 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml postman::tests::` 通过，3 个 Postman 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml` 提权运行通过，20 个 Rust 测试成功，包含本地 HTTP 集成测试。
+    - `git diff --check` 通过。
+    - `npm run dev` 启动后用 in-app browser 打开 `http://localhost:1420/`，确认主工作台、Files 面板、移动 panel switcher、Settings proxy/TLS 文案和 Bridge Events 面板可见，控制台 error 日志为空。
+    - 运行态检查后执行 `pkill -f "npm run dev"`，`curl -s http://localhost:1420` 返回连接失败，确认 dev server 未继续占用端口。
+  - 调试记录：
+    - 曾尝试用单条 `cargo test ... curl::tests:: postman::tests::` 同时过滤两个模块，Cargo 不支持多个 TESTNAME 参数；已分开重跑并通过，确认为命令格式问题而非代码失败。
+    - Playwright click 在窄屏下偶发 CDP evaluate timeout；改用 DOM CUA 和页面内只读 evaluate 确认实际 DOM 与可见入口，并发现/修复真实窄屏导航缺口。
+  - 自信度检查：我是否对当前实现 100% 有信心？对 Task 12 的检查和修复范围有信心：本轮全面覆盖 Task 9-11 的核心实现、构建、模块测试、全量 Rust 测试、浏览器运行态和窄屏可达性，并修复了实际发现的 Settings 窄屏不可达问题。整体 goal 仍未完成，因为 YAML、缓存和日志仍是明确后续任务。
 
 - [ ] Task 13: 补齐 YAML 环境文件支持
   - 目标：支持 JSON/YAML environment 文件读取和保存，避免 `local.yaml` 只是 UI seed 文案。
