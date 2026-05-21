@@ -1000,6 +1000,7 @@ export default function App() {
                 <button
                   key={tab.key}
                   type="button"
+                  aria-label={`Request ${tab.label} tab`}
                   className={`request-tab ${requestTab === tab.key ? "is-active" : ""}`}
                   onClick={() => setRequestTab(tab.key)}
                 >
@@ -1177,6 +1178,7 @@ export default function App() {
                   <button
                     key={tab.key}
                     type="button"
+                    aria-label={`Response ${tab.label} tab`}
                     className={`response-tab ${responseTab === tab.key ? "is-active" : ""}`}
                     onClick={() => setResponseTab(tab.key)}
                   >

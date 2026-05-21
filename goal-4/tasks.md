@@ -30,11 +30,27 @@
     - P2：当前窄屏仍是长页面，虽然核心流程可走，但首屏密度仍偏高；后续 task 继续考虑。
   - 自信度检查：对 Task 2 审计结论有 100% 信心：启动失败、端口占用、交互歧义、scoped workaround、Files/Settings 路径和控制台状态都有真实命令或浏览器证据支撑；当前不能标记 goal 完成，必须继续修复。
 
-- [ ] Task 3: 修复最高优先级不可用问题
+- [x] Task 3: 修复最高优先级不可用问题
   - 目标：只修复 Task 2 发现的最阻断问题，优先保证首屏和核心请求流程可用。
   - 独立验证：构建通过，真实浏览器中可完成对应用户路径。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：修复请求/响应同名 `Body` tab 导致的可访问名称歧义，让核心 tab 操作可被自动化、键盘/读屏和测试稳定定位。
+  - 具体改动：
+    - `src/App.tsx`
+      - 请求 tabs 增加 `aria-label="Request {label} tab"`。
+      - 响应 tabs 增加 `aria-label="Response {label} tab"`。
+      - 视觉短标签仍保持 `Params`、`Headers`、`Body`、`Auth` / `Body`、`Headers`、`Timeline`，不增加界面噪音。
+  - 验证结果：
+    - `npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-BKl13Ah2.css`、`dist/assets/index-QsAsCkLr.js`。
+    - `npm run dev` 启动成功，in-app browser 打开 `http://localhost:1420/` 成功。
+    - `getByRole("button", { name: "Request Body tab", exact: true })` 匹配数量为 1，并可点击。
+    - `getByRole("button", { name: "Response Body tab", exact: true })` 匹配数量为 1，并可点击。
+    - 原先歧义的 `getByRole("button", { name: "Body", exact: true })` 匹配数量从 2 变为 0，说明裸同名 role 已消除。
+    - 点击 Request Body 后 body textarea 可见；request / response tab 状态保持正确。
+    - browser console error 日志为空。
+    - 检查结束后执行 `pkill -f "npm run dev"`，`curl -s http://localhost:1420` 返回连接失败，确认 dev server 已停止。
+  - 当前边界：
+    - 本 task 修复了交互歧义；Task 4 仍需做大型全面检查，尤其是确认端口残留和核心路径不再造成“完全不可用”的体验。
+  - 自信度检查：对 Task 3 的修复有 100% 信心：问题有明确复现和明确验证，修复范围很小，构建与真实浏览器 role 定位均通过。
 
 - [ ] Task 4: 大型全面检查 - debug 循环
   - 目标：对 Task 1-3 的可用性修复做全面回归，继续找隐藏 bug。
