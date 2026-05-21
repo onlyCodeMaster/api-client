@@ -718,6 +718,7 @@ export default function App() {
               <button
                 key={panel.key}
                 type="button"
+                aria-label={panel.label}
                 className={`mobile-panel-switcher__item ${
                   activeSidebarPanel === panel.key ? "is-active" : ""
                 }`}

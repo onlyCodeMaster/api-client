@@ -94,8 +94,25 @@
     - 验证结束后执行 `pkill -f "npm run dev"`，1420/1421 均无监听进程。
   - 自信度检查：对 Task 5 有 100% 信心：修复点直接对应 P0 端口残留风险；脚本参数错误已通过实测发现并修正；又额外收紧为项目 cwd 限定，避免粗暴杀进程；失败路径、自动恢复路径、正常启动路径和真实浏览器最小路径均有证据。
 
-- [ ] Task 6: 最终可用性审计与 goal 完成判定
+- [x] Task 6: 最终可用性审计与 goal 完成判定
   - 目标：重新按用户“完全不可用”的反馈做最终审计，只有核心流程真实可用才标记完成。
   - 独立验证：完整 checklist 全部满足，构建和运行态检查通过。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：完成最终 prompt-to-artifact 审计；审计中发现侧栏按钮可访问名称混入 `CO/HI/EN/ST` 视觉缩写，已补 `aria-label={panel.label}`，让 Collections / History / Environments / Settings 可用纯名称稳定定位。
+  - Prompt-to-artifact checklist：
+    - 用户原始反馈“完全不可用”：已作为可用性事故处理，不以样式好看或 build 通过作为完成依据；重新执行真实运行态最小核心路径。
+    - 首屏可理解、可操作：浏览器运行态 viewport `599x1329` 下 method select、URL input、Send、Save、request editor、response panel 均存在且可定位；无横向溢出。
+    - 请求 method / URL：method select 唯一，已切换为 `POST`；URL input 唯一，已编辑为 `https://example.com/api/final-audit-after-fix`。
+    - Params：`Request Params tab` 唯一可点，参数 key/value 输入存在并可编辑。
+    - Headers：`Request Headers tab` 唯一可点，header key/value 输入存在并可编辑。
+    - Body：`Request Body tab` 唯一可点，body textarea 存在并可编辑。
+    - Auth：`Request Auth tab` 唯一可点，`Auth Settings` 可见，token input 唯一并可编辑为 `{{secret.audit_token}}`。
+    - Send / Save：两个按钮各唯一可定位，未被布局挤掉。
+    - 响应查看器：response panel 可见；`Response Headers tab` 和其他 response tabs 唯一可点；响应区在工具抽屉打开后仍存在。
+    - Collections / History / Environments / Settings：修复后可用 `Collections`、`History`、`Environments`、`Settings` 纯 role name 各唯一定位并点击；Settings 状态下 `.workspace-inspector` 可见且包含 `Local Runtime Overview`。
+    - Import / cURL / Files：`Import Postman`、`Import cURL`、`Export cURL`、`Files` 各唯一定位；Postman、cURL、Files drawer 均可打开；Files drawer 中 `Upload Active Request` 与 `Download to Path` 可见。
+    - 主流程不被辅助工具破坏：切换 Settings、打开 Postman/cURL/Files drawer 后，request editor 和 response panel 仍存在；无横向溢出。
+    - 开发启动可用性：1420/1421 初始无监听；`node scripts/ensure-dev-ports.mjs` 干净状态退出 0；`npm run dev` 按 `predev -> vite` 启动并监听 `http://localhost:1420/`。
+    - 命令 gate：`git diff --check` 通过；`npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-BKl13Ah2.css`、`dist/assets/index-DbxxYlK0.js`。
+    - 控制台：最终浏览器审计 `tab.dev.logs({ levels: ["error"] })` 返回 0 条本地应用错误。
+    - 清理：最终审计结束后执行 `pkill -f "npm run dev"`；`lsof -nP -iTCP:1420 -sTCP:LISTEN` 与 `lsof -nP -iTCP:1421 -sTCP:LISTEN` 均无监听；`curl -s http://localhost:1420` 返回连接失败。
+  - 自信度检查：对 goal 完成有 100% 信心：两个真实阻断/毛刺均已修复，分别是 P0 dev 端口残留导致启动失败、以及可访问名称歧义/污染导致交互定位不稳定；最终审计覆盖启动、构建、首屏、请求编辑、响应查看、辅助入口、工具抽屉、Settings inspector、控制台和端口清理，没有发现未覆盖的显式需求。
