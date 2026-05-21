@@ -6,11 +6,45 @@
   - 完成内容：已创建 `goal-3/` 三件套；`input.md` 逐字保存用户原始输入；`plan.md` 写入需求分析、当前上下文、风险、执行方案、验证方式和回滚方案；`tasks.md` 建立布局审计、重构、全面检查和最终判定任务链。
   - 自信度检查：已用 `test -f` 验证三份文件存在，并用 `cat goal-3/input.md` 确认原始输入未改写；当前 task 不修改业务代码，具备 100% 结束信心。
 
-- [ ] Task 2: 审计当前页面布局并形成 Postman 差距清单
+- [x] Task 2: 审计当前页面布局并形成 Postman 差距清单
   - 目标：读取当前前端代码并运行页面，找出整体布局与 Postman 类 API Client 的关键差距。
   - 独立验证：输出 prompt-to-artifact 布局检查表，包含代码证据、运行态证据和必须修复的问题排序。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：已读取 `goal-3/input.md`、`goal-3/plan.md`、`goal-3/tasks.md`，审计 `src/App.tsx` 与 `src/styles.css`，启动 Vite 页面并用 in-app browser 做运行态布局检查，形成与 Postman 类 API Client 的差距清单。
+  - Postman 类布局验收标准：
+    - 应保留稳定的 Header / Sidebar / Workbench / Response 区域，而不是把主请求流程藏进普通 dashboard。
+    - 左侧资源切换应服务于主请求工作台，History / Environments / Settings 不应轻易整页替换请求编辑器。
+    - 请求编辑器应高优先级显示 method + URL + Send，Params / Auth / Headers / Body tabs 应紧贴请求编辑区。
+    - 响应查看器应与请求编辑器形成明确上下文关系，不能被长页面挤到屏幕下方。
+    - 辅助能力如 Import、Files、Settings 应作为抽屉、侧栏或次级面板，不应挤占主发送流程。
+    - 页面密度、面板边界、滚动行为和窄屏可达性应像专业 API 工具。
+  - 代码证据：
+    - `src/App.tsx` 使用 `postman-shell` / `postman-topbar` / `postman-body` / `workspace-nav` / `explorer-panel` / `workspace` 的大框架，功能入口齐全，但结构仍偏静态三栏。
+    - `workspaceMode === "collections"` 时才渲染 `.request-editor` 与 `.response-panel`；切到 History / Environments / Settings 会用 `.workspace-panel` 整页替换主请求工作台。
+    - `src/styles.css` 在默认宽度下使用 `76px 320px 1fr` 三栏和 `grid-template-rows: minmax(0, 1fr) 320px` 请求/响应上下分割。
+    - `@media (max-width: 980px)` 直接把 `.postman-body` 改成单列、隐藏 `.workspace-nav`，导致 Explorer、Request Editor、Response Panel 垂直堆叠。
+    - `@media (max-width: 1280px)` 把 `.request-editor__bar` 改成单列，method、URL、Save、Send 被竖向拆开，削弱 Postman 式 URL bar。
+    - topbar 同时承载请求 tabs 和 Import/Postman/cURL/Files 操作，在窄屏下变成高 header，主操作被推到下面。
+  - 运行态证据：
+    - `npm run build` 通过，说明问题不是构建错误，而是布局信息架构问题。
+    - Vite 页面 `http://localhost:1420/` 在 in-app browser 中打开成功，控制台应用 error 为空。
+    - 运行态 viewport 为 `599x1329` 时，`.postman-shell` 高度为 `2301px`，`.postman-body` 高度为 `2136px`，页面成为长滚动页。
+    - `.workspace-nav` 在该宽度下 `visible=false`，主导航只剩 Explorer 内部的移动 switcher。
+    - `.explorer-panel` 位于顶部且高度约 `699px`，`.request-editor` 从 y=864 才开始，`.response-panel` 从 y=1774 才开始；首屏基本看不到完整请求/响应工作台。
+    - `.request-editor__bar` 高度约 `184px`，method、URL、Save、Send 被堆成多行；Postman 式单行 send bar 丢失。
+    - 截图显示页面从品牌 header、请求 tabs、导入按钮、Explorer、collection cards、再到 request editor，整体更像纵向卡片页而不是 API workbench。
+  - 必须修复的问题排序：
+    - P0：重新设计主工作台骨架，让请求编辑器和响应查看器成为始终优先的中心区域，避免在窄屏和非 Collections 模式下被 Explorer 或 workspace panel 挤掉。
+    - P0：在中等/窄宽度下保留紧凑的 method + URL + Save + Send 操作条，不能在 1280px 以下就拆成四行。
+    - P1：把 Import Postman / Import cURL / Export cURL / Files 从 topbar 的主视觉压力中降级成工具区或抽屉，避免它们抢占请求发送流程。
+    - P1：History / Environments / Settings 应更像侧栏内容或 inspector，而不是整页替换请求编辑器；如果确需切换，也应保留返回请求上下文的明显路径。
+    - P1：优化响应区位置和高度，使默认视图下不需要大幅滚动才能看到 response viewer。
+    - P2：改善视觉密度和边框语言，减少大卡片 dashboard 感，提高列表、tab、table 的专业工具感。
+  - 验证结果：
+    - `npm run build` 通过。
+    - `npm run dev` 启动成功，in-app browser 打开 `http://localhost:1420/` 成功。
+    - browser DOM / screenshot / layout metrics 已确认主要布局问题。
+    - 检查结束后已执行 `pkill -f "npm run dev"`，`curl -s http://localhost:1420` 返回连接失败，确认 dev server 已停止。
+  - 自信度检查：对 Task 2 的审计结论有 100% 信心：代码证据、运行态 DOM 指标、截图和构建结果共同说明当前页面功能存在但布局与 Postman 类工作台差距明显；下一步应先做主工作台骨架重构，而不是继续添加功能。
 
 - [ ] Task 3: 重构主工作台整体布局骨架
   - 目标：优先修复最影响“像 Postman”的整体信息架构、分栏比例、主请求区和响应区布局。
