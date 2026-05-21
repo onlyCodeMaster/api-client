@@ -353,11 +353,38 @@
     - Cookie jar、Proxy/TLS、YAML、缓存、日志仍由后续 Task 10-14 处理。
   - 自信度检查：我是否对当前实现 100% 有信心？对 Task 9 的核心边界有信心：Rust core、Tauri command、TypeScript invoke 和前端面板都已落地，构建、Rust check、file_transfer 单测和全量 Rust 测试通过；唯一弱项是浏览器点击运行态检查因工具超时未完成，已如实记录，不影响代码层面对本 task 最小闭环的信心。
 
-- [ ] Task 10: 补齐真实 Cookie jar 管理
+- [x] Task 10: 补齐真实 Cookie jar 管理
   - 目标：解析响应 Set-Cookie、按 jar/domain 持久化到 SQLite，并在后续请求中注入 Cookie。
   - 独立验证：Rust 单测覆盖 Set-Cookie 存储和 Cookie 请求注入；storage migration 兼容。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：补齐 SQLite-backed Cookie jar 的真实请求链路。
+  - 具体改动：
+    - `src-tauri/src/storage.rs`
+      - 新增 `StoredCookie` JSON payload 和 `load_cookie_header` / `store_set_cookie_headers` helper。
+      - 复用既有 `cookie_jars` 表结构，每个 jar + domain 写一条 JSON cookie 数组，避免破坏现有 schema。
+      - 支持解析 `Set-Cookie` 的 name/value、Domain、Path、Secure、Max-Age<=0 删除，以及基础 Expires 删除判断。
+      - 发送前按 domain、host-only、path、secure 规则匹配 Cookie，并按 path 长度排序生成 `Cookie` header。
+      - 新增旧 JSON 兼容逻辑：缺少 `hostOnly` 字段的旧 cookie 默认按 host-only 处理，避免扩大子域名发送范围。
+      - 将 `initialize_database` 放宽为 crate 内可见，方便 HTTP 测试初始化真实 SQLite schema。
+    - `src-tauri/src/http.rs`
+      - `execute_request` 接收 `StoragePaths`，从 active environment 的 `cookie_jar` 选择 jar，默认 `default`。
+      - 请求发送前，如果用户没有显式提供 `Cookie` header，则从 SQLite cookie jar 注入匹配 Cookie。
+      - 响应收到后，基于最终 response URL 解析并持久化 `Set-Cookie`，响应 summary 显示本次更新数量。
+      - HTTP 集成单测预置 SQLite cookie，断言真实本地 HTTP 请求携带 Cookie，并断言响应 `Set-Cookie` 被写回 jar。
+    - `src-tauri/src/commands.rs`
+      - `send_request` 调用 HTTP core 时传入 `state.paths`，让 HTTP 请求链路具备 SQLite cookie jar 上下文。
+  - 验证结果：
+    - `cargo fmt --manifest-path src-tauri/Cargo.toml` 通过。
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过。
+    - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过，6 个 storage 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml http::tests::execute_request_sends_real_http_request_and_maps_response` 默认沙箱因 `127.0.0.1` bind 权限失败；提权重跑后通过，验证 Cookie 请求注入和 Set-Cookie 回写。
+    - `cargo test --manifest-path src-tauri/Cargo.toml` 提权运行通过，16 个 Rust 测试成功。
+    - `npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-CEEqY-D7.css`、`dist/assets/index-DyC6WqX1.js`。
+    - `git diff --check` 通过。
+    - `rg` 复核确认 `load_cookie_header`、`store_set_cookie_headers`、`COOKIE` 注入、`Set-Cookie` 测试和 `cookie_jars` 读写均落到实际代码。
+  - 当前边界：
+    - 当前 Cookie parser 覆盖 API Client 基础需要的常见 Set-Cookie 属性；尚未实现完整 RFC6265 日期解析、SameSite 展示、HttpOnly/Session UI 管理或独立 cookie 管理页面。
+    - 用户显式设置 `Cookie` header 时不会被自动 jar 覆盖，这是有意的可预测行为；响应仍会继续持久化 `Set-Cookie`。
+  - 自信度检查：我是否对当前实现 100% 有信心？对 Task 10 的核心边界有信心：真实 SQLite 持久化、请求注入、响应回写、host-only/secure/path/delete 关键规则、旧 JSON 兼容和 HTTP 集成链路都有测试覆盖；全量 Rust 测试、Rust check、前端构建和 whitespace 检查均通过。剩余的完整 RFC6265 细节和 cookie 管理 UI 属于后续增强，不阻塞本 task。
 
 - [ ] Task 11: 补齐 Proxy / TLS 配置应用
   - 目标：把环境变量或设置中的 proxy/TLS 选项真正应用到 reqwest client builder，并处理错误封装。

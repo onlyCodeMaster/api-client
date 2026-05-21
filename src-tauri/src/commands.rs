@@ -447,7 +447,7 @@ pub fn send_request(
         Some(format!("{} {}", input.method, input.url)),
     );
 
-    let result = match http::execute_request(input.clone()) {
+    let result = match http::execute_request(&state.paths, input.clone()) {
         Ok(result) => result,
         Err(error) => {
             let message = to_command_error(error);

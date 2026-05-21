@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use reqwest::header::{HeaderMap, SET_COOKIE};
 use rusqlite::{params, Connection};
 use serde_json::{Map, Value};
 use tauri::{AppHandle, Manager};
@@ -13,6 +14,7 @@ use crate::models::{
 
 const DEFAULT_SETTINGS_THEME: &str = "clay-light";
 const DEFAULT_SETTINGS_WORKSPACE: &str = "default-workspace";
+const DEFAULT_COOKIE_PATH: &str = "/";
 
 #[derive(Debug, Clone)]
 pub struct StoragePaths {
@@ -175,7 +177,7 @@ fn write_if_missing(path: &Path, contents: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn initialize_database(database_path: &Path) -> AppResult<()> {
+pub(crate) fn initialize_database(database_path: &Path) -> AppResult<()> {
     let connection = Connection::open(database_path)?;
     connection.execute_batch(
         r#"
@@ -240,6 +242,297 @@ fn ensure_history_schema(connection: &Connection) -> AppResult<()> {
 
 fn open_connection(database_path: &Path) -> AppResult<Connection> {
     Ok(Connection::open(database_path)?)
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredCookie {
+    name: String,
+    value: String,
+    domain: String,
+    path: String,
+    #[serde(default = "default_cookie_host_only")]
+    host_only: bool,
+    #[serde(default)]
+    secure: bool,
+}
+
+#[derive(Debug)]
+struct ParsedCookie {
+    cookie: StoredCookie,
+    remove: bool,
+}
+
+fn default_cookie_host_only() -> bool {
+    true
+}
+
+pub fn load_cookie_header(
+    paths: &StoragePaths,
+    jar_name: &str,
+    url: &reqwest::Url,
+) -> AppResult<Option<String>> {
+    let Some(host) = url.host_str().map(|value| value.to_ascii_lowercase()) else {
+        return Ok(None);
+    };
+    let request_path = url.path();
+    let is_secure_request = url.scheme() == "https";
+    let mut cookies = read_cookie_rows(paths, jar_name)?;
+
+    cookies.retain(|cookie| {
+        cookie_domain_matches(&host, cookie)
+            && path_matches(request_path, &cookie.path)
+            && (!cookie.secure || is_secure_request)
+    });
+    cookies.sort_by(|left, right| {
+        right
+            .path
+            .len()
+            .cmp(&left.path.len())
+            .then_with(|| left.name.cmp(&right.name))
+    });
+
+    let header = cookies
+        .into_iter()
+        .map(|cookie| format!("{}={}", cookie.name, cookie.value))
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    if header.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(header))
+    }
+}
+
+pub fn store_set_cookie_headers(
+    paths: &StoragePaths,
+    jar_name: &str,
+    url: &reqwest::Url,
+    headers: &HeaderMap,
+) -> AppResult<usize> {
+    let mut updated = 0usize;
+
+    for value in headers.get_all(SET_COOKIE).iter() {
+        let Ok(raw_cookie) = value.to_str() else {
+            continue;
+        };
+        let Some(parsed) = parse_set_cookie(raw_cookie, url) else {
+            continue;
+        };
+
+        upsert_cookie(paths, jar_name, parsed)?;
+        updated += 1;
+    }
+
+    Ok(updated)
+}
+
+fn read_cookie_rows(paths: &StoragePaths, jar_name: &str) -> AppResult<Vec<StoredCookie>> {
+    let connection = open_connection(&paths.database_path)?;
+    let mut statement = connection.prepare(
+        r#"
+        SELECT cookie_json
+        FROM cookie_jars
+        WHERE jar_name = ?1
+        ORDER BY id ASC
+        "#,
+    )?;
+
+    let rows = statement.query_map(params![jar_name], |row| row.get::<_, String>(0))?;
+    let mut cookies = Vec::new();
+
+    for row in rows {
+        let payload = row?;
+        let mut parsed = serde_json::from_str::<Vec<StoredCookie>>(&payload)
+            .map_err(|error| AppError::InvalidData(error.to_string()))?;
+        cookies.append(&mut parsed);
+    }
+
+    Ok(cookies)
+}
+
+fn read_domain_cookies(
+    connection: &Connection,
+    jar_name: &str,
+    domain: &str,
+) -> AppResult<Vec<StoredCookie>> {
+    let mut statement = connection.prepare(
+        r#"
+        SELECT cookie_json
+        FROM cookie_jars
+        WHERE jar_name = ?1 AND domain = ?2
+        ORDER BY id ASC
+        "#,
+    )?;
+    let rows = statement.query_map(params![jar_name, domain], |row| row.get::<_, String>(0))?;
+    let mut cookies = Vec::new();
+
+    for row in rows {
+        let payload = row?;
+        let mut parsed = serde_json::from_str::<Vec<StoredCookie>>(&payload)
+            .map_err(|error| AppError::InvalidData(error.to_string()))?;
+        cookies.append(&mut parsed);
+    }
+
+    Ok(cookies)
+}
+
+fn upsert_cookie(paths: &StoragePaths, jar_name: &str, parsed: ParsedCookie) -> AppResult<()> {
+    let connection = open_connection(&paths.database_path)?;
+    let mut cookies = read_domain_cookies(&connection, jar_name, &parsed.cookie.domain)?;
+    cookies.retain(|cookie| {
+        !(cookie.name == parsed.cookie.name
+            && cookie.domain == parsed.cookie.domain
+            && cookie.path == parsed.cookie.path)
+    });
+
+    if !parsed.remove {
+        cookies.push(parsed.cookie.clone());
+    }
+
+    connection.execute(
+        "DELETE FROM cookie_jars WHERE jar_name = ?1 AND domain = ?2",
+        params![jar_name, parsed.cookie.domain],
+    )?;
+
+    if !cookies.is_empty() {
+        let payload = serde_json::to_string(&cookies)
+            .map_err(|error| AppError::InvalidData(error.to_string()))?;
+        connection.execute(
+            r#"
+            INSERT INTO cookie_jars (jar_name, domain, cookie_json, updated_at)
+            VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
+            "#,
+            params![jar_name, parsed.cookie.domain, payload],
+        )?;
+    }
+
+    Ok(())
+}
+
+fn parse_set_cookie(raw_cookie: &str, origin_url: &reqwest::Url) -> Option<ParsedCookie> {
+    let mut parts = raw_cookie.split(';');
+    let (name, value) = parts.next()?.trim().split_once('=')?;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+
+    let origin_host = origin_url.host_str()?.to_ascii_lowercase();
+    let mut domain = origin_host.clone();
+    let mut path = default_cookie_path(origin_url);
+    let mut host_only = true;
+    let mut secure = false;
+    let mut remove = false;
+
+    for part in parts {
+        let attribute = part.trim();
+        if attribute.eq_ignore_ascii_case("secure") {
+            secure = true;
+            continue;
+        }
+
+        let Some((key, raw_value)) = attribute.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        let raw_value = raw_value.trim();
+
+        match key.as_str() {
+            "domain" => {
+                let candidate = normalize_cookie_domain(raw_value);
+                if candidate.is_empty() || !domain_matches(&origin_host, &candidate) {
+                    return None;
+                }
+                domain = candidate;
+                host_only = false;
+            }
+            "path" => {
+                if raw_value.starts_with('/') {
+                    path = raw_value.to_string();
+                }
+            }
+            "max-age" => {
+                if raw_value.parse::<i64>().ok().is_some_and(|age| age <= 0) {
+                    remove = true;
+                }
+            }
+            "expires" => {
+                if raw_value.contains("1970") || raw_value.eq_ignore_ascii_case("0") {
+                    remove = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Some(ParsedCookie {
+        cookie: StoredCookie {
+            name: name.to_string(),
+            value: value.trim().to_string(),
+            domain,
+            path,
+            host_only,
+            secure,
+        },
+        remove,
+    })
+}
+
+fn normalize_cookie_domain(raw_domain: &str) -> String {
+    raw_domain
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase()
+}
+
+fn default_cookie_path(url: &reqwest::Url) -> String {
+    let path = url.path();
+    if path.is_empty() || path == DEFAULT_COOKIE_PATH {
+        return DEFAULT_COOKIE_PATH.to_string();
+    }
+
+    match path.rfind('/') {
+        Some(0) | None => DEFAULT_COOKIE_PATH.to_string(),
+        Some(index) => path[..index].to_string(),
+    }
+}
+
+fn domain_matches(host: &str, cookie_domain: &str) -> bool {
+    host == cookie_domain
+        || host
+            .strip_suffix(cookie_domain)
+            .is_some_and(|prefix| prefix.ends_with('.'))
+}
+
+fn cookie_domain_matches(host: &str, cookie: &StoredCookie) -> bool {
+    if cookie.host_only {
+        host == cookie.domain
+    } else {
+        domain_matches(host, &cookie.domain)
+    }
+}
+
+fn path_matches(request_path: &str, cookie_path: &str) -> bool {
+    if cookie_path == DEFAULT_COOKIE_PATH {
+        return true;
+    }
+
+    if request_path == cookie_path {
+        return true;
+    }
+    if !request_path.starts_with(cookie_path) {
+        return false;
+    }
+    if cookie_path.ends_with('/') {
+        return true;
+    }
+
+    request_path
+        .as_bytes()
+        .get(cookie_path.len())
+        .is_some_and(|value| *value == b'/')
 }
 
 pub fn load_settings(paths: &StoragePaths) -> AppResult<AppSettings> {
@@ -546,6 +839,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
+    use reqwest::header::HeaderValue;
 
     fn make_test_paths(label: &str) -> StoragePaths {
         let nonce = SystemTime::now()
@@ -774,5 +1068,100 @@ mod tests {
             .join("environments")
             .join("production.json")
             .exists());
+    }
+
+    #[test]
+    fn cookie_jar_persists_matches_and_removes_cookies() {
+        let paths = make_test_paths("cookie-jar");
+        initialize_database(&paths.database_path).expect("initialize database");
+        let origin_url =
+            reqwest::Url::parse("https://api.example.com/v1/login").expect("parse origin url");
+        let request_url =
+            reqwest::Url::parse("https://api.example.com/v1/workspaces").expect("parse url");
+        let other_url =
+            reqwest::Url::parse("https://other.example.test/v1/workspaces").expect("parse url");
+        let subdomain_url =
+            reqwest::Url::parse("https://team.api.example.com/v1/workspaces").expect("parse url");
+        let insecure_url =
+            reqwest::Url::parse("http://api.example.com/v1/workspaces").expect("parse url");
+
+        let mut headers = HeaderMap::new();
+        headers.append(
+            SET_COOKIE,
+            HeaderValue::from_static("workspace_session=abc123; Path=/v1; HttpOnly"),
+        );
+        headers.append(
+            SET_COOKIE,
+            HeaderValue::from_static("secure_session=ssl; Path=/v1; Secure"),
+        );
+
+        let updated =
+            store_set_cookie_headers(&paths, "integration", &origin_url, &headers).expect("store");
+        assert_eq!(updated, 2);
+
+        let cookie_header = load_cookie_header(&paths, "integration", &request_url)
+            .expect("load cookies")
+            .expect("cookie header");
+        assert!(cookie_header.contains("workspace_session=abc123"));
+        assert!(cookie_header.contains("secure_session=ssl"));
+
+        let insecure_cookie_header = load_cookie_header(&paths, "integration", &insecure_url)
+            .expect("load insecure cookies")
+            .expect("cookie header");
+        assert!(insecure_cookie_header.contains("workspace_session=abc123"));
+        assert!(!insecure_cookie_header.contains("secure_session=ssl"));
+
+        assert!(load_cookie_header(&paths, "integration", &other_url)
+            .expect("load other domain cookies")
+            .is_none());
+        assert!(load_cookie_header(&paths, "integration", &subdomain_url)
+            .expect("load host-only cookie on subdomain")
+            .is_none());
+
+        let mut removal_headers = HeaderMap::new();
+        removal_headers.append(
+            SET_COOKIE,
+            HeaderValue::from_static("workspace_session=gone; Path=/v1; Max-Age=0"),
+        );
+        store_set_cookie_headers(&paths, "integration", &origin_url, &removal_headers)
+            .expect("remove cookie");
+
+        let cookie_header = load_cookie_header(&paths, "integration", &request_url)
+            .expect("reload cookies")
+            .expect("remaining cookie header");
+        assert!(!cookie_header.contains("workspace_session=abc123"));
+        assert!(cookie_header.contains("secure_session=ssl"));
+    }
+
+    #[test]
+    fn legacy_cookie_json_defaults_to_host_only() {
+        let paths = make_test_paths("legacy-cookie-json");
+        initialize_database(&paths.database_path).expect("initialize database");
+        let connection = Connection::open(&paths.database_path).expect("open sqlite");
+        connection
+            .execute(
+                r#"
+                INSERT INTO cookie_jars (jar_name, domain, cookie_json)
+                VALUES (?1, ?2, ?3)
+                "#,
+                params![
+                    "legacy",
+                    "api.example.com",
+                    r#"[{"name":"legacy_session","value":"old","domain":"api.example.com","path":"/","secure":false}]"#
+                ],
+            )
+            .expect("insert legacy cookie row");
+
+        let exact_url = reqwest::Url::parse("https://api.example.com/v1").expect("parse url");
+        let subdomain_url =
+            reqwest::Url::parse("https://team.api.example.com/v1").expect("parse url");
+
+        let exact_cookie_header = load_cookie_header(&paths, "legacy", &exact_url)
+            .expect("load exact host cookie")
+            .expect("exact host cookie header");
+        assert!(exact_cookie_header.contains("legacy_session=old"));
+        assert!(load_cookie_header(&paths, "legacy", &subdomain_url)
+            .expect("load subdomain cookie")
+            .is_none());
     }
 }
