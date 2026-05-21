@@ -77,11 +77,27 @@
     - Import / Files / Settings / Environment 等辅助面板的视觉密度和抽屉化程度仍可继续优化，留给 Task 5。
   - 自信度检查：对 Task 3 的骨架修复有 100% 信心：构建通过，真实浏览器指标显示请求区和响应区大幅前移，History 不再替换主 workbench，核心入口无丢失且控制台无应用错误。剩余辅助面板打磨不阻塞本 task，但会在后续 task 继续处理。
 
-- [ ] Task 4: 大型全面检查 - debug 循环
+- [x] Task 4: 大型全面检查 - debug 循环
   - 目标：对 Task 1-3 的布局改动做全面回归，发现并修复明显视觉、响应式或功能入口问题。
   - 独立验证：构建通过，浏览器检查桌面和窄屏布局，控制台无应用错误，核心入口无丢失。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：完成 Task 1-3 后的大型全面检查 - debug 循环，重点回归主布局骨架、窄屏可达性、辅助 inspector、构建和控制台错误。本轮未发现需要额外补丁的阻断 bug。
+  - 回归检查表：
+    - Goal workflow：重新读取 `goal-3/input.md`、`goal-3/plan.md`、`goal-3/tasks.md`，确认当前处于 Task 4，Task 1-3 已完成。
+    - 构建：`npm run build` 通过，确认 JSX/CSS/TypeScript 没有破坏前端构建。
+    - Whitespace：`git diff --check` 通过。
+    - 旧结构清理：`rg` 确认旧的 `workspace--single` 不再存在，新的 `workbench`、`workspace-inspector`、`handleSidebarPanelChange` 和响应式规则存在。
+    - 窄屏主流程：in-app browser viewport `599x1329` 下，`.request-editor` y=154、`.response-panel` y=934，主请求/响应优先于 Explorer。
+    - 窄屏溢出：`documentElement.scrollWidth=584`，无横向溢出。
+    - 核心入口：Send、Save、Import Postman、Import cURL、Export cURL、Files 均存在；Params / Headers / Body / Auth 和 Body / Headers / Timeline tabs 均存在。
+    - Settings 切换：点击移动 switcher 的 Settings 后，`scrollY=0`，主请求区和响应区仍可见，Settings 内容出现在 `.workspace-inspector`，`Local Runtime Overview` 可见。
+    - 控制台：browser console error 日志为空。
+    - 桌面规则探针：CSS 中存在默认 `58px 280px minmax(0, 1fr)` 三栏、`.workbench` 请求/响应双层、`.workspace--with-inspector` 右侧 inspector 列、窄屏 workspace 优先和小屏紧凑 request bar 规则。
+    - 端口清理：检查结束后执行 `pkill -f "npm run dev"`，`curl -s http://localhost:1420` 返回连接失败，确认 dev server 已停止。
+  - 结论：
+    - Task 3 的主骨架修复没有破坏核心入口或构建。
+    - 当前页面已经从“Explorer 优先的长 dashboard”改善为“请求/响应 workbench 优先，Explorer/Settings 辅助”的结构。
+    - 下一步 Task 5 应继续处理辅助面板和交互密度：Import、Files、Settings、History、Environment、Collection 的视觉层级仍可更像 Postman 的工具型面板。
+  - 自信度检查：对 Task 4 的全面检查结论有 100% 信心：构建、whitespace、代码搜索、浏览器运行态、窄屏行为、Settings 切换、控制台和端口清理都有真实证据；未发现必须在本 task 内修补的问题。
 
 - [ ] Task 5: 修缮辅助面板和交互密度
   - 目标：优化导入、Files、Settings、History、Environment、Collection 等辅助面板，使其不干扰主请求流程且更像专业工具。
