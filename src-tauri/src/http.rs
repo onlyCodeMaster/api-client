@@ -158,7 +158,6 @@ fn format_body(body: String) -> String {
     }
 }
 
-#[allow(dead_code)]
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

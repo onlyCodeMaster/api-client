@@ -255,8 +255,98 @@
     - 如果最终目标接受“基础可运行 API Client + 已实现/部分实现/未实现边界清晰”，则 Task 8 可以在审计中给出边界判定，但不能把未实现项写成已完成。
   - 自信度检查：我是否对当前实现 100% 有信心？对 Task 7 的大型检查范围有信心：代码证据、关键词扫描、前端构建、Rust check、模块测试、全量 Rust 测试和浏览器 DOM 运行态检查都已覆盖，并且检查中发现的小 warning 已修复。对整个 goal 是否可完成还没有 100% 信心，因为原始目标中的上传下载、真实 Cookie jar、Proxy/TLS 应用、YAML、缓存和日志仍缺真实实现，必须在 Task 8 或后续 task 中继续处理。
 
-- [ ] Task 8: 最终最大的 review 与 goal 完成判定
+- [x] Task 8: 最终最大的 review 与 goal 完成判定
   - 目标：从 C 端体验、代码、安全性、数据持久化、错误处理、测试覆盖和原始目标覆盖度做最终审计。
   - 独立验证：只有当 prompt-to-artifact checklist 全部满足或边界清晰且无必需缺口时，才可标记 goal 完成。
+  - 完成内容：完成最终最大 review，并判定当前 goal 尚未完成，不能调用 goal complete。
+  - 目标拆解为验收标准：
+    - 前端 UI 层必须具备请求编辑器、Header / Query / Body 表单、响应查看器、历史记录、环境变量、Collection 管理、设置页面。
+    - Tauri Bridge 层必须具备 command 暴露、参数校验、类型转换、错误封装、前后端事件通信。
+    - Rust Core 核心层必须具备 HTTP 请求引擎、环境变量解析、Cookie 管理、Auth 处理、Proxy / TLS 配置、cURL 导入导出、Postman Collection 导入、文件上传下载。
+    - 本地数据层必须具备 SQLite、JSON/YAML 文件、系统 Keychain、本地缓存、日志。
+  - prompt-to-artifact 最终检查表：
+    - 前端 UI - 请求编辑器：已实现。证据：`src/App.tsx` 的 method select、URL input、Save / Send；`src/store/requestStore.ts` 的 active request 状态。
+    - 前端 UI - Header / Query / Body 表单：已实现。证据：`src/App.tsx` 的 Params / Headers / Body / Auth tabs 和 row update handlers。
+    - 前端 UI - 响应查看器：已实现。证据：`src/App.tsx` 的 response tabs、status/duration/size/protocol、body/headers/timeline。
+    - 前端 UI - 历史记录：已实现。证据：`src/App.tsx` History sidebar；`src-tauri/src/storage.rs` 的 `request_history` 表与 `record_history`。
+    - 前端 UI - 环境变量：已实现。证据：`src/App.tsx` Environment Editor；`src-tauri/src/storage.rs` 的 `save_environment` / `list_environments`。
+    - 前端 UI - Collection 管理：已实现。证据：`src/App.tsx` collection tree；`src-tauri/src/storage.rs` 的 `save_request` / `list_collections`。
+    - 前端 UI - 设置页面：已实现。证据：`src/App.tsx` Settings 面板包含 Runtime Contracts、Bridge Events、Keychain Secrets。
+    - Tauri Bridge - command 暴露：已实现。证据：`src-tauri/src/lib.rs` 的 `generate_handler!` 注册 9 个 command。
+    - Tauri Bridge - 参数校验：部分实现。证据：URL/method/header/JSON/cURL/Postman 错误路径有 Rust parse 校验；但没有完整业务 schema 和路径安全策略。
+    - Tauri Bridge - 类型转换：已实现。证据：`src-tauri/src/models.rs` serde camelCase 模型与 `src/lib/tauri.ts` invoke 类型。
+    - Tauri Bridge - 错误封装：已实现。证据：`src-tauri/src/error.rs` 的 `AppError` 与 `src-tauri/src/commands.rs` 的 `to_command_error`。
+    - Tauri Bridge - 前后端事件通信：已实现。证据：`commands.rs` 的 `app.emit("api-client://bridge-event", ...)` 和 `src/lib/tauri.ts` 的 `listenBridgeEvents`。
+    - Rust Core - HTTP 请求引擎：已实现。证据：`src-tauri/src/http.rs` 使用 `reqwest::blocking::Client`；HTTP 单测验证真实本地 HTTP 请求。
+    - Rust Core - 环境变量解析：已实现。证据：`src-tauri/src/http.rs` 的 `resolve_template` 支持 `{{key}}`、`{{env.key}}`、`{{secret.name}}`。
+    - Rust Core - Cookie 管理：未完成。证据：只有 SQLite `cookie_jars` 表和 UI/summary 文案；没有 Set-Cookie 解析、请求 Cookie 注入、jar 读写 API。
+    - Rust Core - Auth 处理：部分实现。证据：bearer auth 已在 HTTP/cURL/Postman 路径打通；Basic/OAuth/API key 等未实现。
+    - Rust Core - Proxy / TLS 配置：未完成。证据：`Cargo.toml` 启用 `rustls-tls`，UI 环境变量有 `proxy`；但 `http.rs` 没有把 proxy/TLS 配置应用到 `Client::builder()`。
+    - Rust Core - cURL 导入导出：已实现。证据：`src-tauri/src/curl.rs`、`import_curl`、`export_curl`、前端 cURL panel 和 3 个 cURL 单测。
+    - Rust Core - Postman Collection 导入：已实现。证据：`src-tauri/src/postman.rs`、`import_postman_collection`、前端 Postman panel 和 3 个 Postman 单测。
+    - Rust Core - 文件上传下载：未完成。证据：受控 `rg` 未发现 upload/download/multipart/form-data command、模型、UI 文件选择或下载保存流程。
+    - 本地数据层 - SQLite：已实现。证据：`src-tauri/src/storage.rs` 创建 settings、request_history、cookie_jars 并有 storage 单测。
+    - 本地数据层 - JSON/YAML 文件：部分实现。证据：JSON workspace/collection/environment 已实现；YAML 只有 seed UI 的 `local.yaml` 文案，无 `serde_yaml` 或 YAML parser。
+    - 本地数据层 - 系统 Keychain：已实现。证据：`src-tauri/src/secrets.rs` 使用 `keyring_core::Entry`。
+    - 本地数据层 - 本地缓存：未完成。证据：没有独立 cache schema、cache file、cache command 或 cache invalidation 策略。
+    - 本地数据层 - 日志：未完成。证据：没有应用级 log/tracing 初始化、日志文件写入、日志查看或导出。
+  - C 端体验审计：
+    - 当前已具备基础 API Client 工作台、导入/导出和本地持久化入口，能作为基础版本使用。
+    - 但用户目标图明确列出上传下载、Cookie、Proxy/TLS、YAML、缓存、日志，这些不能只靠 UI 文案代表完成。
+  - 安全性审计：
+    - 已避免在 cURL/Postman 导入时自动覆盖本地 collection 文件，要求用户显式 Save。
+    - Keychain 存储已接系统 keyring。
+    - 仍需后续增强：文件上传下载路径约束、下载覆盖保护、proxy secret 处理、cookie 敏感值落盘策略、日志脱敏。
+  - 验证结果：
+    - `cargo fmt --manifest-path src-tauri/Cargo.toml` 通过。
+    - `npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-CVaYjg2s.css`、`dist/assets/index-CJKQNzuP.js`。
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过。
+    - `cargo test --manifest-path src-tauri/Cargo.toml` 提权运行通过，11 个 Rust 测试成功。
+    - 受控 `rg` 检查确认 upload/download、真实 cookie jar、proxy/TLS 应用、YAML parser、cache、logging 仍无真实实现证据。
+  - 完成判定：
+    - 当前 Task 8 审计完成，但整体 goal 未完成。
+    - 不调用 `update_goal(status=complete)`，因为明确缺口仍存在。
+    - 后续必须继续逐项补齐缺口，并在新的最终审计中重新判定。
+  - 自信度检查：我是否对当前实现 100% 有信心？对 Task 8 的审计结论有 100% 信心：所有明确条目都已映射到真实文件或缺口证据，构建与测试通过只能证明已实现能力未回归，不能证明缺失能力完成。因此 goal 不能标记完成。
+
+- [ ] Task 9: 补齐文件上传下载能力
+  - 目标：实现 Rust Core 文件上传下载、Tauri command、前端最小 UI 和安全边界。
+  - 独立验证：上传 multipart/form-data 和下载保存路径有 Rust 单测或可验证命令；前端构建和 Rust check 通过。
+  - 完成内容：
+  - 自信度检查：
+
+- [ ] Task 10: 补齐真实 Cookie jar 管理
+  - 目标：解析响应 Set-Cookie、按 jar/domain 持久化到 SQLite，并在后续请求中注入 Cookie。
+  - 独立验证：Rust 单测覆盖 Set-Cookie 存储和 Cookie 请求注入；storage migration 兼容。
+  - 完成内容：
+  - 自信度检查：
+
+- [ ] Task 11: 补齐 Proxy / TLS 配置应用
+  - 目标：把环境变量或设置中的 proxy/TLS 选项真正应用到 reqwest client builder，并处理错误封装。
+  - 独立验证：Rust 单测或 builder-level 测试覆盖 proxy disabled/system/custom、TLS 开关边界。
+  - 完成内容：
+  - 自信度检查：
+
+- [ ] Task 12: 大型全面检查 - debug 循环
+  - 目标：对 Task 9-11 和整体系统做第三轮全面回归。
+  - 独立验证：前端构建、Rust check、全量 Rust 测试、关键 UI/运行态检查通过，并更新 prompt-to-artifact checklist。
+  - 完成内容：
+  - 自信度检查：
+
+- [ ] Task 13: 补齐 YAML 环境文件支持
+  - 目标：支持 JSON/YAML environment 文件读取和保存，避免 `local.yaml` 只是 UI seed 文案。
+  - 独立验证：storage 单测覆盖 `.json`、`.yaml`、`.yml` 环境文件读取和保存。
+  - 完成内容：
+  - 自信度检查：
+
+- [ ] Task 14: 补齐本地缓存与日志
+  - 目标：实现基础本地缓存目录/索引和应用级日志文件写入，并在 Settings 中暴露状态。
+  - 独立验证：storage 或 log 单测覆盖 cache/log 初始化、写入、读取摘要；前端构建通过。
+  - 完成内容：
+  - 自信度检查：
+
+- [ ] Task 15: 最终最大的 review 与 goal 完成判定
+  - 目标：在 Task 9-14 后重新做完整最终审计，只有所有明确条目有真实实现和验证证据时才标记 goal 完成。
+  - 独立验证：完整 prompt-to-artifact checklist 全部满足；构建、Rust check、全量测试、运行态检查通过。
   - 完成内容：
   - 自信度检查：
