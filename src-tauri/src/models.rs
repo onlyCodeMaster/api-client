@@ -8,6 +8,8 @@ pub struct AppPaths {
     pub workspaces_dir: String,
     pub collections_dir: String,
     pub environments_dir: String,
+    pub cache_dir: String,
+    pub logs_dir: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,9 +67,37 @@ pub struct BridgeEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RuntimeSummary {
+    pub cache: CacheSummary,
+    pub logs: LogSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheSummary {
+    pub directory: String,
+    pub index_file: String,
+    pub entries: usize,
+    pub size_bytes: u64,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogSummary {
+    pub directory: String,
+    pub active_file: String,
+    pub size_bytes: u64,
+    pub last_line: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BootstrapState {
     pub paths: AppPaths,
     pub settings: AppSettings,
+    pub runtime: RuntimeSummary,
     pub history: Vec<HistoryEntry>,
     pub collections: Vec<CollectionSummary>,
     pub environments: Vec<EnvironmentSummary>,

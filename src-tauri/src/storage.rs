@@ -1,5 +1,7 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use reqwest::header::{HeaderMap, SET_COOKIE};
 use rusqlite::{params, Connection};
@@ -8,13 +10,16 @@ use tauri::{AppHandle, Manager};
 
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    AppPaths, AppSettings, CollectionSummary, EnvironmentSummary, EnvironmentVariable,
-    HistoryEntry, RecordHistoryInput, SaveEnvironmentInput, SaveRequestInput, StoredRequest,
+    AppPaths, AppSettings, CacheSummary, CollectionSummary, EnvironmentSummary,
+    EnvironmentVariable, HistoryEntry, LogSummary, RecordHistoryInput, RuntimeSummary,
+    SaveEnvironmentInput, SaveRequestInput, StoredRequest,
 };
 
 const DEFAULT_SETTINGS_THEME: &str = "clay-light";
 const DEFAULT_SETTINGS_WORKSPACE: &str = "default-workspace";
 const DEFAULT_COOKIE_PATH: &str = "/";
+const CACHE_INDEX_FILE_NAME: &str = "index.json";
+const ACTIVE_LOG_FILE_NAME: &str = "api-client.log";
 
 #[derive(Debug, Clone)]
 pub struct StoragePaths {
@@ -23,6 +28,8 @@ pub struct StoragePaths {
     pub workspaces_dir: PathBuf,
     pub collections_dir: PathBuf,
     pub environments_dir: PathBuf,
+    pub cache_dir: PathBuf,
+    pub logs_dir: PathBuf,
 }
 
 impl StoragePaths {
@@ -34,6 +41,8 @@ impl StoragePaths {
         let workspaces_dir = app_data_dir.join("workspaces");
         let collections_dir = app_data_dir.join("collections");
         let environments_dir = app_data_dir.join("environments");
+        let cache_dir = app_data_dir.join("cache");
+        let logs_dir = app_data_dir.join("logs");
         let database_path = app_data_dir.join("api-client.sqlite3");
 
         Ok(Self {
@@ -42,6 +51,8 @@ impl StoragePaths {
             workspaces_dir,
             collections_dir,
             environments_dir,
+            cache_dir,
+            logs_dir,
         })
     }
 
@@ -52,6 +63,8 @@ impl StoragePaths {
             workspaces_dir: self.workspaces_dir.to_string_lossy().into_owned(),
             collections_dir: self.collections_dir.to_string_lossy().into_owned(),
             environments_dir: self.environments_dir.to_string_lossy().into_owned(),
+            cache_dir: self.cache_dir.to_string_lossy().into_owned(),
+            logs_dir: self.logs_dir.to_string_lossy().into_owned(),
         }
     }
 }
@@ -61,6 +74,7 @@ pub fn initialize(app: &AppHandle) -> AppResult<StoragePaths> {
     ensure_directories(&paths)?;
     ensure_seed_files(&paths)?;
     initialize_database(&paths.database_path)?;
+    initialize_runtime_files(&paths)?;
     Ok(paths)
 }
 
@@ -69,6 +83,20 @@ fn ensure_directories(paths: &StoragePaths) -> AppResult<()> {
     fs::create_dir_all(&paths.workspaces_dir)?;
     fs::create_dir_all(&paths.collections_dir)?;
     fs::create_dir_all(&paths.environments_dir)?;
+    fs::create_dir_all(&paths.cache_dir)?;
+    fs::create_dir_all(&paths.logs_dir)?;
+    Ok(())
+}
+
+fn initialize_runtime_files(paths: &StoragePaths) -> AppResult<()> {
+    ensure_cache_index(paths)?;
+    append_log_entry(
+        paths,
+        "runtime",
+        "initialized",
+        "Local runtime storage initialized",
+        None,
+    )?;
     Ok(())
 }
 
@@ -192,6 +220,255 @@ fn write_if_missing(path: &Path, contents: &str) -> AppResult<()> {
         fs::write(path, contents)?;
     }
     Ok(())
+}
+
+fn timestamp_millis() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
+fn cache_index_path(paths: &StoragePaths) -> PathBuf {
+    paths.cache_dir.join(CACHE_INDEX_FILE_NAME)
+}
+
+fn active_log_path(paths: &StoragePaths) -> PathBuf {
+    paths.logs_dir.join(ACTIVE_LOG_FILE_NAME)
+}
+
+fn ensure_cache_index(paths: &StoragePaths) -> AppResult<()> {
+    fs::create_dir_all(&paths.cache_dir)?;
+    let index_path = cache_index_path(paths);
+    if !index_path.exists() {
+        let payload = serde_json::json!({
+            "version": 1,
+            "updatedAt": timestamp_millis(),
+            "entries": []
+        });
+        let formatted = serde_json::to_string_pretty(&payload)
+            .map_err(|error| AppError::InvalidData(error.to_string()))?;
+        fs::write(index_path, format!("{formatted}\n"))?;
+    }
+
+    Ok(())
+}
+
+fn read_cache_index(paths: &StoragePaths) -> AppResult<Value> {
+    ensure_cache_index(paths)?;
+    let contents = fs::read_to_string(cache_index_path(paths))?;
+    serde_json::from_str(&contents).map_err(|error| AppError::InvalidData(error.to_string()))
+}
+
+pub fn record_cache_entry(
+    paths: &StoragePaths,
+    key: &str,
+    kind: &str,
+    size_bytes: u64,
+    detail: &str,
+) -> AppResult<CacheSummary> {
+    ensure_cache_index(paths)?;
+    let mut payload = read_cache_index(paths)?;
+    let updated_at = timestamp_millis();
+    let entry = serde_json::json!({
+        "key": key,
+        "kind": kind,
+        "sizeBytes": size_bytes,
+        "detail": detail,
+        "updatedAt": updated_at
+    });
+
+    let object = payload.as_object_mut().ok_or_else(|| {
+        AppError::InvalidData(format!(
+            "cache index is not an object: {}",
+            cache_index_path(paths).display()
+        ))
+    })?;
+    object.insert("version".to_string(), Value::Number(1.into()));
+    object.insert("updatedAt".to_string(), Value::String(updated_at));
+
+    let entries = object
+        .entry("entries")
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| {
+            AppError::InvalidData(format!(
+                "cache index entries is not an array: {}",
+                cache_index_path(paths).display()
+            ))
+        })?;
+    entries.retain(|item| item.get("key").and_then(Value::as_str) != Some(key));
+    entries.push(entry);
+    entries.sort_by(|left, right| {
+        left.get("key")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .cmp(right.get("key").and_then(Value::as_str).unwrap_or_default())
+    });
+
+    let formatted = serde_json::to_string_pretty(&payload)
+        .map_err(|error| AppError::InvalidData(error.to_string()))?;
+    fs::write(cache_index_path(paths), format!("{formatted}\n"))?;
+
+    cache_summary(paths)
+}
+
+pub fn append_log_entry(
+    paths: &StoragePaths,
+    command: &str,
+    phase: &str,
+    message: &str,
+    detail: Option<&str>,
+) -> AppResult<LogSummary> {
+    fs::create_dir_all(&paths.logs_dir)?;
+    let timestamp = timestamp_millis();
+    let mut line = format!(
+        "{timestamp}\t{command}\t{phase}\t{}",
+        sanitize_log_field(message)
+    );
+    if let Some(detail) = detail.filter(|value| !value.is_empty()) {
+        line.push('\t');
+        line.push_str(&sanitize_log_field(detail));
+    }
+    line.push('\n');
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(active_log_path(paths))?;
+    file.write_all(line.as_bytes())?;
+
+    log_summary(paths)
+}
+
+pub fn runtime_summary(paths: &StoragePaths) -> AppResult<RuntimeSummary> {
+    Ok(RuntimeSummary {
+        cache: cache_summary(paths)?,
+        logs: log_summary(paths)?,
+    })
+}
+
+pub fn cache_summary(paths: &StoragePaths) -> AppResult<CacheSummary> {
+    ensure_cache_index(paths)?;
+    let index_path = cache_index_path(paths);
+    let payload = read_cache_index(paths)?;
+    let entries = payload
+        .get("entries")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    let updated_at = payload
+        .get("updatedAt")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let size_bytes = fs::metadata(&index_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+
+    Ok(CacheSummary {
+        directory: paths.cache_dir.to_string_lossy().into_owned(),
+        index_file: index_path.to_string_lossy().into_owned(),
+        entries,
+        size_bytes,
+        updated_at,
+    })
+}
+
+pub fn log_summary(paths: &StoragePaths) -> AppResult<LogSummary> {
+    fs::create_dir_all(&paths.logs_dir)?;
+    let log_path = active_log_path(paths);
+    if !log_path.exists() {
+        fs::write(&log_path, "")?;
+    }
+
+    let contents = fs::read_to_string(&log_path)?;
+    let last_line = contents
+        .lines()
+        .last()
+        .map(ToOwned::to_owned)
+        .unwrap_or_default();
+    let size_bytes = fs::metadata(&log_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let updated_at = last_line.split('\t').next().unwrap_or_default().to_string();
+
+    Ok(LogSummary {
+        directory: paths.logs_dir.to_string_lossy().into_owned(),
+        active_file: log_path.to_string_lossy().into_owned(),
+        size_bytes,
+        last_line,
+        updated_at,
+    })
+}
+
+fn sanitize_log_field(value: &str) -> String {
+    let normalized = value
+        .chars()
+        .map(|character| match character {
+            '\n' | '\r' | '\t' => ' ',
+            other => other,
+        })
+        .collect::<String>();
+
+    redact_sensitive_log_values(&normalized)
+}
+
+fn redact_sensitive_log_values(value: &str) -> String {
+    const SENSITIVE_KEYS: &[&str] = &[
+        "authorization",
+        "token",
+        "auth_token",
+        "access_token",
+        "refresh_token",
+        "api_key",
+        "apikey",
+        "password",
+        "secret",
+        "cookie",
+    ];
+
+    SENSITIVE_KEYS
+        .iter()
+        .fold(value.to_string(), |current, key| {
+            redact_value_after_separator(redact_value_after_separator(current, key, '='), key, ':')
+        })
+}
+
+fn redact_value_after_separator(mut value: String, key: &str, separator: char) -> String {
+    let pattern = format!("{key}{separator}");
+    let mut search_start = 0usize;
+
+    loop {
+        let lower = value.to_ascii_lowercase();
+        let Some(relative_position) = lower[search_start..].find(&pattern) else {
+            break;
+        };
+
+        let value_start = search_start + relative_position + pattern.len();
+        let mut value_end = value.len();
+        for (offset, character) in value[value_start..].char_indices() {
+            let is_delimiter = match separator {
+                '=' => matches!(character, '&' | ' ' | ',' | ';'),
+                ':' => matches!(character, ',' | ';'),
+                _ => false,
+            };
+
+            if is_delimiter {
+                value_end = value_start + offset;
+                break;
+            }
+        }
+
+        if value_end > value_start {
+            value.replace_range(value_start..value_end, "***");
+            search_start = value_start + 3;
+        } else {
+            search_start = value_start;
+        }
+    }
+
+    value
 }
 
 pub(crate) fn initialize_database(database_path: &Path) -> AppResult<()> {
@@ -1125,6 +1402,8 @@ mod tests {
         fs::create_dir_all(root.join("workspaces")).expect("create workspaces dir");
         fs::create_dir_all(root.join("collections")).expect("create collections dir");
         fs::create_dir_all(root.join("environments")).expect("create environments dir");
+        fs::create_dir_all(root.join("cache")).expect("create cache dir");
+        fs::create_dir_all(root.join("logs")).expect("create logs dir");
 
         StoragePaths {
             app_data_dir: root.clone(),
@@ -1132,6 +1411,8 @@ mod tests {
             workspaces_dir: root.join("workspaces"),
             collections_dir: root.join("collections"),
             environments_dir: root.join("environments"),
+            cache_dir: root.join("cache"),
+            logs_dir: root.join("logs"),
         }
     }
 
@@ -1501,6 +1782,60 @@ cookie_jar: workspace_local
             .vars
             .iter()
             .any(|row| row.key == "cookie_jar" && row.value == "workspace_local"));
+    }
+
+    #[test]
+    fn runtime_cache_and_logs_initialize_write_and_summarize() {
+        let paths = make_test_paths("runtime-cache-logs");
+        initialize_runtime_files(&paths).expect("initialize runtime files");
+
+        let initial = runtime_summary(&paths).expect("read initial runtime summary");
+        assert!(paths.cache_dir.exists());
+        assert!(paths.logs_dir.exists());
+        assert!(paths.cache_dir.join(CACHE_INDEX_FILE_NAME).exists());
+        assert!(paths.logs_dir.join(ACTIVE_LOG_FILE_NAME).exists());
+        assert_eq!(initial.cache.entries, 0);
+        assert!(initial.logs.size_bytes > 0);
+
+        let cache = record_cache_entry(
+            &paths,
+            "bootstrap-state",
+            "metadata",
+            512,
+            "2 collections / 3 environments / 4 history rows",
+        )
+        .expect("record cache entry");
+        assert_eq!(cache.entries, 1);
+        assert!(cache.size_bytes > 0);
+
+        append_log_entry(
+            &paths,
+            "load_bootstrap_state",
+            "completed",
+            "Loaded\nworkspace token=abc123",
+            Some("detail\twith whitespace authorization: Bearer secret"),
+        )
+        .expect("append log entry");
+
+        let summary = runtime_summary(&paths).expect("read runtime summary");
+        assert_eq!(summary.cache.entries, 1);
+        assert!(summary.cache.index_file.ends_with(CACHE_INDEX_FILE_NAME));
+        assert!(summary.logs.active_file.ends_with(ACTIVE_LOG_FILE_NAME));
+        assert!(summary.logs.last_line.contains("load_bootstrap_state"));
+        assert!(summary.logs.last_line.contains("Loaded workspace"));
+        assert!(summary.logs.last_line.contains("detail with whitespace"));
+        assert!(summary.logs.last_line.contains("token=***"));
+        assert!(summary.logs.last_line.contains("authorization:***"));
+        assert!(!summary.logs.last_line.contains("abc123"));
+        assert!(!summary.logs.last_line.contains("secret"));
+
+        let cache_payload =
+            fs::read_to_string(paths.cache_dir.join(CACHE_INDEX_FILE_NAME)).expect("read cache");
+        assert!(cache_payload.contains("\"bootstrap-state\""));
+        let log_payload =
+            fs::read_to_string(paths.logs_dir.join(ACTIVE_LOG_FILE_NAME)).expect("read log");
+        assert!(log_payload.contains("runtime\tinitialized"));
+        assert!(log_payload.contains("load_bootstrap_state\tcompleted"));
     }
 
     #[test]

@@ -490,11 +490,44 @@
     - 本地缓存和应用级日志仍未完成，留给 Task 14；因此整体 goal 仍不能标记完成。
   - 自信度检查：我是否对当前实现 100% 有信心？对 Task 13 的边界有信心：JSON 旧行为保留，YAML/YML 读写、seed `local.yaml` 和错误路径都有单测覆盖；storage 单测、Rust check、前端构建、全量 Rust 测试和 whitespace 检查均通过。完整通用 YAML 解析不是当前环境变量文件模型需要的能力，已明确作为边界记录。
 
-- [ ] Task 14: 补齐本地缓存与日志
+- [x] Task 14: 补齐本地缓存与日志
   - 目标：实现基础本地缓存目录/索引和应用级日志文件写入，并在 Settings 中暴露状态。
   - 独立验证：storage 或 log 单测覆盖 cache/log 初始化、写入、读取摘要；前端构建通过。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：补齐基础本地 cache/log 落盘闭环，并在 Settings 暴露运行态摘要。
+  - 具体改动：
+    - `src-tauri/src/models.rs`
+      - `AppPaths` 新增 `cacheDir` / `logsDir`。
+      - `BootstrapState` 新增 `runtime`，包含 `CacheSummary` 和 `LogSummary`。
+    - `src-tauri/src/storage.rs`
+      - `StoragePaths` 新增 `cache_dir` / `logs_dir`，初始化时创建 `cache/` 与 `logs/`。
+      - 新增 `cache/index.json` 初始化、`record_cache_entry`、`cache_summary`，用 `bootstrap-state` 元数据记录 collections/environments/history 数量摘要。
+      - 新增 `logs/api-client.log` 初始化、`append_log_entry`、`log_summary`，写入 command 生命周期日志并返回 active log 摘要。
+      - 日志字段写入前会规整换行/tab，并对 `authorization`、`token`、`api_key`、`password`、`secret`、`cookie` 等常见敏感键做基础脱敏。
+      - 新增 storage 单测覆盖 runtime 文件初始化、cache entry 写入、log 写入、summary 读取和敏感字段脱敏。
+    - `src-tauri/src/commands.rs`
+      - `emit_bridge_event` 现在同时写入本地日志文件。
+      - `load_bootstrap_state` 会记录 `bootstrap-state` cache entry，并把 runtime cache/log 摘要返回给前端。
+      - cURL、Postman、upload/download 等原本无 `AppState` 参数的 command 现在接入 state，以便事件日志能真实落盘；前端调用签名不变。
+    - `src/lib/tauri.ts` / `src/store/requestStore.ts` / `src/App.tsx`
+      - 前端 Bootstrap 类型和 store 增加 runtime cache/log 摘要。
+      - Settings 新增 `Runtime Storage / Cache / Logs` 区域，展示 cache/log 目录、索引文件、active log 文件、大小、更新时间和最后一条日志。
+    - `src/styles.css`
+      - 新增 runtime storage cards 样式，并适配窄屏布局。
+  - 验证结果：
+    - `cargo fmt --manifest-path src-tauri/Cargo.toml` 已执行。
+    - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::runtime_cache_and_logs_initialize_write_and_summarize` 通过。
+    - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过，11 个 storage 测试成功。
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过。
+    - `npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-CK6EmWf5.css`、`dist/assets/index-BvSsOmVD.js`。
+    - `cargo test --manifest-path src-tauri/Cargo.toml` 默认沙箱因本地 HTTP 测试绑定 `127.0.0.1` 权限失败；提权重跑后通过，25 个 Rust 测试成功。
+    - `git diff --check` 通过。
+    - `npm run dev` 启动后用 in-app browser 打开 `http://localhost:1420/`，通过移动 Settings 入口确认 `Runtime Storage`、`Cache / Logs`、`Local Cache`、`Application Logs`、`cache/index.json`、`logs/api-client.log` 可见，控制台 error 日志为空。
+    - 运行态检查后执行 `pkill -f "npm run dev"`，`curl -s http://localhost:1420` 返回连接失败，确认 dev server 未继续占用端口。
+  - 当前边界：
+    - 本地缓存当前是基础索引与 runtime metadata 摘要，不是完整 HTTP response cache 或离线 replay cache。
+    - 应用日志当前覆盖 command 生命周期与 runtime 初始化，已做基础敏感键脱敏；更高级的日志轮转、等级过滤、UI 下载导出属于后续增强。
+    - Task 15 仍需做最终最大的 review 和 goal 完成判定，不能在本 task 直接标记整体完成。
+  - 自信度检查：我是否对当前实现 100% 有信心？对 Task 14 的基础闭环有信心：cache/log 目录与文件真实落盘，Bootstrap 返回摘要，Settings 运行态可见，日志写入集中接入 bridge event，敏感字段有基础脱敏，storage 单测、Rust check、前端构建、全量 Rust 测试、browser 检查和 whitespace 检查均通过。完整 HTTP 缓存策略和日志轮转不属于本 task 的基础验收边界，已明确记录。
 
 - [ ] Task 15: 最终最大的 review 与 goal 完成判定
   - 目标：在 Task 9-14 后重新做完整最终审计，只有所有明确条目有真实实现和验证证据时才标记 goal 完成。

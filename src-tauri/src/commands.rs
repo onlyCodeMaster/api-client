@@ -35,21 +35,30 @@ fn now_millis() -> u128 {
 
 fn emit_bridge_event(
     app: &AppHandle,
+    paths: &StoragePaths,
     command: &str,
     phase: &str,
     message: impl Into<String>,
     detail: Option<String>,
 ) {
     let timestamp = now_millis();
+    let message = message.into();
     let payload = BridgeEvent {
         id: format!("{command}-{phase}-{timestamp}"),
         command: command.to_string(),
         phase: phase.to_string(),
-        message: message.into(),
+        message,
         timestamp: timestamp.to_string(),
-        detail,
+        detail: detail.clone(),
     };
 
+    let _ = storage::append_log_entry(
+        paths,
+        command,
+        phase,
+        &payload.message,
+        payload.detail.as_deref(),
+    );
     let _ = app.emit(BRIDGE_EVENT_NAME, payload);
 }
 
@@ -60,6 +69,7 @@ pub fn load_bootstrap_state(
 ) -> Result<BootstrapState, String> {
     emit_bridge_event(
         &app,
+        &state.paths,
         "load_bootstrap_state",
         "started",
         "Loading local workspace state",
@@ -72,6 +82,7 @@ pub fn load_bootstrap_state(
             let message = to_command_error(error);
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "load_bootstrap_state",
                 "failed",
                 "Failed to load settings",
@@ -86,6 +97,7 @@ pub fn load_bootstrap_state(
             let message = to_command_error(error);
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "load_bootstrap_state",
                 "failed",
                 "Failed to load request history",
@@ -100,6 +112,7 @@ pub fn load_bootstrap_state(
             let message = to_command_error(error);
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "load_bootstrap_state",
                 "failed",
                 "Failed to load collections",
@@ -114,6 +127,7 @@ pub fn load_bootstrap_state(
             let message = to_command_error(error);
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "load_bootstrap_state",
                 "failed",
                 "Failed to load environments",
@@ -128,6 +142,7 @@ pub fn load_bootstrap_state(
             let message = to_command_error(error);
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "load_bootstrap_state",
                 "failed",
                 "Failed to inspect keychain secrets",
@@ -136,9 +151,38 @@ pub fn load_bootstrap_state(
             return Err(message);
         }
     };
+    let runtime = match storage::record_cache_entry(
+        &state.paths,
+        "bootstrap-state",
+        "metadata",
+        0,
+        &format!(
+            "{} collections / {} environments / {} history rows",
+            collections.len(),
+            environments.len(),
+            history.len()
+        ),
+    )
+    .and_then(|_| storage::runtime_summary(&state.paths))
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "load_bootstrap_state",
+                "failed",
+                "Failed to inspect runtime cache and logs",
+                Some(message.clone()),
+            );
+            return Err(message);
+        }
+    };
 
     emit_bridge_event(
         &app,
+        &state.paths,
         "load_bootstrap_state",
         "completed",
         "Local workspace state loaded",
@@ -153,6 +197,7 @@ pub fn load_bootstrap_state(
     Ok(BootstrapState {
         paths: state.paths.to_model(),
         settings,
+        runtime,
         history,
         collections,
         environments,
@@ -172,6 +217,7 @@ pub fn record_history_entry(
         Ok(history) => {
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "record_history_entry",
                 "completed",
                 "History entry recorded",
@@ -183,6 +229,7 @@ pub fn record_history_entry(
             let message = to_command_error(error);
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "record_history_entry",
                 "failed",
                 "Failed to record history entry",
@@ -197,12 +244,13 @@ pub fn record_history_entry(
 pub fn save_secret(
     app: AppHandle,
     input: SaveSecretInput,
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
 ) -> Result<SecretStatus, String> {
     match secrets::save_secret(&input.name, &input.value) {
         Ok(secret) => {
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "save_secret",
                 "completed",
                 "Secret saved to keychain",
@@ -214,6 +262,7 @@ pub fn save_secret(
             let message = to_command_error(error);
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "save_secret",
                 "failed",
                 "Failed to save secret",
@@ -234,6 +283,7 @@ pub fn save_environment(
         Ok(environment) => {
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "save_environment",
                 "completed",
                 "Environment file saved",
@@ -245,6 +295,7 @@ pub fn save_environment(
             let message = to_command_error(error);
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "save_environment",
                 "failed",
                 "Failed to save environment",
@@ -265,6 +316,7 @@ pub fn save_request(
         Ok(collection) => {
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "save_request",
                 "completed",
                 "Collection request saved",
@@ -276,6 +328,7 @@ pub fn save_request(
             let message = to_command_error(error);
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "save_request",
                 "failed",
                 "Failed to save request",
@@ -287,11 +340,16 @@ pub fn save_request(
 }
 
 #[tauri::command]
-pub fn import_curl(app: AppHandle, input: CurlImportInput) -> Result<StoredRequest, String> {
+pub fn import_curl(
+    app: AppHandle,
+    input: CurlImportInput,
+    state: State<'_, AppState>,
+) -> Result<StoredRequest, String> {
     match curl::import_command(input) {
         Ok(request) => {
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "import_curl",
                 "completed",
                 "cURL command imported",
@@ -303,6 +361,7 @@ pub fn import_curl(app: AppHandle, input: CurlImportInput) -> Result<StoredReque
             let message = to_command_error(error);
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "import_curl",
                 "failed",
                 "Failed to import cURL command",
@@ -314,11 +373,16 @@ pub fn import_curl(app: AppHandle, input: CurlImportInput) -> Result<StoredReque
 }
 
 #[tauri::command]
-pub fn export_curl(app: AppHandle, input: CurlExportInput) -> Result<String, String> {
+pub fn export_curl(
+    app: AppHandle,
+    input: CurlExportInput,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
     match curl::export_command(input) {
         Ok(command) => {
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "export_curl",
                 "completed",
                 "cURL command exported",
@@ -330,6 +394,7 @@ pub fn export_curl(app: AppHandle, input: CurlExportInput) -> Result<String, Str
             let message = to_command_error(error);
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "export_curl",
                 "failed",
                 "Failed to export cURL command",
@@ -344,11 +409,13 @@ pub fn export_curl(app: AppHandle, input: CurlExportInput) -> Result<String, Str
 pub fn import_postman_collection(
     app: AppHandle,
     input: PostmanImportInput,
+    state: State<'_, AppState>,
 ) -> Result<Vec<StoredRequest>, String> {
     match postman::import_collection(input) {
         Ok(requests) => {
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "import_postman_collection",
                 "completed",
                 "Postman collection imported",
@@ -360,6 +427,7 @@ pub fn import_postman_collection(
             let message = to_command_error(error);
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "import_postman_collection",
                 "failed",
                 "Failed to import Postman collection",
@@ -371,11 +439,16 @@ pub fn import_postman_collection(
 }
 
 #[tauri::command]
-pub fn upload_file(app: AppHandle, input: FileUploadInput) -> Result<FileUploadResult, String> {
+pub fn upload_file(
+    app: AppHandle,
+    input: FileUploadInput,
+    state: State<'_, AppState>,
+) -> Result<FileUploadResult, String> {
     match file_transfer::upload_file(input) {
         Ok(result) => {
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "upload_file",
                 "completed",
                 "File uploaded",
@@ -390,6 +463,7 @@ pub fn upload_file(app: AppHandle, input: FileUploadInput) -> Result<FileUploadR
             let message = to_command_error(error);
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "upload_file",
                 "failed",
                 "Failed to upload file",
@@ -404,11 +478,13 @@ pub fn upload_file(app: AppHandle, input: FileUploadInput) -> Result<FileUploadR
 pub fn download_file(
     app: AppHandle,
     input: FileDownloadInput,
+    state: State<'_, AppState>,
 ) -> Result<FileDownloadResult, String> {
     match file_transfer::download_file(input) {
         Ok(result) => {
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "download_file",
                 "completed",
                 "File downloaded",
@@ -423,6 +499,7 @@ pub fn download_file(
             let message = to_command_error(error);
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "download_file",
                 "failed",
                 "Failed to download file",
@@ -441,6 +518,7 @@ pub fn send_request(
 ) -> Result<SendRequestResult, String> {
     emit_bridge_event(
         &app,
+        &state.paths,
         "send_request",
         "started",
         "HTTP request started",
@@ -453,6 +531,7 @@ pub fn send_request(
             let message = to_command_error(error);
             emit_bridge_event(
                 &app,
+                &state.paths,
                 "send_request",
                 "failed",
                 "HTTP request failed",
@@ -475,6 +554,7 @@ pub fn send_request(
         let message = to_command_error(error);
         emit_bridge_event(
             &app,
+            &state.paths,
             "send_request",
             "failed",
             "HTTP response received but history recording failed",
@@ -485,6 +565,7 @@ pub fn send_request(
 
     emit_bridge_event(
         &app,
+        &state.paths,
         "send_request",
         "completed",
         "HTTP request completed",

@@ -8,11 +8,29 @@ export type BootstrapState = {
     workspacesDir: string;
     collectionsDir: string;
     environmentsDir: string;
+    cacheDir: string;
+    logsDir: string;
   };
   settings: {
     theme: string;
     recentWorkspace: string;
     autoSave: boolean;
+  };
+  runtime: {
+    cache: {
+      directory: string;
+      indexFile: string;
+      entries: number;
+      sizeBytes: number;
+      updatedAt: string;
+    };
+    logs: {
+      directory: string;
+      activeFile: string;
+      sizeBytes: number;
+      lastLine: string;
+      updatedAt: string;
+    };
   };
   history: Array<{
     id: number;

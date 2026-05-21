@@ -69,6 +69,35 @@ function safePathname(url: string) {
   }
 }
 
+function formatBytes(sizeBytes: number) {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return "0 B";
+  }
+
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} B`;
+  }
+
+  if (sizeBytes < 1024 * 1024) {
+    return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatRuntimeTimestamp(timestamp: string) {
+  if (!timestamp) {
+    return "Not written yet";
+  }
+
+  const parsed = Number(timestamp);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return timestamp;
+  }
+
+  return new Date(parsed).toLocaleString();
+}
+
 function resolveHistoryRequestId(
   historyItem: {
     requestId: string;
@@ -290,7 +319,10 @@ export default function App() {
           appDataDir: state.paths.appDataDir,
           databasePath: state.paths.databasePath,
           environmentsDir: state.paths.environmentsDir,
+          cacheDir: state.paths.cacheDir,
+          logsDir: state.paths.logsDir,
           recentWorkspace: state.settings.recentWorkspace,
+          runtime: state.runtime,
           history: state.history.map((item) => ({
             id: `history-db-${item.id}`,
             title: `${item.method} ${safePathname(item.url)}`,
@@ -1493,6 +1525,62 @@ export default function App() {
                     History, settings, cookies, collections, environment files, secrets,
                     local cache and logs.
                   </p>
+                </article>
+              </div>
+              <div className="workspace-panel__header">
+                <div>
+                  <span>Runtime Storage</span>
+                  <h2>Cache / Logs</h2>
+                </div>
+              </div>
+              <div className="runtime-storage-grid">
+                <article className="runtime-storage-card">
+                  <div className="runtime-storage-card__header">
+                    <span>Local Cache</span>
+                    <strong>{bootstrap.runtime.cache.entries} entries</strong>
+                  </div>
+                  <dl>
+                    <div>
+                      <dt>Directory</dt>
+                      <dd>{bootstrap.runtime.cache.directory || bootstrap.cacheDir || "Pending runtime"}</dd>
+                    </div>
+                    <div>
+                      <dt>Index</dt>
+                      <dd>{bootstrap.runtime.cache.indexFile || "cache/index.json"}</dd>
+                    </div>
+                    <div>
+                      <dt>Size</dt>
+                      <dd>{formatBytes(bootstrap.runtime.cache.sizeBytes)}</dd>
+                    </div>
+                    <div>
+                      <dt>Updated</dt>
+                      <dd>{formatRuntimeTimestamp(bootstrap.runtime.cache.updatedAt)}</dd>
+                    </div>
+                  </dl>
+                </article>
+                <article className="runtime-storage-card">
+                  <div className="runtime-storage-card__header">
+                    <span>Application Logs</span>
+                    <strong>{formatBytes(bootstrap.runtime.logs.sizeBytes)}</strong>
+                  </div>
+                  <dl>
+                    <div>
+                      <dt>Directory</dt>
+                      <dd>{bootstrap.runtime.logs.directory || bootstrap.logsDir || "Pending runtime"}</dd>
+                    </div>
+                    <div>
+                      <dt>Active File</dt>
+                      <dd>{bootstrap.runtime.logs.activeFile || "logs/api-client.log"}</dd>
+                    </div>
+                    <div>
+                      <dt>Updated</dt>
+                      <dd>{formatRuntimeTimestamp(bootstrap.runtime.logs.updatedAt)}</dd>
+                    </div>
+                    <div>
+                      <dt>Last Entry</dt>
+                      <dd>{bootstrap.runtime.logs.lastLine || "No log entries yet"}</dd>
+                    </div>
+                  </dl>
                 </article>
               </div>
               <div className="workspace-panel__header">

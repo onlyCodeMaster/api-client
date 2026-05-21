@@ -155,6 +155,8 @@ mod tests {
         fs::create_dir_all(root.join("workspaces")).expect("create workspaces dir");
         fs::create_dir_all(root.join("collections")).expect("create collections dir");
         fs::create_dir_all(root.join("environments")).expect("create environments dir");
+        fs::create_dir_all(root.join("cache")).expect("create cache dir");
+        fs::create_dir_all(root.join("logs")).expect("create logs dir");
 
         StoragePaths {
             app_data_dir: root.clone(),
@@ -162,6 +164,8 @@ mod tests {
             workspaces_dir: root.join("workspaces"),
             collections_dir: root.join("collections"),
             environments_dir: root.join("environments"),
+            cache_dir: root.join("cache"),
+            logs_dir: root.join("logs"),
         }
     }
 

@@ -83,12 +83,34 @@ export type SecretStatus = {
   exists: boolean;
 };
 
+export type RuntimeCacheSummary = {
+  directory: string;
+  indexFile: string;
+  entries: number;
+  sizeBytes: number;
+  updatedAt: string;
+};
+
+export type RuntimeLogSummary = {
+  directory: string;
+  activeFile: string;
+  sizeBytes: number;
+  lastLine: string;
+  updatedAt: string;
+};
+
 export type BootstrapSnapshot = {
   loaded: boolean;
   appDataDir: string;
   databasePath: string;
   environmentsDir: string;
+  cacheDir: string;
+  logsDir: string;
   recentWorkspace: string;
+  runtime: {
+    cache: RuntimeCacheSummary;
+    logs: RuntimeLogSummary;
+  };
   secrets: SecretStatus[];
 };
 
@@ -114,7 +136,10 @@ type RequestStore = {
     appDataDir: string;
     databasePath: string;
     environmentsDir: string;
+    cacheDir: string;
+    logsDir: string;
     recentWorkspace: string;
+    runtime: BootstrapSnapshot["runtime"];
     history: HistoryRecord[];
     collections: RequestRecord[];
     environments: EnvironmentRecord[];
@@ -336,7 +361,25 @@ const initialBootstrap: BootstrapSnapshot = {
   appDataDir: "",
   databasePath: "",
   environmentsDir: "",
+  cacheDir: "",
+  logsDir: "",
   recentWorkspace: "",
+  runtime: {
+    cache: {
+      directory: "",
+      indexFile: "",
+      entries: 0,
+      sizeBytes: 0,
+      updatedAt: "",
+    },
+    logs: {
+      directory: "",
+      activeFile: "",
+      sizeBytes: 0,
+      lastLine: "",
+      updatedAt: "",
+    },
+  },
   secrets: [],
 };
 
@@ -468,7 +511,10 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
         appDataDir: input.appDataDir,
         databasePath: input.databasePath,
         environmentsDir: input.environmentsDir,
+        cacheDir: input.cacheDir,
+        logsDir: input.logsDir,
         recentWorkspace: input.recentWorkspace,
+        runtime: input.runtime,
         secrets: input.secrets,
       },
       lastError: "",
