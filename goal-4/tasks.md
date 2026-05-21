@@ -52,11 +52,27 @@
     - 本 task 修复了交互歧义；Task 4 仍需做大型全面检查，尤其是确认端口残留和核心路径不再造成“完全不可用”的体验。
   - 自信度检查：对 Task 3 的修复有 100% 信心：问题有明确复现和明确验证，修复范围很小，构建与真实浏览器 role 定位均通过。
 
-- [ ] Task 4: 大型全面检查 - debug 循环
+- [x] Task 4: 大型全面检查 - debug 循环
   - 目标：对 Task 1-3 的可用性修复做全面回归，继续找隐藏 bug。
   - 独立验证：构建、运行态、核心交互、控制台均通过。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：完成 Task 1-3 后的大型全面检查 - debug 循环，覆盖端口状态、构建、核心编辑路径、唯一 tab 名称、Files 工具、Settings inspector、控制台和 dev server 清理。
+  - 回归检查表：
+    - Goal workflow：重新读取 `goal-4/input.md`、`goal-4/plan.md`、`goal-4/tasks.md`，确认当前处于 Task 4，Task 1-3 已完成。
+    - 端口预检：`lsof -nP -iTCP:1420 -sTCP:LISTEN` 和 `lsof -nP -iTCP:1421 -sTCP:LISTEN` 均无监听进程。
+    - 构建：`npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-BKl13Ah2.css`、`dist/assets/index-QsAsCkLr.js`。
+    - Whitespace：`git diff --check` 通过。
+    - 启动：`npm run dev` 成功，Vite 监听 `http://localhost:1420/`。
+    - 首屏：运行态 viewport `599x1329` 下 URL input、Send、Save、request editor、response panel 均可见，无横向溢出。
+    - 编辑：URL 可编辑为 `https://example.com/api/full-regression`。
+    - Tab：`Request Body tab` 和 `Response Headers tab` 各唯一，均可点击；request Body textarea 可见，response headers list 可见。
+    - Files 初查：用 DOM CUA 在复杂状态后点击 Files 未打开抽屉，提示节点选择不稳定；随后用稳定 role locator `getByRole("button", { name: "Files" })` 复测，Files 匹配数量为 1，可打开 `.tool-drawer`，Upload / Download 均可见。
+    - Settings：切 Settings 后 `scrollY=0`，inspector 可见，request editor 和 response panel 仍可见。
+    - 控制台：browser console error 日志为空。
+    - 端口清理：检查结束后执行 `pkill -f "npm run dev"`，`curl -s http://localhost:1420` 返回连接失败。
+  - 发现与处理：
+    - Files 本身未坏，但 DOM CUA 的宽泛节点点击在复杂滚动状态下不稳定；后续验证应优先使用明确 role/aria name。
+    - P0 端口残留本轮未复现，但仍是可用性风险；Task 5 需要考虑是否添加项目级恢复/检测脚本，避免用户再次卡在端口占用。
+  - 自信度检查：对 Task 4 的回归结论有 100% 信心：启动、构建、核心交互、tab 唯一性、Files role 点击、Settings inspector 和控制台均有真实证据；仍需 Task 5 处理端口残留风险的长期可用性。
 
 - [ ] Task 5: 修复剩余高优先级可用性问题
   - 目标：处理审计中剩余影响“可用”的问题，而不是只做视觉美化。
