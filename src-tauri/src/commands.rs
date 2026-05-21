@@ -4,12 +4,13 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::curl;
 use crate::error::AppError;
+use crate::file_transfer;
 use crate::http;
 use crate::models::{
     BootstrapState, BridgeEvent, CollectionSummary, CurlExportInput, CurlImportInput,
-    EnvironmentSummary, PostmanImportInput, RecordHistoryInput, SaveEnvironmentInput,
-    SaveRequestInput, SaveSecretInput, SecretStatus, SendRequestInput, SendRequestResult,
-    StoredRequest,
+    EnvironmentSummary, FileDownloadInput, FileDownloadResult, FileUploadInput, FileUploadResult,
+    PostmanImportInput, RecordHistoryInput, SaveEnvironmentInput, SaveRequestInput,
+    SaveSecretInput, SecretStatus, SendRequestInput, SendRequestResult, StoredRequest,
 };
 use crate::postman;
 use crate::secrets;
@@ -362,6 +363,69 @@ pub fn import_postman_collection(
                 "import_postman_collection",
                 "failed",
                 "Failed to import Postman collection",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn upload_file(app: AppHandle, input: FileUploadInput) -> Result<FileUploadResult, String> {
+    match file_transfer::upload_file(input) {
+        Ok(result) => {
+            emit_bridge_event(
+                &app,
+                "upload_file",
+                "completed",
+                "File uploaded",
+                Some(format!(
+                    "{} / {} bytes",
+                    result.file_name, result.size_bytes
+                )),
+            );
+            Ok(result)
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                "upload_file",
+                "failed",
+                "Failed to upload file",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn download_file(
+    app: AppHandle,
+    input: FileDownloadInput,
+) -> Result<FileDownloadResult, String> {
+    match file_transfer::download_file(input) {
+        Ok(result) => {
+            emit_bridge_event(
+                &app,
+                "download_file",
+                "completed",
+                "File downloaded",
+                Some(format!(
+                    "{} bytes -> {}",
+                    result.size_bytes, result.destination_path
+                )),
+            );
+            Ok(result)
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                "download_file",
+                "failed",
+                "Failed to download file",
                 Some(message.clone()),
             );
             Err(message)

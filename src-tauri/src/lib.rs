@@ -1,6 +1,7 @@
 mod commands;
 mod curl;
 mod error;
+mod file_transfer;
 mod http;
 mod models;
 mod postman;
@@ -30,6 +31,8 @@ pub fn run() {
             commands::import_curl,
             commands::export_curl,
             commands::import_postman_collection,
+            commands::upload_file,
+            commands::download_file,
             commands::send_request
         ])
         .run(tauri::generate_context!())

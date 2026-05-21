@@ -93,6 +93,21 @@ export type SendRequestResult = {
   };
 };
 
+export type FileUploadResult = {
+  status: string;
+  durationMs: number;
+  sizeBytes: number;
+  fileName: string;
+  responseBody: string;
+};
+
+export type FileDownloadResult = {
+  status: string;
+  durationMs: number;
+  sizeBytes: number;
+  destinationPath: string;
+};
+
 export type BridgeEvent = {
   id: string;
   command: string;
@@ -161,6 +176,26 @@ export async function importPostmanCollection(input: {
   collectionJson: string;
 }) {
   return invoke<StoredRequest[]>("import_postman_collection", { input });
+}
+
+export async function uploadFile(input: {
+  url: string;
+  filePath: string;
+  fieldName: string;
+  headers: Array<{ key: string; value: string; enabled: boolean }>;
+  environment: BootstrapState["environments"][number];
+}) {
+  return invoke<FileUploadResult>("upload_file", { input });
+}
+
+export async function downloadFile(input: {
+  url: string;
+  destinationPath: string;
+  overwrite: boolean;
+  headers: Array<{ key: string; value: string; enabled: boolean }>;
+  environment: BootstrapState["environments"][number];
+}) {
+  return invoke<FileDownloadResult>("download_file", { input });
 }
 
 export async function sendRequest(input: SendRequestInput) {

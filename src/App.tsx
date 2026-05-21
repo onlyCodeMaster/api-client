@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  downloadFile,
   exportCurl,
   importCurl,
   importPostmanCollection,
@@ -8,6 +9,7 @@ import {
   saveEnvironment,
   saveRequest,
   saveSecret,
+  uploadFile,
   type BridgeEvent,
 } from "./lib/tauri";
 import {
@@ -170,6 +172,13 @@ export default function App() {
   ]
 }`);
   const [postmanMessage, setPostmanMessage] = useState("");
+  const [isTransferPanelOpen, setIsTransferPanelOpen] = useState(false);
+  const [uploadPath, setUploadPath] = useState("/tmp/api-client-upload.txt");
+  const [uploadFieldName, setUploadFieldName] = useState("file");
+  const [downloadUrl, setDownloadUrl] = useState("{{base_url}}/v1/files/report.json");
+  const [downloadPath, setDownloadPath] = useState("/tmp/api-client-download.json");
+  const [allowDownloadOverwrite, setAllowDownloadOverwrite] = useState(false);
+  const [transferMessage, setTransferMessage] = useState("");
 
   const activeRequest =
     requests.find((request) => request.id === activeRequestId) ?? requests[0];
@@ -524,6 +533,58 @@ export default function App() {
     }
   };
 
+  const handleUploadFile = async () => {
+    if (!activeRequest || !activeEnvironment) {
+      return;
+    }
+
+    setTransferMessage("Uploading file...");
+    try {
+      const result = await uploadFile({
+        url: activeRequest.url,
+        filePath: uploadPath,
+        fieldName: uploadFieldName,
+        headers: activeRequest.headers,
+        environment: {
+          name: activeEnvironment.name,
+          filePath: activeEnvironment.source,
+          vars: activeEnvironment.vars,
+        },
+      });
+      setTransferMessage(
+        `Uploaded ${result.fileName} (${result.sizeBytes} bytes): ${result.status}`,
+      );
+    } catch (error) {
+      setTransferMessage(commandErrorMessage(error, "Upload file"));
+    }
+  };
+
+  const handleDownloadFile = async () => {
+    if (!activeEnvironment) {
+      return;
+    }
+
+    setTransferMessage("Downloading file...");
+    try {
+      const result = await downloadFile({
+        url: downloadUrl,
+        destinationPath: downloadPath,
+        overwrite: allowDownloadOverwrite,
+        headers: activeRequest.headers,
+        environment: {
+          name: activeEnvironment.name,
+          filePath: activeEnvironment.source,
+          vars: activeEnvironment.vars,
+        },
+      });
+      setTransferMessage(
+        `Downloaded ${result.sizeBytes} bytes to ${result.destinationPath}: ${result.status}`,
+      );
+    } catch (error) {
+      setTransferMessage(commandErrorMessage(error, "Download file"));
+    }
+  };
+
   return (
     <main className="postman-shell">
       <header className="postman-topbar">
@@ -570,6 +631,13 @@ export default function App() {
             }}
           >
             Export cURL
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => setIsTransferPanelOpen(true)}
+          >
+            Files
           </button>
         </div>
       </header>
@@ -962,6 +1030,105 @@ export default function App() {
                     Export Active Request
                   </button>
                   {curlMessage ? <span>{curlMessage}</span> : null}
+                </div>
+              </section>
+            ) : null}
+
+            {isTransferPanelOpen ? (
+              <section className="transfer-panel">
+                <div className="transfer-panel__header">
+                  <div>
+                    <span>File Upload / Download</span>
+                    <h2>Binary Transfer</h2>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => setIsTransferPanelOpen(false)}
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="transfer-panel__grid">
+                  <div className="transfer-card">
+                    <div>
+                      <span>Upload</span>
+                      <strong>multipart/form-data</strong>
+                    </div>
+                    <label className="transfer-field">
+                      <span>File Path</span>
+                      <input
+                        value={uploadPath}
+                        onChange={(event) => setUploadPath(event.target.value)}
+                        placeholder="/absolute/path/to/file"
+                      />
+                    </label>
+                    <label className="transfer-field">
+                      <span>Field Name</span>
+                      <input
+                        value={uploadFieldName}
+                        onChange={(event) => setUploadFieldName(event.target.value)}
+                        placeholder="file"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => {
+                        void handleUploadFile();
+                      }}
+                    >
+                      Upload Active Request
+                    </button>
+                  </div>
+                  <div className="transfer-card">
+                    <div>
+                      <span>Download</span>
+                      <strong>Save response body</strong>
+                    </div>
+                    <label className="transfer-field">
+                      <span>URL</span>
+                      <input
+                        value={downloadUrl}
+                        onChange={(event) => setDownloadUrl(event.target.value)}
+                        placeholder="{{base_url}}/file.json"
+                      />
+                    </label>
+                    <label className="transfer-field">
+                      <span>Destination Path</span>
+                      <input
+                        value={downloadPath}
+                        onChange={(event) => setDownloadPath(event.target.value)}
+                        placeholder="/absolute/path/to/download"
+                      />
+                    </label>
+                    <label className="transfer-check">
+                      <input
+                        type="checkbox"
+                        checked={allowDownloadOverwrite}
+                        onChange={() =>
+                          setAllowDownloadOverwrite((current) => !current)
+                        }
+                      />
+                      <span>Allow overwrite</span>
+                    </label>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => {
+                        void handleDownloadFile();
+                      }}
+                    >
+                      Download to Path
+                    </button>
+                  </div>
+                </div>
+                <div className="transfer-panel__footer">
+                  <span>
+                    Upload uses the active request URL, headers and environment. Download defaults
+                    to no-overwrite for safer local files.
+                  </span>
+                  {transferMessage ? <strong>{transferMessage}</strong> : null}
                 </div>
               </section>
             ) : null}

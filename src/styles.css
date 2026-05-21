@@ -776,7 +776,8 @@ button {
 }
 
 .curl-panel,
-.import-panel {
+.import-panel,
+.transfer-panel {
   display: grid;
   gap: 12px;
   padding: 14px;
@@ -788,7 +789,9 @@ button {
 .curl-panel__header,
 .curl-panel__actions,
 .import-panel__header,
-.import-panel__actions {
+.import-panel__actions,
+.transfer-panel__header,
+.transfer-panel__footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -799,7 +802,10 @@ button {
 .curl-panel__header span,
 .curl-field span,
 .import-panel__header span,
-.import-field span {
+.import-field span,
+.transfer-panel__header span,
+.transfer-card > div span,
+.transfer-field span {
   display: block;
   color: #7a869a;
   font-size: 11px;
@@ -809,7 +815,8 @@ button {
 }
 
 .curl-panel__header h2,
-.import-panel__header h2 {
+.import-panel__header h2,
+.transfer-panel__header h2 {
   margin: 4px 0 0;
   color: #172033;
   font-size: 16px;
@@ -822,10 +829,53 @@ button {
   gap: 12px;
 }
 
+.transfer-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.transfer-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.transfer-card > div strong {
+  display: block;
+  margin-top: 2px;
+  color: #172033;
+  font-size: 14px;
+}
+
 .curl-field,
-.import-field {
+.import-field,
+.transfer-field {
   display: grid;
   gap: 8px;
+}
+
+.transfer-field input {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid #d9e0ea;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #172033;
+  font-size: 12px;
+}
+
+.transfer-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #4b5563;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .curl-field textarea,
@@ -853,10 +903,19 @@ button {
 }
 
 .curl-panel__actions span,
-.import-panel__actions span {
+.import-panel__actions span,
+.transfer-panel__footer {
   color: #64748b;
   font-size: 12px;
   font-weight: 700;
+}
+
+.transfer-panel__footer {
+  justify-content: flex-start;
+}
+
+.transfer-panel__footer strong {
+  color: #2140a3;
 }
 
 .request-content {

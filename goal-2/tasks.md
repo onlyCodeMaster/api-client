@@ -309,11 +309,49 @@
     - 后续必须继续逐项补齐缺口，并在新的最终审计中重新判定。
   - 自信度检查：我是否对当前实现 100% 有信心？对 Task 8 的审计结论有 100% 信心：所有明确条目都已映射到真实文件或缺口证据，构建与测试通过只能证明已实现能力未回归，不能证明缺失能力完成。因此 goal 不能标记完成。
 
-- [ ] Task 9: 补齐文件上传下载能力
+- [x] Task 9: 补齐文件上传下载能力
   - 目标：实现 Rust Core 文件上传下载、Tauri command、前端最小 UI 和安全边界。
   - 独立验证：上传 multipart/form-data 和下载保存路径有 Rust 单测或可验证命令；前端构建和 Rust check 通过。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：补齐文件上传/下载的第一条真实 UI / Bridge / Rust Core 闭环。
+  - 具体改动：
+    - `src-tauri/Cargo.toml`
+      - 为 `reqwest` 启用 `multipart` feature；`Cargo.lock` 新增 `mime_guess` / `unicase`。
+    - `src-tauri/src/file_transfer.rs`
+      - 新增 `upload_file`，使用 `reqwest::blocking::multipart::Form` 发送 `multipart/form-data`。
+      - 新增 `download_file`，使用 `reqwest` GET 下载响应 bytes 并写入本地目标路径。
+      - 默认拒绝覆盖已有下载文件；只有 `overwrite=true` 才允许覆盖。
+      - 复用环境变量模板解析，支持 `{{key}}`、`{{env.key}}`、`{{secret.name}}`。
+      - 新增 header 构建和文件路径校验，上传路径必须是已有文件，下载目标不能是目录。
+      - 新增 3 个单测覆盖 multipart body 包含字段/文件名/内容、下载不覆盖保护、模板解析。
+    - `src-tauri/src/models.rs`
+      - 新增 `FileUploadInput`、`FileUploadResult`、`FileDownloadInput`、`FileDownloadResult`。
+    - `src-tauri/src/commands.rs`
+      - 新增 `upload_file` / `download_file` command，并接入 `api-client://bridge-event` completed / failed 事件。
+    - `src-tauri/src/lib.rs`
+      - 注册 `upload_file` / `download_file` 到 Tauri invoke handler。
+    - `src/lib/tauri.ts`
+      - 新增前端 `uploadFile` / `downloadFile` invoke 封装和结果类型。
+    - `src/App.tsx`
+      - 顶部新增 `Files` 入口。
+      - 新增 File Upload / Download 面板。
+      - Upload 使用 active request 的 URL、headers 和 active environment，支持本地 file path 与 multipart field name。
+      - Download 支持 URL、destination path、allow overwrite，并默认不覆盖。
+    - `src/styles.css`
+      - 新增 transfer panel、双卡片、输入框、overwrite checkbox 和 footer 状态样式。
+  - 验证结果：
+    - `cargo fmt --manifest-path src-tauri/Cargo.toml` 通过。
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过。
+    - `npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-CEEqY-D7.css`、`dist/assets/index-DyC6WqX1.js`。
+    - `cargo test --manifest-path src-tauri/Cargo.toml file_transfer::tests::` 通过，3 个 file transfer 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml` 提权运行通过，14 个 Rust 测试成功。
+    - `rg` 复核确认 `upload_file`、`download_file`、`FileUploadInput`、`FileDownloadInput`、`transfer-panel`、`Upload Active Request`、`Download to Path` 均落到实际代码。
+    - 尝试用 in-app browser 检查 File Transfer 面板，Vite dev server 启动成功，但浏览器自动化点击 `Files` 时 CDP Runtime.evaluate 超时；因此运行态点击证据未完成，未把它夸大为通过。
+    - 验证结束后执行 `pkill -f "npm run dev"`，`curl -s http://localhost:1420` 返回连接失败，确认 dev server 未继续占用端口。
+  - 当前边界：
+    - 上传/下载形成了最小真实闭环，但 UI 仍是路径输入，不是系统文件选择 dialog。
+    - 下载默认覆盖保护已实现；更细的 sandbox/path allowlist、下载文件名从 `Content-Disposition` 推断、上传进度事件属于后续增强。
+    - Cookie jar、Proxy/TLS、YAML、缓存、日志仍由后续 Task 10-14 处理。
+  - 自信度检查：我是否对当前实现 100% 有信心？对 Task 9 的核心边界有信心：Rust core、Tauri command、TypeScript invoke 和前端面板都已落地，构建、Rust check、file_transfer 单测和全量 Rust 测试通过；唯一弱项是浏览器点击运行态检查因工具超时未完成，已如实记录，不影响代码层面对本 task 最小闭环的信心。
 
 - [ ] Task 10: 补齐真实 Cookie jar 管理
   - 目标：解析响应 Set-Cookie、按 jar/domain 持久化到 SQLite，并在后续请求中注入 Cookie。

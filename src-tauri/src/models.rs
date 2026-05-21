@@ -154,6 +154,45 @@ pub struct PostmanImportInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FileUploadInput {
+    pub url: String,
+    pub file_path: String,
+    pub field_name: String,
+    pub headers: Vec<RequestKeyValue>,
+    pub environment: EnvironmentSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileUploadResult {
+    pub status: String,
+    pub duration_ms: i64,
+    pub size_bytes: u64,
+    pub file_name: String,
+    pub response_body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDownloadInput {
+    pub url: String,
+    pub destination_path: String,
+    pub overwrite: bool,
+    pub headers: Vec<RequestKeyValue>,
+    pub environment: EnvironmentSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDownloadResult {
+    pub status: String,
+    pub duration_ms: i64,
+    pub size_bytes: u64,
+    pub destination_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SendRequestInput {
     pub request_id: String,
     pub request_name: String,
