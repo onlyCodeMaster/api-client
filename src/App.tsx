@@ -828,7 +828,10 @@ export default function App() {
                     <strong>Rust Core</strong>
                     <span>request engine / auth / proxy / import</span>
                   </div>
-                  <small>HTTP engine / env resolution / cookie / proxy TLS / cURL / Postman</small>
+                  <small>
+                    Env keys: proxy=system|disabled|custom, proxy_url, tls_verify,
+                    tls_hostname_verify, https_only
+                  </small>
                 </article>
               </>
             ) : null}

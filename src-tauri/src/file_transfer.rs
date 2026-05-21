@@ -3,20 +3,15 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use reqwest::blocking::multipart;
-use reqwest::blocking::Client;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
 use crate::error::{AppError, AppResult};
-use crate::models::{
-    EnvironmentVariable, FileDownloadInput, FileDownloadResult, FileUploadInput, FileUploadResult,
-    RequestKeyValue,
-};
-use crate::secrets;
+use crate::models::{FileDownloadInput, FileDownloadResult, FileUploadInput, FileUploadResult};
+use crate::transport;
 
 pub fn upload_file(input: FileUploadInput) -> AppResult<FileUploadResult> {
-    let environment = environment_map(&input.environment.vars);
-    let url = resolve_template(&input.url, &environment)?;
-    let file_path = PathBuf::from(resolve_template(&input.file_path, &environment)?);
+    let environment = transport::environment_map(&input.environment.vars);
+    let url = transport::resolve_template(&input.url, &environment)?;
+    let file_path = PathBuf::from(transport::resolve_template(&input.file_path, &environment)?);
     validate_existing_file(&file_path)?;
     let field_name = input
         .field_name
@@ -30,13 +25,11 @@ pub fn upload_file(input: FileUploadInput) -> AppResult<FileUploadResult> {
         .file_name()
         .map(|value| value.to_string_lossy().into_owned())
         .unwrap_or_else(|| "upload.bin".to_string());
-    let headers = build_headers(&input.headers, &environment)?;
+    let headers = transport::build_headers(&input.headers, &environment)?;
     let form = multipart::Form::new()
         .file(field_name, &file_path)
         .map_err(|error| AppError::InvalidData(error.to_string()))?;
-    let client = Client::builder()
-        .build()
-        .map_err(|error| AppError::InvalidData(error.to_string()))?;
+    let client = transport::build_client(&environment)?;
     let started_at = Instant::now();
     let response = client
         .post(url)
@@ -64,14 +57,15 @@ pub fn upload_file(input: FileUploadInput) -> AppResult<FileUploadResult> {
 }
 
 pub fn download_file(input: FileDownloadInput) -> AppResult<FileDownloadResult> {
-    let environment = environment_map(&input.environment.vars);
-    let url = resolve_template(&input.url, &environment)?;
-    let destination_path = PathBuf::from(resolve_template(&input.destination_path, &environment)?);
+    let environment = transport::environment_map(&input.environment.vars);
+    let url = transport::resolve_template(&input.url, &environment)?;
+    let destination_path = PathBuf::from(transport::resolve_template(
+        &input.destination_path,
+        &environment,
+    )?);
     validate_destination_path(&destination_path, input.overwrite)?;
-    let headers = build_headers(&input.headers, &environment)?;
-    let client = Client::builder()
-        .build()
-        .map_err(|error| AppError::InvalidData(error.to_string()))?;
+    let headers = transport::build_headers(&input.headers, &environment)?;
+    let client = transport::build_client(&environment)?;
     let started_at = Instant::now();
     let response = client
         .get(url)
@@ -139,66 +133,13 @@ fn validate_destination_path(path: &Path, overwrite: bool) -> AppResult<()> {
     Ok(())
 }
 
-fn environment_map(vars: &[EnvironmentVariable]) -> std::collections::HashMap<String, String> {
-    vars.iter()
-        .map(|item| (item.key.clone(), item.value.clone()))
-        .collect()
-}
-
-fn build_headers(
-    headers: &[RequestKeyValue],
-    environment: &std::collections::HashMap<String, String>,
-) -> AppResult<HeaderMap> {
-    let mut parsed = HeaderMap::new();
-
-    for row in headers
-        .iter()
-        .filter(|row| row.enabled && !row.key.trim().is_empty())
-    {
-        let header_name = HeaderName::from_bytes(row.key.trim().as_bytes())
-            .map_err(|error| AppError::InvalidData(error.to_string()))?;
-        let header_value = HeaderValue::from_str(&resolve_template(&row.value, environment)?)
-            .map_err(|error| AppError::InvalidData(error.to_string()))?;
-        parsed.insert(header_name, header_value);
-    }
-
-    Ok(parsed)
-}
-
-fn resolve_template(
-    raw: &str,
-    environment: &std::collections::HashMap<String, String>,
-) -> AppResult<String> {
-    let mut result = raw.to_string();
-
-    for (key, value) in environment {
-        let token = format!("{{{{{key}}}}}");
-        let env_token = format!("{{{{env.{key}}}}}");
-        result = result.replace(&token, value);
-        result = result.replace(&env_token, value);
-    }
-
-    while let Some(start) = result.find("{{secret.") {
-        let rest = &result[start + 9..];
-        let Some(end) = rest.find("}}") else {
-            break;
-        };
-        let secret_name = &rest[..end];
-        let password = secrets::read_secret(secret_name)?;
-        let token = format!("{{{{secret.{secret_name}}}}}");
-        result = result.replace(&token, &password);
-    }
-
-    Ok(result)
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Read;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
-    use crate::models::EnvironmentSummary;
+    use crate::models::{EnvironmentSummary, EnvironmentVariable};
 
     fn temp_path(label: &str) -> PathBuf {
         let nonce = SystemTime::now()
@@ -249,9 +190,9 @@ mod tests {
                 value: "https://api.example.com".to_string(),
             }],
         };
-        let resolved = resolve_template(
+        let resolved = transport::resolve_template(
             "{{base_url}}/files/{{env.base_url}}",
-            &environment_map(&environment.vars),
+            &transport::environment_map(&environment.vars),
         )
         .expect("resolve template");
 

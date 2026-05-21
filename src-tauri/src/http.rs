@@ -1,32 +1,23 @@
 use std::time::Instant;
 
-use reqwest::blocking::Client;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, COOKIE};
+use reqwest::header::{HeaderValue, COOKIE};
 use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
 use crate::models::{
     ResponseHeader, ResponseSummary, ResponseTimelineItem, SendRequestInput, SendRequestResult,
 };
-use crate::secrets;
 use crate::storage::{self, StoragePaths};
+use crate::transport;
 
 pub fn execute_request(
     paths: &StoragePaths,
     input: SendRequestInput,
 ) -> AppResult<SendRequestResult> {
-    let client = Client::builder()
-        .build()
-        .map_err(|error| AppError::InvalidData(error.to_string()))?;
+    let resolved_environment = transport::environment_map(&input.environment.vars);
+    let client = transport::build_client(&resolved_environment)?;
 
-    let resolved_environment = input
-        .environment
-        .vars
-        .iter()
-        .map(|item| (item.key.clone(), item.value.clone()))
-        .collect::<std::collections::HashMap<_, _>>();
-
-    let url_with_vars = resolve_template(&input.url, &resolved_environment)?;
+    let url_with_vars = transport::resolve_template(&input.url, &resolved_environment)?;
     let mut url = reqwest::Url::parse(&url_with_vars)
         .map_err(|error| AppError::InvalidData(error.to_string()))?;
 
@@ -35,26 +26,14 @@ pub fn execute_request(
         .iter()
         .filter(|row| row.enabled && !row.key.trim().is_empty())
     {
-        let value = resolve_template(&row.value, &resolved_environment)?;
+        let value = transport::resolve_template(&row.value, &resolved_environment)?;
         url.query_pairs_mut().append_pair(&row.key, &value);
     }
 
-    let mut headers = HeaderMap::new();
-    for row in input
-        .headers
-        .iter()
-        .filter(|row| row.enabled && !row.key.trim().is_empty())
-    {
-        let header_name = HeaderName::from_bytes(row.key.trim().as_bytes())
-            .map_err(|error| AppError::InvalidData(error.to_string()))?;
-        let header_value =
-            HeaderValue::from_str(&resolve_template(&row.value, &resolved_environment)?)
-                .map_err(|error| AppError::InvalidData(error.to_string()))?;
-        headers.insert(header_name, header_value);
-    }
+    let mut headers = transport::build_headers(&input.headers, &resolved_environment)?;
 
     if input.auth_type == "bearer" && !input.auth_token.trim().is_empty() {
-        let token = resolve_template(&input.auth_token, &resolved_environment)?;
+        let token = transport::resolve_template(&input.auth_token, &resolved_environment)?;
         let auth_value = HeaderValue::from_str(&format!("Bearer {token}"))
             .map_err(|error| AppError::InvalidData(error.to_string()))?;
         headers.insert(reqwest::header::AUTHORIZATION, auth_value);
@@ -78,7 +57,10 @@ pub fn execute_request(
     let mut request = client.request(method, url.clone()).headers(headers);
 
     if !input.body.trim().is_empty() {
-        request = request.body(resolve_template(&input.body, &resolved_environment)?);
+        request = request.body(transport::resolve_template(
+            &input.body,
+            &resolved_environment,
+        )?);
     }
 
     let response = request
@@ -141,33 +123,6 @@ pub fn execute_request(
     })
 }
 
-fn resolve_template(
-    raw: &str,
-    environment: &std::collections::HashMap<String, String>,
-) -> AppResult<String> {
-    let mut result = raw.to_string();
-
-    for (key, value) in environment {
-        let token = format!("{{{{{key}}}}}");
-        let env_token = format!("{{{{env.{key}}}}}");
-        result = result.replace(&token, value);
-        result = result.replace(&env_token, value);
-    }
-
-    while let Some(start) = result.find("{{secret.") {
-        let rest = &result[start + 9..];
-        let Some(end) = rest.find("}}") else {
-            break;
-        };
-        let secret_name = &rest[..end];
-        let password = secrets::read_secret(secret_name)?;
-        let token = format!("{{{{secret.{secret_name}}}}}");
-        result = result.replace(&token, &password);
-    }
-
-    Ok(result)
-}
-
 fn format_body(body: String) -> String {
     match serde_json::from_str::<Value>(&body) {
         Ok(value) => serde_json::to_string_pretty(&value).unwrap_or(body),
@@ -184,7 +139,7 @@ mod tests {
     use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use reqwest::header::{HeaderValue, SET_COOKIE};
+    use reqwest::header::{HeaderMap, HeaderValue, SET_COOKIE};
 
     use super::*;
     use crate::models::{EnvironmentSummary, EnvironmentVariable, RequestKeyValue};

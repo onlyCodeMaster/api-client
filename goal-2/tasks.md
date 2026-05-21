@@ -386,11 +386,44 @@
     - 用户显式设置 `Cookie` header 时不会被自动 jar 覆盖，这是有意的可预测行为；响应仍会继续持久化 `Set-Cookie`。
   - 自信度检查：我是否对当前实现 100% 有信心？对 Task 10 的核心边界有信心：真实 SQLite 持久化、请求注入、响应回写、host-only/secure/path/delete 关键规则、旧 JSON 兼容和 HTTP 集成链路都有测试覆盖；全量 Rust 测试、Rust check、前端构建和 whitespace 检查均通过。剩余的完整 RFC6265 细节和 cookie 管理 UI 属于后续增强，不阻塞本 task。
 
-- [ ] Task 11: 补齐 Proxy / TLS 配置应用
+- [x] Task 11: 补齐 Proxy / TLS 配置应用
   - 目标：把环境变量或设置中的 proxy/TLS 选项真正应用到 reqwest client builder，并处理错误封装。
   - 独立验证：Rust 单测或 builder-level 测试覆盖 proxy disabled/system/custom、TLS 开关边界。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：补齐 Proxy / TLS 配置到 reqwest client builder 的真实应用链路。
+  - 具体改动：
+    - `src-tauri/src/transport.rs`
+      - 新增共享 transport 模块，统一处理 environment map、模板解析、header 构建和 reqwest blocking client builder。
+      - 支持 `proxy=system|auto` 走系统代理、`proxy=disabled|none|off|false` 禁用代理、`proxy=custom + proxy_url` 或 `proxy=<url>` 使用自定义代理。
+      - 支持 `proxy_username` / `proxy_password`，并复用 `{{secret.name}}` 模板解析，避免 proxy secret 明文写死。
+      - 支持 `tls_verify=false` 关闭证书校验、`tls_hostname_verify=false` 关闭 hostname 校验、`https_only=true` 启用 reqwest HTTPS-only 模式。
+      - 新增 4 个单测覆盖 system / disabled / custom proxy、直接 proxy URL、非法 proxy / bool 错误、以及 builder-level TLS/proxy 组合。
+    - `src-tauri/src/http.rs`
+      - HTTP 请求执行改用 `transport::build_client`、`transport::build_headers`、`transport::resolve_template`。
+      - 现有请求、Auth、Cookie jar、响应映射逻辑保持不变，但 reqwest client 现在会真实应用 environment proxy/TLS 配置。
+    - `src-tauri/src/file_transfer.rs`
+      - 上传和下载两条 reqwest 通道改用同一 `transport::build_client`，避免普通请求和文件传输的 proxy/TLS 行为不一致。
+      - 移除重复的 template/header helper，复用 transport 模块。
+    - `src-tauri/src/lib.rs`
+      - 注册 `transport` 模块。
+    - `src-tauri/src/storage.rs`
+      - 默认 Production environment seed 增加 `proxy`、`tls_verify`、`tls_hostname_verify`、`https_only`。
+    - `src/store/requestStore.ts` 与 `src/App.tsx`
+      - 前端 seed environments 增加 TLS 相关变量。
+      - Settings 的 Rust Core 卡片说明可用 environment keys：`proxy`、`proxy_url`、`tls_verify`、`tls_hostname_verify`、`https_only`。
+  - 验证结果：
+    - `cargo fmt --manifest-path src-tauri/Cargo.toml` 通过。
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过，无 warning。
+    - `cargo test --manifest-path src-tauri/Cargo.toml transport::tests::` 通过，4 个 transport 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml file_transfer::tests::` 通过，3 个 file transfer 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过，6 个 storage 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml` 提权运行通过，20 个 Rust 测试成功，包含需要绑定 `127.0.0.1` 的 HTTP 集成测试。
+    - `npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-CEEqY-D7.css`、`dist/assets/index-BjfgueFZ.js`。
+    - `git diff --check` 通过。
+    - `rg` 复核确认 `http.rs`、上传、下载都调用 `transport::build_client`，且 `proxy_url` / TLS keys 落到 seed 与 UI 说明中。
+  - 当前边界：
+    - Proxy/TLS 配置当前通过 environment variables 管理，还没有独立高级网络设置页面或证书文件导入。
+    - `tls_verify=false` / `tls_hostname_verify=false` 属于危险调试能力，已通过显式环境变量触发，不默认关闭。
+  - 自信度检查：我是否对当前实现 100% 有信心？对 Task 11 的核心边界有信心：proxy system/disabled/custom、TLS verify/hostname/https-only 配置已经真实进入 reqwest builder，HTTP 和文件传输通道均复用该 builder；配置解析、错误路径和 builder 创建有单测覆盖，全量 Rust 测试、Rust check、前端构建和 whitespace 检查均通过。剩余高级证书管理 UI 属于后续增强，不阻塞本 task。
 
 - [ ] Task 12: 大型全面检查 - debug 循环
   - 目标：对 Task 9-11 和整体系统做第三轮全面回归。

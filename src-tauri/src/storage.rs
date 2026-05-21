@@ -162,7 +162,11 @@ fn ensure_seed_files(paths: &StoragePaths) -> AppResult<()> {
         r#"{
   "name": "Production",
   "base_url": "https://api.example.com",
-  "auth_token": "{{secret.prod_token}}"
+  "auth_token": "{{secret.prod_token}}",
+  "proxy": "system",
+  "tls_verify": "true",
+  "tls_hostname_verify": "true",
+  "https_only": "false"
 }
 "#,
     )?;
