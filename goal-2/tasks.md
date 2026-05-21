@@ -465,11 +465,30 @@
     - Playwright click 在窄屏下偶发 CDP evaluate timeout；改用 DOM CUA 和页面内只读 evaluate 确认实际 DOM 与可见入口，并发现/修复真实窄屏导航缺口。
   - 自信度检查：我是否对当前实现 100% 有信心？对 Task 12 的检查和修复范围有信心：本轮全面覆盖 Task 9-11 的核心实现、构建、模块测试、全量 Rust 测试、浏览器运行态和窄屏可达性，并修复了实际发现的 Settings 窄屏不可达问题。整体 goal 仍未完成，因为 YAML、缓存和日志仍是明确后续任务。
 
-- [ ] Task 13: 补齐 YAML 环境文件支持
+- [x] Task 13: 补齐 YAML 环境文件支持
   - 目标：支持 JSON/YAML environment 文件读取和保存，避免 `local.yaml` 只是 UI seed 文案。
   - 独立验证：storage 单测覆盖 `.json`、`.yaml`、`.yml` 环境文件读取和保存。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：补齐 environment 文件的 JSON / YAML / YML 读取与保存，并让 fresh seed 真实生成 `local.yaml`。
+  - 具体改动：
+    - `src-tauri/src/storage.rs`
+      - `list_environments` 现在只读取 `.json`、`.yaml`、`.yml` 环境文件，避免误读 README 等非环境文件。
+      - `read_environment_file` 改为按扩展名分派解析：`.json` 继续使用 `serde_json`，`.yaml` / `.yml` 使用环境文件专用 YAML mapping parser。
+      - `save_environment` 改为按目标扩展名保存：`.json` 写 pretty JSON，`.yaml` / `.yml` 写 YAML key/value 文件。
+      - 新增扁平 YAML scalar 解析与序列化，支持 quoted / unquoted scalar、inline comments、`---` / `...` 文档标记，并显式拒绝嵌套 YAML 和 sequence，避免环境变量文件被误读。
+      - 默认 workspace seed 增加 `local.yaml`，并写入真实 Local Mock YAML environment，使 UI seed 的 `environments/local.yaml` 不再只是文案。
+  - 验证结果：
+    - `cargo fmt --manifest-path src-tauri/Cargo.toml` 已执行。
+    - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过，10 个 storage 测试成功。
+    - 新增 storage 单测覆盖 `.json`、`.yaml`、`.yml` 读取，按扩展名保存 JSON/YAML/YML，fresh seed 生成并加载真实 `local.yaml`，以及嵌套 YAML 拒绝路径。
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过。
+    - `npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-Ksj6H0MM.css`、`dist/assets/index-woOLTTUo.js`。
+    - `cargo test --manifest-path src-tauri/Cargo.toml` 默认沙箱因本地 HTTP 测试绑定 `127.0.0.1` 权限失败；提权重跑后通过，24 个 Rust 测试成功。
+    - `git diff --check` 通过。
+  - 当前边界：
+    - YAML 支持聚焦 environment 文件的扁平 key/value 结构，这与当前 `EnvironmentSummary { name, vars }` 数据模型一致。
+    - 不支持嵌套 YAML、sequence、anchor、multi-document 等完整 YAML 语义；遇到嵌套结构会返回明确错误，而不是静默误解析。
+    - 本地缓存和应用级日志仍未完成，留给 Task 14；因此整体 goal 仍不能标记完成。
+  - 自信度检查：我是否对当前实现 100% 有信心？对 Task 13 的边界有信心：JSON 旧行为保留，YAML/YML 读写、seed `local.yaml` 和错误路径都有单测覆盖；storage 单测、Rust check、前端构建、全量 Rust 测试和 whitespace 检查均通过。完整通用 YAML 解析不是当前环境变量文件模型需要的能力，已明确作为边界记录。
 
 - [ ] Task 14: 补齐本地缓存与日志
   - 目标：实现基础本地缓存目录/索引和应用级日志文件写入，并在 Settings 中暴露状态。

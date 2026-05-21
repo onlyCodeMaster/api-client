@@ -76,13 +76,14 @@ fn ensure_seed_files(paths: &StoragePaths) -> AppResult<()> {
     let workspace_file = paths.workspaces_dir.join("default-workspace.json");
     let collection_file = paths.collections_dir.join("core-api.json");
     let environment_file = paths.environments_dir.join("production.json");
+    let local_environment_file = paths.environments_dir.join("local.yaml");
 
     write_if_missing(
         &workspace_file,
         r#"{
   "name": "Default Workspace",
   "collections": ["core-api.json"],
-  "environments": ["production.json"]
+  "environments": ["production.json", "local.yaml"]
 }
 "#,
     )?;
@@ -168,6 +169,18 @@ fn ensure_seed_files(paths: &StoragePaths) -> AppResult<()> {
   "tls_hostname_verify": "true",
   "https_only": "false"
 }
+"#,
+    )?;
+    write_if_missing(
+        &local_environment_file,
+        r#"name: "Local Mock"
+base_url: "http://127.0.0.1:8787"
+auth_token: "dev-token"
+proxy: "disabled"
+tls_verify: "false"
+tls_hostname_verify: "false"
+https_only: "false"
+cookie_jar: "workspace_local"
 "#,
     )?;
 
@@ -618,7 +631,7 @@ pub fn list_environments(paths: &StoragePaths) -> AppResult<Vec<EnvironmentSumma
     for entry in fs::read_dir(&paths.environments_dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_file() {
+        if path.is_file() && is_supported_environment_file(&path) {
             environments.push(read_environment_file(&path)?);
         }
     }
@@ -658,8 +671,7 @@ pub fn save_environment(
         payload.insert(item.key.clone(), Value::String(item.value.clone()));
     }
 
-    let formatted = serde_json::to_string_pretty(&Value::Object(payload))
-        .map_err(|error| AppError::InvalidData(error.to_string()))?;
+    let formatted = serialize_environment_payload(&file_path, &Value::Object(payload))?;
     fs::write(&file_path, format!("{formatted}\n"))?;
 
     read_environment_file(&file_path)
@@ -762,8 +774,7 @@ fn read_collection_file(path: &Path) -> AppResult<CollectionSummary> {
 
 fn read_environment_file(path: &Path) -> AppResult<EnvironmentSummary> {
     let contents = fs::read_to_string(path)?;
-    let parsed: Value = serde_json::from_str(&contents)
-        .map_err(|error| AppError::InvalidData(error.to_string()))?;
+    let parsed = parse_environment_payload(path, &contents)?;
     let object = parsed.as_object().ok_or_else(|| {
         AppError::InvalidData(format!(
             "environment file is not an object: {}",
@@ -807,6 +818,265 @@ fn read_environment_file(path: &Path) -> AppResult<EnvironmentSummary> {
         file_path: path.to_string_lossy().into_owned(),
         vars,
     })
+}
+
+#[derive(Debug, Clone, Copy)]
+enum EnvironmentFileFormat {
+    Json,
+    Yaml,
+}
+
+fn is_supported_environment_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "json" | "yaml" | "yml"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn environment_file_format(path: &Path) -> AppResult<EnvironmentFileFormat> {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("yaml") | Some("yml") => Ok(EnvironmentFileFormat::Yaml),
+        Some("json") | None => Ok(EnvironmentFileFormat::Json),
+        Some(extension) => Err(AppError::InvalidData(format!(
+            "unsupported environment file extension .{extension}: {}",
+            path.display()
+        ))),
+    }
+}
+
+fn parse_environment_payload(path: &Path, contents: &str) -> AppResult<Value> {
+    match environment_file_format(path)? {
+        EnvironmentFileFormat::Json => {
+            serde_json::from_str(contents).map_err(|error| AppError::InvalidData(error.to_string()))
+        }
+        EnvironmentFileFormat::Yaml => parse_yaml_environment(path, contents),
+    }
+}
+
+fn serialize_environment_payload(path: &Path, payload: &Value) -> AppResult<String> {
+    match environment_file_format(path)? {
+        EnvironmentFileFormat::Json => serde_json::to_string_pretty(payload)
+            .map_err(|error| AppError::InvalidData(error.to_string())),
+        EnvironmentFileFormat::Yaml => serialize_yaml_environment(payload),
+    }
+}
+
+fn parse_yaml_environment(path: &Path, contents: &str) -> AppResult<Value> {
+    let mut object = Map::new();
+
+    for (index, raw_line) in contents.lines().enumerate() {
+        let line_number = index + 1;
+        let trimmed_start = raw_line.trim_start();
+        if trimmed_start.is_empty()
+            || trimmed_start.starts_with('#')
+            || trimmed_start == "---"
+            || trimmed_start == "..."
+        {
+            continue;
+        }
+
+        if raw_line
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_whitespace())
+        {
+            return Err(AppError::InvalidData(format!(
+                "nested YAML is not supported in environment file {} at line {line_number}",
+                path.display()
+            )));
+        }
+
+        let line = strip_yaml_comment(raw_line).trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('-') {
+            return Err(AppError::InvalidData(format!(
+                "YAML sequences are not supported in environment file {} at line {line_number}",
+                path.display()
+            )));
+        }
+
+        let Some(separator) = find_yaml_mapping_separator(line) else {
+            return Err(AppError::InvalidData(format!(
+                "expected key/value mapping in environment file {} at line {line_number}",
+                path.display()
+            )));
+        };
+        let key = parse_yaml_scalar(line[..separator].trim()).map_err(|message| {
+            AppError::InvalidData(format!(
+                "invalid YAML key in environment file {} at line {line_number}: {message}",
+                path.display()
+            ))
+        })?;
+        if key.is_empty() {
+            return Err(AppError::InvalidData(format!(
+                "empty YAML key in environment file {} at line {line_number}",
+                path.display()
+            )));
+        }
+
+        let value = parse_yaml_scalar(line[separator + 1..].trim()).map_err(|message| {
+            AppError::InvalidData(format!(
+                "invalid YAML value in environment file {} at line {line_number}: {message}",
+                path.display()
+            ))
+        })?;
+        object.insert(key, Value::String(value));
+    }
+
+    Ok(Value::Object(object))
+}
+
+fn serialize_yaml_environment(payload: &Value) -> AppResult<String> {
+    let object = payload.as_object().ok_or_else(|| {
+        AppError::InvalidData("environment payload must be an object".to_string())
+    })?;
+    let mut lines = Vec::new();
+
+    if let Some(name) = object.get("name") {
+        lines.push(format!(
+            "{}: {}",
+            yaml_key("name"),
+            yaml_scalar_from_value(name)
+        ));
+    }
+
+    let mut keys = object
+        .keys()
+        .filter(|key| key.as_str() != "name")
+        .collect::<Vec<_>>();
+    keys.sort();
+
+    for key in keys {
+        if let Some(value) = object.get(key) {
+            lines.push(format!(
+                "{}: {}",
+                yaml_key(key),
+                yaml_scalar_from_value(value)
+            ));
+        }
+    }
+
+    Ok(lines.join("\n"))
+}
+
+fn strip_yaml_comment(line: &str) -> &str {
+    let mut quote = None;
+    let mut escaped = false;
+
+    for (index, character) in line.char_indices() {
+        match quote {
+            Some('"') if escaped => {
+                escaped = false;
+            }
+            Some('"') if character == '\\' => {
+                escaped = true;
+            }
+            Some(active_quote) if character == active_quote => {
+                quote = None;
+            }
+            Some(_) => {}
+            None if character == '"' || character == '\'' => {
+                quote = Some(character);
+            }
+            None if character == '#'
+                && (index == 0
+                    || line[..index]
+                        .chars()
+                        .last()
+                        .is_some_and(|previous| previous.is_whitespace())) =>
+            {
+                return &line[..index];
+            }
+            None => {}
+        }
+    }
+
+    line
+}
+
+fn find_yaml_mapping_separator(line: &str) -> Option<usize> {
+    let mut quote = None;
+    let mut escaped = false;
+
+    for (index, character) in line.char_indices() {
+        match quote {
+            Some('"') if escaped => {
+                escaped = false;
+            }
+            Some('"') if character == '\\' => {
+                escaped = true;
+            }
+            Some(active_quote) if character == active_quote => {
+                quote = None;
+            }
+            Some(_) => {}
+            None if character == '"' || character == '\'' => {
+                quote = Some(character);
+            }
+            None if character == ':' => {
+                return Some(index);
+            }
+            None => {}
+        }
+    }
+
+    None
+}
+
+fn parse_yaml_scalar(raw_value: &str) -> Result<String, String> {
+    let value = raw_value.trim();
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+
+    if value.starts_with('"') || value.ends_with('"') {
+        if !(value.starts_with('"') && value.ends_with('"') && value.len() >= 2) {
+            return Err("unterminated double-quoted scalar".to_string());
+        }
+        return serde_json::from_str::<String>(value).map_err(|error| error.to_string());
+    }
+
+    if value.starts_with('\'') || value.ends_with('\'') {
+        if !(value.starts_with('\'') && value.ends_with('\'') && value.len() >= 2) {
+            return Err("unterminated single-quoted scalar".to_string());
+        }
+        return Ok(value[1..value.len() - 1].replace("''", "'"));
+    }
+
+    Ok(value.to_string())
+}
+
+fn yaml_key(key: &str) -> String {
+    if !key.is_empty()
+        && key
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+    {
+        key.to_string()
+    } else {
+        serde_json::to_string(key).unwrap_or_else(|_| "\"invalid-key\"".to_string())
+    }
+}
+
+fn yaml_scalar_from_value(value: &Value) -> String {
+    let scalar = match value {
+        Value::String(inner) => inner.clone(),
+        _ => value.to_string(),
+    };
+
+    serde_json::to_string(&scalar).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 #[derive(serde::Deserialize)]
@@ -1072,6 +1342,182 @@ mod tests {
             .join("environments")
             .join("production.json")
             .exists());
+    }
+
+    #[test]
+    fn list_environments_reads_json_yaml_and_yml_files() {
+        let paths = make_test_paths("environment-formats");
+
+        fs::write(
+            paths.environments_dir.join("json-env.json"),
+            r#"{
+  "name": "JSON Env",
+  "base_url": "https://api.example.com",
+  "enabled": true
+}
+"#,
+        )
+        .expect("write json env");
+        fs::write(
+            paths.environments_dir.join("yaml-env.yaml"),
+            r#"name: "YAML Env"
+base_url: "http://127.0.0.1:8787"
+auth_token: "token # not comment"
+proxy: disabled # inline comments are ignored
+"#,
+        )
+        .expect("write yaml env");
+        fs::write(
+            paths.environments_dir.join("yml-env.yml"),
+            r#"name: 'YML Env'
+base_url: https://example.test/v1
+cookie_jar: workspace_local
+"#,
+        )
+        .expect("write yml env");
+        fs::write(paths.environments_dir.join("README.txt"), "ignore me")
+            .expect("write ignored file");
+
+        let environments = list_environments(&paths).expect("list environments");
+        assert_eq!(environments.len(), 3);
+
+        let json_env = environments
+            .iter()
+            .find(|environment| environment.name == "JSON Env")
+            .expect("json env");
+        assert!(json_env.file_path.ends_with("json-env.json"));
+        assert!(json_env
+            .vars
+            .iter()
+            .any(|row| row.key == "enabled" && row.value == "true"));
+
+        let yaml_env = environments
+            .iter()
+            .find(|environment| environment.name == "YAML Env")
+            .expect("yaml env");
+        assert!(yaml_env.file_path.ends_with("yaml-env.yaml"));
+        assert!(yaml_env
+            .vars
+            .iter()
+            .any(|row| row.key == "base_url" && row.value == "http://127.0.0.1:8787"));
+        assert!(yaml_env
+            .vars
+            .iter()
+            .any(|row| row.key == "auth_token" && row.value == "token # not comment"));
+        assert!(yaml_env
+            .vars
+            .iter()
+            .any(|row| row.key == "proxy" && row.value == "disabled"));
+
+        let yml_env = environments
+            .iter()
+            .find(|environment| environment.name == "YML Env")
+            .expect("yml env");
+        assert!(yml_env.file_path.ends_with("yml-env.yml"));
+        assert!(yml_env
+            .vars
+            .iter()
+            .any(|row| row.key == "cookie_jar" && row.value == "workspace_local"));
+    }
+
+    #[test]
+    fn save_environment_writes_json_yaml_and_yml_by_extension() {
+        let paths = make_test_paths("environment-save-formats");
+        let vars = vec![
+            EnvironmentVariable {
+                key: "base_url".to_string(),
+                value: "http://127.0.0.1:8787".to_string(),
+            },
+            EnvironmentVariable {
+                key: "auth_token".to_string(),
+                value: "dev-token".to_string(),
+            },
+        ];
+
+        let json = save_environment(
+            &paths,
+            SaveEnvironmentInput {
+                name: "JSON Save".to_string(),
+                file_path: "json-save.json".to_string(),
+                vars: vars.clone(),
+            },
+        )
+        .expect("save json environment");
+        assert_eq!(json.name, "JSON Save");
+        let json_contents =
+            fs::read_to_string(paths.environments_dir.join("json-save.json")).expect("read json");
+        assert!(json_contents.trim_start().starts_with('{'));
+
+        let yaml = save_environment(
+            &paths,
+            SaveEnvironmentInput {
+                name: "YAML Save".to_string(),
+                file_path: "yaml-save.yaml".to_string(),
+                vars: vars.clone(),
+            },
+        )
+        .expect("save yaml environment");
+        assert_eq!(yaml.name, "YAML Save");
+        assert_eq!(yaml.vars.len(), 2);
+        let yaml_contents =
+            fs::read_to_string(paths.environments_dir.join("yaml-save.yaml")).expect("read yaml");
+        assert!(yaml_contents.contains("name: \"YAML Save\""));
+        assert!(yaml_contents.contains("base_url: \"http://127.0.0.1:8787\""));
+        assert!(!yaml_contents.trim_start().starts_with('{'));
+
+        let yml = save_environment(
+            &paths,
+            SaveEnvironmentInput {
+                name: "YML Save".to_string(),
+                file_path: "yml-save.yml".to_string(),
+                vars,
+            },
+        )
+        .expect("save yml environment");
+        assert_eq!(yml.name, "YML Save");
+        assert!(paths.environments_dir.join("yml-save.yml").exists());
+    }
+
+    #[test]
+    fn seed_files_include_real_local_yaml_environment() {
+        let paths = make_test_paths("environment-seed-yaml");
+        ensure_seed_files(&paths).expect("seed files");
+
+        let local_yaml = paths.environments_dir.join("local.yaml");
+        assert!(local_yaml.exists());
+
+        let workspace_contents =
+            fs::read_to_string(paths.workspaces_dir.join("default-workspace.json"))
+                .expect("read workspace seed");
+        assert!(workspace_contents.contains("local.yaml"));
+
+        let environments = list_environments(&paths).expect("list seeded environments");
+        let local = environments
+            .iter()
+            .find(|environment| environment.name == "Local Mock")
+            .expect("local yaml environment");
+        assert!(local.file_path.ends_with("local.yaml"));
+        assert!(local
+            .vars
+            .iter()
+            .any(|row| row.key == "cookie_jar" && row.value == "workspace_local"));
+    }
+
+    #[test]
+    fn yaml_environment_rejects_nested_content() {
+        let paths = make_test_paths("environment-yaml-invalid");
+        let path = paths.environments_dir.join("nested.yaml");
+        fs::write(
+            &path,
+            r#"name: Nested
+auth:
+  token: secret
+"#,
+        )
+        .expect("write nested yaml");
+
+        let error = read_environment_file(&path).expect_err("reject nested yaml");
+        assert!(error.to_string().contains("nested YAML is not supported"));
     }
 
     #[test]
