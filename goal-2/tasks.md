@@ -529,8 +529,64 @@
     - Task 15 仍需做最终最大的 review 和 goal 完成判定，不能在本 task 直接标记整体完成。
   - 自信度检查：我是否对当前实现 100% 有信心？对 Task 14 的基础闭环有信心：cache/log 目录与文件真实落盘，Bootstrap 返回摘要，Settings 运行态可见，日志写入集中接入 bridge event，敏感字段有基础脱敏，storage 单测、Rust check、前端构建、全量 Rust 测试、browser 检查和 whitespace 检查均通过。完整 HTTP 缓存策略和日志轮转不属于本 task 的基础验收边界，已明确记录。
 
-- [ ] Task 15: 最终最大的 review 与 goal 完成判定
+- [x] Task 15: 最终最大的 review 与 goal 完成判定
   - 目标：在 Task 9-14 后重新做完整最终审计，只有所有明确条目有真实实现和验证证据时才标记 goal 完成。
   - 独立验证：完整 prompt-to-artifact checklist 全部满足；构建、Rust check、全量测试、运行态检查通过。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：完成最终最大审计，确认原始目标中的前端 UI 层、Tauri Bridge 层、Rust Core 核心层和本地数据层均已有真实实现、测试或运行态证据；整体 goal 可以标记完成。
+  - 目标拆解为验收标准：
+    - 前端 UI 层：请求编辑器、Header / Query / Body 表单、响应查看器、历史记录、环境变量、Collection 管理、设置页面。
+    - Tauri Bridge 层：command 暴露、参数校验、类型转换、错误封装、前后端事件通信。
+    - Rust Core 核心层：HTTP 请求引擎、环境变量解析、Cookie 管理、Auth 处理、Proxy / TLS 配置、cURL 导入导出、Postman Collection 导入、文件上传下载。
+    - 本地数据层：SQLite、JSON/YAML 文件、系统 Keychain、本地缓存、日志。
+  - prompt-to-artifact 最终检查表：
+    - 前端 UI - 请求编辑器：已实现。证据：`src/App.tsx` method select、URL input、Save / Send；浏览器运行态确认 `API Client`、`Save`、`Send` 可见。
+    - 前端 UI - Header / Query / Body 表单：已实现。证据：`src/App.tsx` 的 `requestTabs` 为 `Params`、`Headers`、`Body`、`Auth`；浏览器运行态确认 4 个 request tabs 可见。
+    - 前端 UI - 响应查看器：已实现。证据：`src/App.tsx` 的 `responseTabs` 为 `Body`、`Headers`、`Timeline`；浏览器运行态确认 response tabs 可见。
+    - 前端 UI - 历史记录：已实现。证据：`src/App.tsx` 有 `workspaceMode === "history"` 面板；`src-tauri/src/storage.rs` 的 `request_history` 表与 `record_history`；storage 单测覆盖 history 持久化。
+    - 前端 UI - 环境变量：已实现。证据：`src/App.tsx` 有 Environments 面板和 save flow；`src-tauri/src/storage.rs` 的 `list_environments` / `save_environment` 支持 JSON/YAML/YML。
+    - 前端 UI - Collection 管理：已实现。证据：`src/App.tsx` 的 `collectionSections` 渲染 collection tree；`src-tauri/src/storage.rs` 的 `list_collections` / `save_request`；storage 单测覆盖 workspace-backed collection 读写。
+    - 前端 UI - 设置页面：已实现。证据：`src/App.tsx` Settings 面板包含 `Local Runtime Overview`、`Runtime Storage / Cache / Logs`、`Frontend / Backend Channel`、`Keychain Secrets`；浏览器运行态确认这些区域可见。
+    - Tauri Bridge - command 暴露：已实现。证据：`src-tauri/src/lib.rs` 的 `generate_handler!` 注册 `load_bootstrap_state`、`record_history_entry`、`save_secret`、`save_environment`、`save_request`、`import_curl`、`export_curl`、`import_postman_collection`、`upload_file`、`download_file`、`send_request`。
+    - Tauri Bridge - 参数校验：已实现基础校验。证据：Rust core 对 URL、HTTP method、header、JSON、cURL/Postman 空输入、file path、download overwrite、proxy/TLS bool 等错误路径做解析校验；相关 curl/postman/file_transfer/transport/storage/http 测试覆盖。
+    - Tauri Bridge - 类型转换：已实现。证据：`src-tauri/src/models.rs` serde camelCase 模型和 `src/lib/tauri.ts` TypeScript invoke 类型覆盖 Bootstrap、requests、environments、files、runtime、events。
+    - Tauri Bridge - 错误封装：已实现。证据：`src-tauri/src/error.rs` 的 `AppError` 与 `src-tauri/src/commands.rs` 的 `to_command_error` 统一转 command error string；前端非 Tauri runtime 下显示友好提示。
+    - Tauri Bridge - 前后端事件通信：已实现。证据：`src-tauri/src/commands.rs` 通过 `app.emit("api-client://bridge-event", BridgeEvent)` 发生命周期事件；`src/lib/tauri.ts` 的 `listenBridgeEvents` 订阅；Settings 事件流运行态可见。
+    - Rust Core - HTTP 请求引擎：已实现。证据：`src-tauri/src/http.rs` 的 `execute_request` 使用 reqwest blocking client 执行真实请求；全量 Rust 测试中 HTTP 集成测试通过。
+    - Rust Core - 环境变量解析：已实现。证据：`src-tauri/src/transport.rs` 的 `resolve_template` 支持 `{{key}}`、`{{env.key}}`、`{{secret.name}}`；HTTP 和 file transfer 均复用。
+    - Rust Core - Cookie 管理：已实现基础持久化 jar。证据：`src-tauri/src/storage.rs` 的 `load_cookie_header` / `store_set_cookie_headers` 解析 Set-Cookie、SQLite 持久化并请求注入；storage 与 HTTP 集成测试覆盖。
+    - Rust Core - Auth 处理：已实现 Bearer auth 基础链路。证据：`src-tauri/src/http.rs` 生成 Authorization header；`src-tauri/src/curl.rs` 和 `src-tauri/src/postman.rs` 可导入 Bearer auth；相关 cURL/Postman/HTTP 测试通过。
+    - Rust Core - Proxy / TLS 配置：已实现。证据：`src-tauri/src/transport.rs` 的 `build_client` 支持 system/disabled/custom proxy、proxy credentials、`tls_verify`、`tls_hostname_verify`、`https_only`；HTTP 与 file transfer 通道复用；transport 单测通过。
+    - Rust Core - cURL 导入导出：已实现。证据：`src-tauri/src/curl.rs`、`import_curl`、`export_curl`、前端 cURL panel；3 个 cURL 单测通过。
+    - Rust Core - Postman Collection 导入：已实现。证据：`src-tauri/src/postman.rs`、`import_postman_collection`、前端 Postman panel；3 个 Postman 单测通过。
+    - Rust Core - 文件上传下载：已实现。证据：`src-tauri/src/file_transfer.rs` 的 multipart upload 和 download save path；`upload_file` / `download_file` command；前端 Files panel；file transfer 单测通过，浏览器运行态确认 `Upload Active Request` 和 `Download to Path` 可见。
+    - 本地数据层 - SQLite：已实现。证据：`src-tauri/src/storage.rs` 创建 `settings`、`request_history`、`cookie_jars`；storage tests 覆盖 migration、history、cookie jar。
+    - 本地数据层 - JSON/YAML 文件：已实现。证据：collections/workspace 用 JSON；environment 支持 `.json`、`.yaml`、`.yml` 读写；seed 真实生成 `local.yaml`；storage YAML 单测通过。
+    - 本地数据层 - 系统 Keychain：已实现。证据：`src-tauri/src/secrets.rs` 使用 `keyring_core::Entry`；`save_secret` command；Settings `Keychain Secrets` 运行态可见。
+    - 本地数据层 - 本地缓存：已实现基础缓存索引。证据：`src-tauri/src/storage.rs` 创建 `cache/index.json`，`record_cache_entry` 写入 `bootstrap-state` 元数据，`runtime_summary` 返回摘要；storage runtime 单测通过；Settings `Local Cache` 运行态可见。
+    - 本地数据层 - 日志：已实现。证据：`src-tauri/src/storage.rs` 创建 `logs/api-client.log`，`append_log_entry` 写入 command 生命周期日志并做基础敏感键脱敏；storage runtime 单测通过；Settings `Application Logs` 运行态可见。
+  - 最终验证结果：
+    - `cargo fmt --manifest-path src-tauri/Cargo.toml --check` 通过。
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过。
+    - `npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-CK6EmWf5.css`、`dist/assets/index-BvSsOmVD.js`。
+    - `cargo test --manifest-path src-tauri/Cargo.toml curl::tests::` 通过，3 个 cURL 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml postman::tests::` 通过，3 个 Postman 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml file_transfer::tests::` 通过，3 个 file transfer 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过，11 个 storage 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml transport::tests::` 通过，4 个 transport 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml` 提权运行通过，25 个 Rust 测试成功，包含需要绑定 `127.0.0.1` 的 HTTP 集成测试。
+    - `git diff --check` 通过。
+    - `npm run dev` 启动后用 in-app browser 打开 `http://localhost:1420/`，运行态确认主工作台、request tabs、response tabs、History / Environments / Collections、Postman/cURL/Files 入口、Files upload/download 面板、Settings runtime/cache/logs/bridge/keychain/proxy-TLS 文案可见，控制台应用 error 为空。
+    - 运行态检查后执行 `pkill -f "npm run dev"`，`curl -s http://localhost:1420` 返回连接失败，确认 dev server 未继续占用端口。
+  - 安全与边界复查：
+    - Keychain secret 存储接系统 keyring。
+    - cURL/Postman 导入不会自动覆盖 collection，仍需用户显式 Save。
+    - 下载默认拒绝覆盖已有文件，只有 `overwrite=true` 才允许覆盖。
+    - Cookie jar 按 host-only/domain/path/secure 规则注入，用户显式 Cookie header 不被 jar 覆盖。
+    - Proxy password 可通过 `{{secret.name}}` 解析；TLS 关闭能力必须显式环境变量配置。
+    - 日志落盘前会做基础敏感键脱敏。
+    - 仍保留的非阻断增强边界：完整 RFC6265 日期解析、Basic/OAuth/API key UI、高级证书导入、系统文件选择器、HTTP response cache/replay、日志轮转导出等属于生产增强，不是原始目标明确列出的最小完成条件。
+  - 完成判定：
+    - 原始目标中的每个明确条目都已映射到实际代码、测试或运行态证据。
+    - 当前工作区在审计前为干净状态；最终 task 只更新审计记录。
+    - 整体 goal 可以标记为完成。
+  - 自信度检查：我是否对当前实现 100% 有信心？对 Task 15 的完成判定有信心：最终审计逐项覆盖原始目标，自动化验证、模块测试、全量 Rust 测试、前端构建、运行态浏览器检查和安全边界复查均通过；没有发现未实现的明确目标条目。
