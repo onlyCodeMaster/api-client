@@ -3,6 +3,7 @@ mod curl;
 mod error;
 mod http;
 mod models;
+mod postman;
 mod secrets;
 mod storage;
 
@@ -28,6 +29,7 @@ pub fn run() {
             commands::save_request,
             commands::import_curl,
             commands::export_curl,
+            commands::import_postman_collection,
             commands::send_request
         ])
         .run(tauri::generate_context!())

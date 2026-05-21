@@ -162,11 +162,47 @@
     - Postman Collection 导入、文件上传下载、真实 Cookie jar、Proxy/TLS 应用、YAML 环境文件、日志和缓存仍是后续缺口。
   - 自信度检查：我是否对当前实现 100% 有信心？对 Task 5 的边界有信心：cURL 解析/生成有 Rust 单测覆盖，Tauri command 已注册并接入事件，前端构建通过，浏览器 seed 模式验证 UI 和降级提示，storage 与 HTTP 回归未发现新问题。剩余缺口不属于本 task 范围，已明确留给后续任务。
 
-- [ ] Task 6: 完成最终交付审计前的必要修缮
+- [x] Task 6: 完成最终交付审计前的必要修缮
   - 目标：处理剩余必须修复的问题，避免最终审计时存在已知阻断项。
   - 独立验证：相关构建、检查、测试通过。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：补齐 Postman Collection 导入的第一条真实 UI / Bridge / Rust Core 闭环，作为最终交付审计前的必要修缮。
+  - 具体改动：
+    - `src-tauri/src/postman.rs`
+      - 新增 Postman Collection JSON 导入器。
+      - 支持 collection `info.name`、嵌套 folder/item、string URL、object URL、query 参数、disabled header/query 跳过、raw body、`Authorization: Bearer ...` header、Postman 原生 `auth.type = bearer`。
+      - 导入结果转换为现有 `StoredRequest`，生成稳定 `postman-{collection-slug}-{index}` id，并保留 collection file 路径。
+      - 新增 3 个单测覆盖嵌套 collection、空 collection 拒绝、Postman bearer auth object。
+    - `src-tauri/src/models.rs`
+      - 新增 `PostmanImportInput`。
+    - `src-tauri/src/commands.rs`
+      - 新增 `import_postman_collection` command，并接入 `api-client://bridge-event` completed / failed 事件。
+    - `src-tauri/src/lib.rs`
+      - 注册 `import_postman_collection` 到 Tauri invoke handler。
+    - `src/lib/tauri.ts`
+      - 新增 `importPostmanCollection` 前端 invoke 封装。
+    - `src/store/requestStore.ts`
+      - 新增 `upsertRequests`，用于将导入的 Postman requests 合并进当前前端 store，并切换到首个导入 request。
+    - `src/App.tsx`
+      - 顶部 `Import Postman` 变为真实可打开的导入面板。
+      - 新增 Postman collection JSON 输入、导入 handler、友好错误提示和导入成功提示。
+      - 导入后把支持的方法请求写入前端 store；持久化仍复用现有 `Save` 按钮，避免导入时直接覆盖本地文件。
+    - `src/styles.css`
+      - 复用并扩展导入面板样式，使 cURL 与 Postman 面板保持一致。
+  - 验证结果：
+    - `cargo fmt --manifest-path src-tauri/Cargo.toml` 通过。
+    - `npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-CVaYjg2s.css`、`dist/assets/index-CJKQNzuP.js`。
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过。
+    - `cargo test --manifest-path src-tauri/Cargo.toml postman::tests::` 通过，3 个 Postman 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml curl::tests::` 通过，3 个 cURL 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过，4 个 storage 测试成功。
+    - 本 task 早前已重跑 `cargo test --manifest-path src-tauri/Cargo.toml http::tests::`；默认沙箱因 `127.0.0.1` bind 权限失败，提权重跑后通过，1 个 HTTP 测试成功。
+    - 本 task 早前已启动 `npm run dev` 并用 in-app browser 检查 `http://localhost:1420/`，确认 Postman 面板可见、`Import Collection` 按钮可见、seed 模式显示友好 Tauri runtime 提示且不暴露原始 invoke 异常。
+    - 验证结束时 `curl -s http://localhost:1420` 返回连接失败，确认 dev server 未继续占用端口。
+  - 当前边界：
+    - Postman 导入已形成 UI / Bridge / Rust Core 闭环。
+    - 当前版本聚焦 Postman Collection JSON 的请求导入，不覆盖 Postman pre-request/test scripts、完整多 auth 类型、变量继承或事件脚本语义。
+    - 文件上传下载、真实 Cookie jar、Proxy/TLS 应用、YAML 环境文件、日志和缓存仍是 Task 7-8 审计中的已知剩余缺口。
+  - 自信度检查：我是否对当前实现 100% 有信心？对 Task 6 的边界有信心：Postman 导入有 Rust parser 与单测覆盖，command 已注册并接入 bridge event，前端有真实导入入口和 store 合并逻辑，构建、Rust check、Postman/cURL/storage 回归均通过，运行态 UI 也已验证。剩余缺口已经明确记录为后续全面检查和最终 review 的对象，不属于本 task 必须完成的范围。
 
 - [ ] Task 7: 大型全面检查 - debug 循环
   - 目标：对 Task 5-6 和整体系统做第二轮全面回归。

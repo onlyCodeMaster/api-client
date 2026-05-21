@@ -155,6 +155,14 @@ export async function exportCurl(input: {
   return invoke<string>("export_curl", { input });
 }
 
+export async function importPostmanCollection(input: {
+  collection: string;
+  collectionFile: string;
+  collectionJson: string;
+}) {
+  return invoke<StoredRequest[]>("import_postman_collection", { input });
+}
+
 export async function sendRequest(input: SendRequestInput) {
   return invoke<SendRequestResult>("send_request", { input });
 }

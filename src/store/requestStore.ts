@@ -132,6 +132,7 @@ type RequestStore = {
   addParamRow: () => void;
   addHeaderRow: () => void;
   replaceRequest: (request: RequestRecord) => void;
+  upsertRequests: (requests: RequestRecord[]) => void;
   upsertSecretStatus: (secret: SecretStatus) => void;
   sendActiveRequest: () => Promise<void>;
 };
@@ -398,6 +399,21 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
     set((state) => ({
       requests: state.requests.map((item) => (item.id === request.id ? request : item)),
     })),
+  upsertRequests: (requests) =>
+    set((state) => {
+      if (requests.length === 0) {
+        return state;
+      }
+
+      const incomingIds = new Set(requests.map((request) => request.id));
+      return {
+        requests: [
+          ...state.requests.filter((request) => !incomingIds.has(request.id)),
+          ...requests,
+        ],
+        activeRequestId: requests[0].id,
+      };
+    }),
   upsertSecretStatus: (secret) =>
     set((state) => ({
       bootstrap: {

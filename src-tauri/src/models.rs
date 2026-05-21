@@ -146,6 +146,14 @@ pub struct CurlExportInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PostmanImportInput {
+    pub collection: String,
+    pub collection_file: String,
+    pub collection_json: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SendRequestInput {
     pub request_id: String,
     pub request_name: String,

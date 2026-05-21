@@ -775,7 +775,8 @@ button {
   font-weight: 600;
 }
 
-.curl-panel {
+.curl-panel,
+.import-panel {
   display: grid;
   gap: 12px;
   padding: 14px;
@@ -785,7 +786,9 @@ button {
 }
 
 .curl-panel__header,
-.curl-panel__actions {
+.curl-panel__actions,
+.import-panel__header,
+.import-panel__actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -794,7 +797,9 @@ button {
 }
 
 .curl-panel__header span,
-.curl-field span {
+.curl-field span,
+.import-panel__header span,
+.import-field span {
   display: block;
   color: #7a869a;
   font-size: 11px;
@@ -803,7 +808,8 @@ button {
   text-transform: uppercase;
 }
 
-.curl-panel__header h2 {
+.curl-panel__header h2,
+.import-panel__header h2 {
   margin: 4px 0 0;
   color: #172033;
   font-size: 16px;
@@ -816,12 +822,14 @@ button {
   gap: 12px;
 }
 
-.curl-field {
+.curl-field,
+.import-field {
   display: grid;
   gap: 8px;
 }
 
-.curl-field textarea {
+.curl-field textarea,
+.import-field textarea {
   width: 100%;
   min-height: 118px;
   padding: 12px;
@@ -835,11 +843,17 @@ button {
   resize: vertical;
 }
 
-.curl-panel__actions {
+.import-field textarea {
+  min-height: 180px;
+}
+
+.curl-panel__actions,
+.import-panel__actions {
   justify-content: flex-start;
 }
 
-.curl-panel__actions span {
+.curl-panel__actions span,
+.import-panel__actions span {
   color: #64748b;
   font-size: 12px;
   font-weight: 700;

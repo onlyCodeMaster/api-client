@@ -7,9 +7,11 @@ use crate::error::AppError;
 use crate::http;
 use crate::models::{
     BootstrapState, BridgeEvent, CollectionSummary, CurlExportInput, CurlImportInput,
-    EnvironmentSummary, RecordHistoryInput, SaveEnvironmentInput, SaveRequestInput,
-    SaveSecretInput, SecretStatus, SendRequestInput, SendRequestResult, StoredRequest,
+    EnvironmentSummary, PostmanImportInput, RecordHistoryInput, SaveEnvironmentInput,
+    SaveRequestInput, SaveSecretInput, SecretStatus, SendRequestInput, SendRequestResult,
+    StoredRequest,
 };
+use crate::postman;
 use crate::secrets;
 use crate::storage::{self, StoragePaths};
 
@@ -330,6 +332,36 @@ pub fn export_curl(app: AppHandle, input: CurlExportInput) -> Result<String, Str
                 "export_curl",
                 "failed",
                 "Failed to export cURL command",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn import_postman_collection(
+    app: AppHandle,
+    input: PostmanImportInput,
+) -> Result<Vec<StoredRequest>, String> {
+    match postman::import_collection(input) {
+        Ok(requests) => {
+            emit_bridge_event(
+                &app,
+                "import_postman_collection",
+                "completed",
+                "Postman collection imported",
+                Some(format!("{} requests", requests.len())),
+            );
+            Ok(requests)
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                "import_postman_collection",
+                "failed",
+                "Failed to import Postman collection",
                 Some(message.clone()),
             );
             Err(message)

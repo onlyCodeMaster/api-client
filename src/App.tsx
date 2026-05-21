@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   exportCurl,
   importCurl,
+  importPostmanCollection,
   listenBridgeEvents,
   loadBootstrapState,
   saveEnvironment,
@@ -123,6 +124,7 @@ export default function App() {
     updateEnvironmentVar,
     replaceEnvironment,
     replaceRequest,
+    upsertRequests,
     upsertSecretStatus,
     applyBootstrap,
     updateRequestMethod,
@@ -151,6 +153,23 @@ export default function App() {
   );
   const [curlOutput, setCurlOutput] = useState("");
   const [curlMessage, setCurlMessage] = useState("");
+  const [isPostmanPanelOpen, setIsPostmanPanelOpen] = useState(false);
+  const [postmanInput, setPostmanInput] = useState(`{
+  "info": { "name": "Imported API" },
+  "item": [
+    {
+      "name": "GET /health",
+      "request": {
+        "method": "GET",
+        "url": "https://api.example.com/v1/health",
+        "header": [
+          { "key": "Accept", "value": "application/json" }
+        ]
+      }
+    }
+  ]
+}`);
+  const [postmanMessage, setPostmanMessage] = useState("");
 
   const activeRequest =
     requests.find((request) => request.id === activeRequestId) ?? requests[0];
@@ -220,7 +239,7 @@ export default function App() {
       }
 
       setBridgeEvents((current) => [event, ...current].slice(0, 8));
-      })
+    })
       .then((unsubscribe) => {
         if (cancelled) {
           unsubscribe();
@@ -461,6 +480,50 @@ export default function App() {
     }
   };
 
+  const handleImportPostman = async () => {
+    if (!activeRequest) {
+      return;
+    }
+
+    setPostmanMessage("Importing Postman collection...");
+    try {
+      const importedRequests = await importPostmanCollection({
+        collection: activeRequest.collection,
+        collectionFile: `collections/postman-${Date.now()}.json`,
+        collectionJson: postmanInput,
+      });
+      const supportedRequests = importedRequests.filter((request) =>
+        requestMethods.includes(request.method.toUpperCase() as RequestMethod),
+      );
+
+      if (supportedRequests.length === 0) {
+        setPostmanMessage("No supported requests found in the Postman collection.");
+        return;
+      }
+
+      upsertRequests(
+        supportedRequests.map((request) => ({
+          id: request.id,
+          name: request.name,
+          collection: request.collection,
+          collectionFile: request.collectionFile,
+          method: request.method.toUpperCase() as RequestMethod,
+          url: request.url,
+          params: normalizeRows(request.params, `${request.id}-param`),
+          headers: normalizeRows(request.headers, `${request.id}-header`),
+          body: request.body,
+          authType: request.authType as "none" | "bearer",
+          authToken: request.authToken,
+        })),
+      );
+      setPostmanMessage(
+        `Imported ${supportedRequests.length} requests. Use Save on each request to persist edits.`,
+      );
+    } catch (error) {
+      setPostmanMessage(commandErrorMessage(error, "Import Postman"));
+    }
+  };
+
   return (
     <main className="postman-shell">
       <header className="postman-topbar">
@@ -489,7 +552,11 @@ export default function App() {
           <span className={`status-dot ${bootstrap.loaded ? "is-live" : ""}`}>
             {bootstrap.loaded ? "Local Data Ready" : "Seed Mode"}
           </span>
-          <button type="button" className="ghost-button">
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => setIsPostmanPanelOpen(true)}
+          >
             Import Postman
           </button>
           <button type="button" className="ghost-button" onClick={() => setIsCurlPanelOpen(true)}>
@@ -805,6 +872,43 @@ export default function App() {
             </div>
 
             {lastError ? <div className="request-error-banner">{lastError}</div> : null}
+
+            {isPostmanPanelOpen ? (
+              <section className="import-panel">
+                <div className="import-panel__header">
+                  <div>
+                    <span>Postman Collection Import</span>
+                    <h2>Collection Interop</h2>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => setIsPostmanPanelOpen(false)}
+                  >
+                    Close
+                  </button>
+                </div>
+                <label className="import-field">
+                  <span>Collection JSON</span>
+                  <textarea
+                    value={postmanInput}
+                    onChange={(event) => setPostmanInput(event.target.value)}
+                  />
+                </label>
+                <div className="import-panel__actions">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => {
+                      void handleImportPostman();
+                    }}
+                  >
+                    Import Collection
+                  </button>
+                  {postmanMessage ? <span>{postmanMessage}</span> : null}
+                </div>
+              </section>
+            ) : null}
 
             {isCurlPanelOpen ? (
               <section className="curl-panel">
