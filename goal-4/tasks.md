@@ -74,11 +74,25 @@
     - P0 端口残留本轮未复现，但仍是可用性风险；Task 5 需要考虑是否添加项目级恢复/检测脚本，避免用户再次卡在端口占用。
   - 自信度检查：对 Task 4 的回归结论有 100% 信心：启动、构建、核心交互、tab 唯一性、Files role 点击、Settings inspector 和控制台均有真实证据；仍需 Task 5 处理端口残留风险的长期可用性。
 
-- [ ] Task 5: 修复剩余高优先级可用性问题
+- [x] Task 5: 修复剩余高优先级可用性问题
   - 目标：处理审计中剩余影响“可用”的问题，而不是只做视觉美化。
   - 独立验证：真实用户路径通过，核心入口不丢失。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：修复 Task 2 / Task 4 留下的 P0 dev 启动可用性风险，避免残留 Vite/node 进程占住 1420/1421 后让 `npm run dev` 直接失败。
+  - 具体改动：
+    - `package.json` 增加 `predev` 钩子，在 `vite` 启动前执行 `node scripts/ensure-dev-ports.mjs`。
+    - 新增 `scripts/ensure-dev-ports.mjs`，检查 1420/1421 的监听进程。
+    - 只自动释放命令为 `node` 且 cwd 等于当前项目根目录的监听进程，避免误杀其他项目或系统服务。
+    - 如果端口仍被占用，脚本会在 Vite 启动前失败，并输出端口、PID、命令名和可用提示。
+  - 验证结果：
+    - `git diff --check` 通过。
+    - `npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-BKl13Ah2.css`、`dist/assets/index-QsAsCkLr.js`。
+    - 干净状态下 `node scripts/ensure-dev-ports.mjs` 退出码为 0。
+    - 模拟权限不可释放占用时，脚本失败并明确输出 `Port 1420 is still in use by pid(s): ...`，不会让 Vite 用更模糊的端口错误继续失败。
+    - 模拟当前项目目录下的 stale `node` 占用 1420 时，提权等价真实用户 shell 运行脚本成功输出 `Released stale dev port 1420 from pid ...`，随后 1420/1421 均无监听进程。
+    - `npm run dev` 会先执行 `predev`，再启动 Vite，最终监听 `http://localhost:1420/`。
+    - in-app browser 打开 `http://localhost:1420/` 成功；URL input、Send、Request Body tab、Response Headers tab 均唯一可定位；URL 可编辑为 `https://example.com/api/task-5-port-preflight`；Request Body / Response Headers 可点击；无横向溢出；console error 为 0。
+    - 验证结束后执行 `pkill -f "npm run dev"`，1420/1421 均无监听进程。
+  - 自信度检查：对 Task 5 有 100% 信心：修复点直接对应 P0 端口残留风险；脚本参数错误已通过实测发现并修正；又额外收紧为项目 cwd 限定，避免粗暴杀进程；失败路径、自动恢复路径、正常启动路径和真实浏览器最小路径均有证据。
 
 - [ ] Task 6: 最终可用性审计与 goal 完成判定
   - 目标：重新按用户“完全不可用”的反馈做最终审计，只有核心流程真实可用才标记完成。
