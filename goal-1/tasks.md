@@ -1,0 +1,201 @@
+# Goal 1 Tasks
+
+- [x] Task 1: 创建 `goal-1/input.md`、`goal-1/plan.md`、`goal-1/tasks.md`
+  - 完成内容：建立 goal 工作目录，写入原始目标、执行方案、任务拆解，后续所有实现将按单任务推进。
+  - 验证方式：确认三个文件存在且内容完整。
+
+- [x] Task 2: 执行一次完整的完成度审计
+  - 目标：把“继续完成核心目标”拆成可检查的交付清单，并用真实文件和命令证据逐项对照。
+  - 完成内容：对前端工作台、Tauri bridge、Rust 核心、本地数据层、构建与运行链路做了逐项审计，并形成了下一轮唯一优先任务的依据。
+  - 审计清单与证据：
+    - 项目初始化与依赖：`package.json` 已包含 Tauri 2、React、TypeScript、Vite、Zustand、TanStack Query；`src/main.tsx` 已接 `QueryClientProvider`；`vite.config.ts` 已接 `@tailwindcss/vite`；`src/styles.css` 顶部有 `@import "tailwindcss";`
+    - Postman 式主工作台：`src/App.tsx` 已具备 `Collections / History / Environments / Settings` 四种模式，以及请求编辑器、响应查看器、环境切换、历史视图、设置视图
+    - 前端交互状态：`src/store/requestStore.ts` 已具备请求、环境、历史、响应、发送中状态、错误态，以及 `sendActiveRequest`
+    - Tauri bridge：`src/lib/tauri.ts` 已暴露 `loadBootstrapState`、`recordHistoryEntry`、`saveSecret`、`saveEnvironment`、`sendRequest`
+    - Rust 核心与本地层：`src-tauri/src/commands.rs`、`src-tauri/src/http.rs`、`src-tauri/src/storage.rs`、`src-tauri/src/secrets.rs` 已覆盖 bootstrap、环境保存、secret 保存、SQLite 历史记录、真实 HTTP 请求发送
+    - 构建验证：`npm run build` 已再次通过，输出 `dist/assets/index-DsXUMF5v.css` 与 `dist/assets/index-CRnS6dzX.js`
+    - Rust 编译验证：`cargo check --manifest-path src-tauri/Cargo.toml` 已再次通过
+    - 运行验证：`npm run tauri -- dev` 已成功启动，日志到达 `Running target/debug/api-client`
+  - 未完成 / 风险 / 弱验证项：
+    - `src/App.tsx` 仍在 `response` 变化后调用 `recordHistoryEntry`，而 `src-tauri/src/commands.rs` 的 `send_request` 也会写历史，存在重复历史记录风险
+    - `src/App.tsx` 在 bootstrap 映射历史时把所有历史项都绑定到当前 `activeRequestId`，且 bootstrap `useEffect` 依赖 `activeRequestId`，这会导致历史记录与真实请求关联错误，并在切换请求时反复重载 bootstrap
+    - 当前 Collection / Workspace / Settings 仍以静态展示和骨架为主，尚未形成完整持久化闭环
+    - 请求默认 URL 仍是示例地址，真实请求链路虽已接通，但缺少一次明确的成功请求闭环证明
+  - 下一轮单一优先任务建议：
+    - 优先修复“历史记录闭环错误”，包括重复写入、错误 request 关联、bootstrap 依赖错误。这一项直接影响 SQLite 历史是否可信，是当前主链路中最关键的功能性缺口。
+
+- [x] Task 3: 识别并修复当前主链路中优先级最高的缺口
+  - 目标：只处理一个最高优先级问题，例如真实请求链路、重复历史写入、运行时阻塞或关键交互断链。
+  - 完成内容：修复了历史记录闭环错误，使 SQLite 历史由 Rust 侧单点写入，并且为每条历史保留真实 `requestId` 关联。
+  - 具体改动：
+    - `src/App.tsx`
+      - 移除了 `response` 变化后调用 `recordHistoryEntry` 的副作用，消除前端与 Rust 双写历史的问题
+      - 修复 bootstrap 加载逻辑，不再依赖 `activeRequestId` 反复重跑
+      - 增加历史记录与请求列表的匹配逻辑，优先使用后端返回的 `requestId`，否则按 `method + pathname` 回退匹配
+    - `src/lib/tauri.ts`
+      - 为 bootstrap/history 类型补充 `requestId`
+    - `src-tauri/src/models.rs`
+      - 为 `HistoryEntry` 和 `RecordHistoryInput` 增加 `request_id`
+    - `src-tauri/src/commands.rs`
+      - `send_request` 写历史时带上 `request_id`
+    - `src-tauri/src/storage.rs`
+      - 为 `request_history` 表补充 `request_id` 字段
+      - 增加 schema 迁移逻辑，兼容旧数据库自动补列
+      - 调整历史查询和写入逻辑，持久化并返回真实请求关联
+      - 新增 Rust 单测，验证 `request_id` 持久化与旧表迁移
+  - 验证结果：
+    - `npm run build` 通过
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过
+    - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过，2 个测试均成功
+  - 当前结论：
+    - 历史记录主链路已经从“前后端重复写、关联错误”修正为“Rust 单点写入、SQLite 保留 requestId、前端正确消费”
+    - 下一轮应进入 `Task 4`，做一次大型全面检查，确认请求发送、环境保存、历史浏览和运行态之间没有新的回归
+
+- [x] Task 4: 大型全面检查 - debug 循环
+  - 目标：对前 3 个 task 的结果进行端到端检查，寻找 UI、状态、持久化、Rust bridge、构建与运行问题。
+  - 完成内容：对请求发送、历史记录、环境保存、构建、Rust 编译、运行态和行为级测试覆盖面做了集中检查，并确认了下一阶段最值得补齐的核心缺口。
+  - 检查结论：
+    - 已验证：
+      - 前端主工作台结构与交互壳可用，`Collections / History / Environments / Settings` 四种模式已存在
+      - `send_request` 真实链路存在，且通过 Rust HTTP 集成测试验证了方法、URL、Query、Header、Body 和响应映射
+      - 历史记录已改为 Rust 单点写入，SQLite 可持久化 `request_id`
+      - 环境保存 command 已打通前端和文件系统
+      - `npm run build` 通过
+      - `cargo check --manifest-path src-tauri/Cargo.toml` 通过
+      - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过
+      - `cargo test --manifest-path src-tauri/Cargo.toml http::tests::` 在提权环境下通过，证明本地集成测试仅受沙箱端口限制影响
+      - `npm run tauri -- dev` 之前已验证可启动到 `Running target/debug/api-client`
+    - 当前仍未完成：
+      - Collection / Workspace / Settings 仍主要是 UI 和说明性骨架，没有真正持久化读写闭环
+      - 请求默认种子数据仍指向示例地址，虽然 Rust 请求能力已被行为级测试覆盖，但应用内仍缺少一个更贴近真实使用的默认本地可用目标
+      - Secret 读取能力存在，但前端暂无完整的 secret 编辑与使用流程
+    - 新发现的实现约束：
+      - HTTP 行为级测试需要本地监听端口，默认沙箱会阻止 `127.0.0.1` bind；该测试在提权环境下通过，说明功能正确、限制来自执行环境而非代码缺陷
+  - 下一轮单一优先任务建议：
+    - 优先补齐 Collection / Workspace 的本地文件系统持久化闭环。相比继续美化 UI，这一项更直接决定项目是否进入“真正可用”的下一阶段。
+
+- [x] Task 5: 完成第二个关键能力缺口
+  - 目标：继续补齐核心能力，优先真实可用性而非表层展示。
+  - 完成内容：补齐了 Collection / Workspace 的第一条真实文件系统闭环。应用启动时会从 workspace 文件读取 collection 列表，再从 collection 文件读取请求定义；请求编辑后点击 `Save` 会把当前请求写回对应 collection 文件。
+  - 具体改动：
+    - `src-tauri/src/models.rs`
+      - 新增 `CollectionSummary`、`StoredRequest`、`SaveRequestInput`
+      - `BootstrapState` 新增 `collections`
+    - `src-tauri/src/storage.rs`
+      - 为 seed collection 文件补充完整请求结构
+      - 新增 `list_collections`
+      - 新增 `save_request`
+      - 新增 workspace / collection 文件读取逻辑
+      - 将磁盘上的 collection 文件模型与运行态模型分离，避免把派生字段当成落盘必填项
+      - 新增 storage 单测，验证 workspace -> collection 读取与 request 保存回写
+    - `src-tauri/src/commands.rs`
+      - `load_bootstrap_state` 现在返回 `collections`
+      - 新增 `save_request` command
+    - `src-tauri/src/lib.rs`
+      - 注册 `save_request` 到 Tauri invoke handler
+    - `src/lib/tauri.ts`
+      - 为 bootstrap 补充 `collections` 类型
+      - 新增 `saveRequest`
+    - `src/store/requestStore.ts`
+      - `RequestRecord` 新增 `collectionFile`
+      - `applyBootstrap` 现在可以用后端返回的 collections 接管请求列表
+      - 新增 `replaceRequest`
+    - `src/App.tsx`
+      - 启动时把后端 collection 数据映射进前端请求 store
+      - 左侧 collection tree 不再依赖静态 section 常量，而是根据真实请求数据分组
+      - `Save` 按钮接通 `saveRequest`
+  - 验证结果：
+    - `npm run build` 通过
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过
+    - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过，3 个测试均成功
+  - 当前结论：
+    - Collection / Workspace 已从“UI 骨架”推进到“真实文件系统读写闭环”
+    - 下一轮应进入 `Task 6`，继续补第三个核心缺口，优先 Secret 管理前端流程或更贴近真实使用的默认本地目标
+
+- [x] Task 6: 完成第三个关键能力缺口
+  - 目标：继续补齐核心能力，确保与前面任务的状态流、数据流一致。
+  - 完成内容：补齐了 Keychain Secret 的前端管理流程。`Settings` 页现在提供可编辑的 secret 管理表单，用户可以输入并保存 secret，保存后会通过 Tauri command 写入系统 Keychain，并把状态同步回前端。
+  - 具体改动：
+    - `src/lib/tauri.ts`
+      - 为 `saveSecret` 增加明确的返回类型
+    - `src/store/requestStore.ts`
+      - 新增 `upsertSecretStatus`
+      - 允许 secret 保存结果回写到 bootstrap 状态
+    - `src/App.tsx`
+      - `Settings` 页新增 `Keychain Secrets` 管理面板
+      - 新增 secret 输入草稿状态
+      - 新增 secret 保存逻辑，并在保存后清空输入、刷新状态
+    - `src/styles.css`
+      - 为 secret 管理表格增加专用四列表头和状态样式
+  - 验证结果：
+    - `npm run build` 通过
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过
+  - 当前结论：
+    - `SQLite / 文件系统 / Keychain` 三类本地能力都已经至少形成一条真实前后端闭环
+    - 下一轮应进入 `Task 7`，再做一次大型全面检查，确认新增的 Collection 持久化和 Secret 管理没有引入回归，并为最终完成度审计做准备
+
+- [x] Task 7: 大型全面检查 - debug 循环
+  - 目标：对 Task 5-6 以及整体系统再做一次全面检查。
+  - 完成内容：对 Collection / Workspace 持久化、Secret 管理和运行态重新做了联合检查，并在检查过程中发现并修复了两个真实回归点。
+  - 检查中发现并修复的问题：
+    - `src-tauri/src/storage.rs`
+      - 修复 `save_request` / `save_environment` 对带 `collections/`、`environments/` 前缀的相对路径重复拼接问题，避免写入错误的嵌套目录
+      - 新增单测 `save_request_and_environment_normalize_prefixed_relative_paths`
+    - `src/App.tsx`
+      - 修复 `collectionSections` 动态分组后引入的无限更新问题
+      - 原因是 `useEffect` 每次 render 都返回新对象并持续 `setExpandedCollections`
+      - 现在只有在出现新 collection 分组时才更新展开状态
+  - 验证结果：
+    - `npm run build` 通过
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过
+    - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过，4 个测试均成功
+    - `npm run tauri -- dev` 再次验证通过，桌面进程已启动到 `Running target/debug/api-client`
+    - 运行态前端日志中不再出现此前的 `Maximum update depth exceeded`
+  - 当前结论：
+    - 当前三条本地能力闭环（SQLite / 文件系统 / Keychain）在构建、编译、单测和运行态层面都已经得到一轮更扎实的回归验证
+    - 下一轮应进入 `Task 8`，做最终完成度审计，逐项对照原始要求确认是否还有未覆盖项
+
+- [x] Task 8: 最终完成度审计与收尾
+  - 目标：验证核心目标是否真正完成，补齐遗留问题，确认可以安全标记 goal 完成。
+  - 最终完成度审计：
+    - 目标重述：
+      - 完成一个可启动、可构建、具备 Postman 风格工作台和关键本地能力闭环的 Tauri 2 + React + TypeScript + Rust API 调试工具基础版本
+    - 原始明确要求与证据：
+      - `Tauri 2 / React / TypeScript / Vite` 初始化完成：
+        - 证据：`package.json`、`src-tauri/tauri.conf.json`、`vite.config.ts`
+      - `Tailwind CSS` 配置完成：
+        - 证据：`vite.config.ts` 使用 `@tailwindcss/vite`，`src/styles.css` 顶部为 `@import "tailwindcss";`
+      - `Zustand` 配置完成：
+        - 证据：`src/store/uiStore.ts`、`src/store/requestStore.ts`
+      - `TanStack Query` 配置完成：
+        - 证据：`src/lib/queryClient.ts`、`src/main.tsx`
+      - `App.tsx` API Client 布局完成并已从占位升级为可交互工作台：
+        - 证据：`src/App.tsx`
+        - 包含：`Collections / History / Environments / Settings`，请求编辑器，`Params / Headers / Body / Auth`，响应区，Secret 管理
+      - `CODEX_RULES.md` 已创建：
+        - 证据：`CODEX_RULES.md`
+      - `npm run build` 可通过：
+        - 证据：最终审计中再次通过
+      - `npm run tauri dev` 可启动：
+        - 证据：最终审计中再次启动到 `Running target/debug/api-client`
+      - 苹果扁平化风格：
+        - 证据：`src/styles.css` 的浅色画布、柔和中性色、橙色强调、圆角卡片和桌面工具式布局
+    - 后续追加目标与证据：
+      - Postman 风格布局与功能区：
+        - 证据：`src/App.tsx` 当前结构已是左侧资源区、中间请求编辑区、下方响应区、Settings 与 History 工作面板
+      - SQLite 本地闭环：
+        - 证据：`src-tauri/src/storage.rs` 中 `settings / request_history / cookie_jars`，历史与最近工作区已闭环
+      - 文件系统本地闭环：
+        - 证据：`src-tauri/src/storage.rs` 中 `workspaces / collections / environments` 读取与保存逻辑
+      - Keychain Secret 闭环：
+        - 证据：`src-tauri/src/secrets.rs`、`src/App.tsx` Settings 页 Secret 管理表单
+      - 真实请求链路：
+        - 证据：`src-tauri/src/http.rs` + `http::tests::execute_request_sends_real_http_request_and_maps_response`
+    - 最终验证结果：
+      - `npm run build` 通过
+      - `cargo check --manifest-path src-tauri/Cargo.toml` 通过
+      - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过，4 个测试成功
+      - `cargo test --manifest-path src-tauri/Cargo.toml http::tests::` 通过
+      - `npm run tauri -- dev` 通过，桌面进程启动到 `Running target/debug/api-client`
+    - 最终结论：
+      - 以“基础版本核心目标”为标准，所有明确交付项都已有代码与验证证据支撑，可以安全标记 goal 完成

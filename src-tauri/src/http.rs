@@ -1,0 +1,326 @@
+use std::time::Instant;
+
+use reqwest::blocking::Client;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use serde_json::Value;
+
+use crate::error::{AppError, AppResult};
+use crate::models::{
+    RequestKeyValue, ResponseHeader, ResponseSummary, ResponseTimelineItem, SendRequestInput,
+    SendRequestResult,
+};
+use crate::secrets;
+
+pub fn execute_request(input: SendRequestInput) -> AppResult<SendRequestResult> {
+    let client = Client::builder()
+        .build()
+        .map_err(|error| AppError::InvalidData(error.to_string()))?;
+
+    let resolved_environment = input
+        .environment
+        .vars
+        .iter()
+        .map(|item| (item.key.clone(), item.value.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let url_with_vars = resolve_template(&input.url, &resolved_environment)?;
+    let mut url = reqwest::Url::parse(&url_with_vars)
+        .map_err(|error| AppError::InvalidData(error.to_string()))?;
+
+    for row in input
+        .params
+        .iter()
+        .filter(|row| row.enabled && !row.key.trim().is_empty())
+    {
+        let value = resolve_template(&row.value, &resolved_environment)?;
+        url.query_pairs_mut().append_pair(&row.key, &value);
+    }
+
+    let mut headers = HeaderMap::new();
+    for row in input
+        .headers
+        .iter()
+        .filter(|row| row.enabled && !row.key.trim().is_empty())
+    {
+        let header_name = HeaderName::from_bytes(row.key.trim().as_bytes())
+            .map_err(|error| AppError::InvalidData(error.to_string()))?;
+        let header_value =
+            HeaderValue::from_str(&resolve_template(&row.value, &resolved_environment)?)
+                .map_err(|error| AppError::InvalidData(error.to_string()))?;
+        headers.insert(header_name, header_value);
+    }
+
+    if input.auth_type == "bearer" && !input.auth_token.trim().is_empty() {
+        let token = resolve_template(&input.auth_token, &resolved_environment)?;
+        let auth_value = HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|error| AppError::InvalidData(error.to_string()))?;
+        headers.insert(reqwest::header::AUTHORIZATION, auth_value);
+    }
+
+    let method = reqwest::Method::from_bytes(input.method.as_bytes())
+        .map_err(|error| AppError::InvalidData(error.to_string()))?;
+    let started_at = Instant::now();
+    let mut request = client.request(method, url).headers(headers);
+
+    if !input.body.trim().is_empty() {
+        request = request.body(resolve_template(&input.body, &resolved_environment)?);
+    }
+
+    let response = request
+        .send()
+        .map_err(|error| AppError::InvalidData(error.to_string()))?;
+
+    let elapsed = started_at.elapsed();
+    let status = response.status();
+    let protocol = format!("{:?}", response.version()).replace("HTTP_", "HTTP/");
+    let response_headers = response
+        .headers()
+        .iter()
+        .map(|(key, value)| ResponseHeader {
+            key: key.to_string(),
+            value: value.to_str().unwrap_or_default().to_string(),
+        })
+        .collect::<Vec<_>>();
+    let body = response
+        .text()
+        .map_err(|error| AppError::InvalidData(error.to_string()))?;
+    let size_bytes = body.len();
+
+    Ok(SendRequestResult {
+        status: format!(
+            "{} {}",
+            status.as_u16(),
+            status.canonical_reason().unwrap_or("Unknown")
+        ),
+        duration_ms: elapsed.as_millis() as i64,
+        size_bytes,
+        protocol,
+        body: format_body(body),
+        headers: response_headers,
+        timeline: vec![
+            ResponseTimelineItem {
+                step: "Total".to_string(),
+                value: format!("{}ms", elapsed.as_millis()),
+            },
+            ResponseTimelineItem {
+                step: "Transport".to_string(),
+                value: "reqwest blocking".to_string(),
+            },
+        ],
+        summary: ResponseSummary {
+            cookie_jar: format!(
+                "SQLite / {}",
+                resolved_environment
+                    .get("cookie_jar")
+                    .cloned()
+                    .unwrap_or_else(|| "default".to_string())
+            ),
+            secret_source: if input.auth_type == "bearer" && !input.auth_token.trim().is_empty() {
+                input.auth_token
+            } else {
+                "No auth".to_string()
+            },
+            collection_file: format!("{}.json / {}", input.collection, input.request_name),
+        },
+    })
+}
+
+fn resolve_template(
+    raw: &str,
+    environment: &std::collections::HashMap<String, String>,
+) -> AppResult<String> {
+    let mut result = raw.to_string();
+
+    for (key, value) in environment {
+        let token = format!("{{{{{key}}}}}");
+        let env_token = format!("{{{{env.{key}}}}}");
+        result = result.replace(&token, value);
+        result = result.replace(&env_token, value);
+    }
+
+    while let Some(start) = result.find("{{secret.") {
+        let rest = &result[start + 9..];
+        let Some(end) = rest.find("}}") else {
+            break;
+        };
+        let secret_name = &rest[..end];
+        let password = secrets::read_secret(secret_name)?;
+        let token = format!("{{{{secret.{secret_name}}}}}");
+        result = result.replace(&token, &password);
+    }
+
+    Ok(result)
+}
+
+fn format_body(body: String) -> String {
+    match serde_json::from_str::<Value>(&body) {
+        Ok(value) => serde_json::to_string_pretty(&value).unwrap_or(body),
+        Err(_) => body,
+    }
+}
+
+#[allow(dead_code)]
+fn _active_rows(rows: &[RequestKeyValue]) -> Vec<&RequestKeyValue> {
+    rows.iter()
+        .filter(|row| row.enabled && !row.key.trim().is_empty())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    use super::*;
+    use crate::models::{EnvironmentSummary, EnvironmentVariable};
+
+    #[test]
+    fn execute_request_sends_real_http_request_and_maps_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("read local addr");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+
+            let mut request_line = String::new();
+            reader
+                .read_line(&mut request_line)
+                .expect("read request line");
+
+            let mut headers = HashMap::new();
+            let mut content_length = 0usize;
+
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read header line");
+                if line == "\r\n" {
+                    break;
+                }
+
+                let trimmed = line.trim_end();
+                if let Some((name, value)) = trimmed.split_once(':') {
+                    let normalized_name = name.trim().to_ascii_lowercase();
+                    let normalized_value = value.trim().to_string();
+                    if normalized_name == "content-length" {
+                        content_length = normalized_value
+                            .parse::<usize>()
+                            .expect("parse content-length");
+                    }
+                    headers.insert(normalized_name, normalized_value);
+                }
+            }
+
+            let mut body = vec![0; content_length];
+            reader.read_exact(&mut body).expect("read request body");
+
+            assert_eq!(
+                request_line.trim_end(),
+                "POST /echo?query=workspace&limit=10 HTTP/1.1"
+            );
+            assert_eq!(
+                headers.get("authorization"),
+                Some(&"Bearer local-token".to_string())
+            );
+            assert_eq!(headers.get("x-env"), Some(&"workspace".to_string()));
+            assert_eq!(
+                headers.get("content-type"),
+                Some(&"application/json".to_string())
+            );
+            assert_eq!(
+                String::from_utf8(body).expect("decode request body"),
+                "{\"query\":\"workspace\"}"
+            );
+
+            let response_body = r#"{"ok":true,"echo":"workspace"}"#;
+            let response = format!(
+                "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nX-Trace: abc123\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            stream.flush().expect("flush response");
+        });
+
+        let result = execute_request(SendRequestInput {
+            request_id: "req-http-test".to_string(),
+            request_name: "POST /echo".to_string(),
+            collection: "Core API".to_string(),
+            method: "POST".to_string(),
+            url: format!("http://{address}/echo"),
+            params: vec![
+                RequestKeyValue {
+                    key: "query".to_string(),
+                    value: "{{env.query_value}}".to_string(),
+                    enabled: true,
+                },
+                RequestKeyValue {
+                    key: "limit".to_string(),
+                    value: "10".to_string(),
+                    enabled: true,
+                },
+            ],
+            headers: vec![
+                RequestKeyValue {
+                    key: "Content-Type".to_string(),
+                    value: "application/json".to_string(),
+                    enabled: true,
+                },
+                RequestKeyValue {
+                    key: "X-Env".to_string(),
+                    value: "{{query_value}}".to_string(),
+                    enabled: true,
+                },
+            ],
+            body: r#"{"query":"{{query_value}}"}"#.to_string(),
+            auth_type: "bearer".to_string(),
+            auth_token: "{{api_token}}".to_string(),
+            environment: EnvironmentSummary {
+                name: "Local Test".to_string(),
+                file_path: "environments/local-test.json".to_string(),
+                vars: vec![
+                    EnvironmentVariable {
+                        key: "query_value".to_string(),
+                        value: "workspace".to_string(),
+                    },
+                    EnvironmentVariable {
+                        key: "api_token".to_string(),
+                        value: "local-token".to_string(),
+                    },
+                    EnvironmentVariable {
+                        key: "cookie_jar".to_string(),
+                        value: "integration-jar".to_string(),
+                    },
+                ],
+            },
+        })
+        .expect("execute request");
+
+        server.join().expect("join server");
+
+        assert_eq!(result.status, "201 Created");
+        assert_eq!(result.protocol, "HTTP/1.1");
+        assert!(result.duration_ms >= 0);
+        assert!(result.size_bytes > 0);
+        assert_eq!(
+            result.body,
+            "{\n  \"echo\": \"workspace\",\n  \"ok\": true\n}"
+        );
+        assert!(result
+            .headers
+            .iter()
+            .any(|header| header.key == "content-type" && header.value == "application/json"));
+        assert!(result
+            .headers
+            .iter()
+            .any(|header| header.key == "x-trace" && header.value == "abc123"));
+        assert_eq!(result.timeline.len(), 2);
+        assert_eq!(result.summary.cookie_jar, "SQLite / integration-jar");
+        assert_eq!(result.summary.secret_source, "{{api_token}}");
+        assert_eq!(result.summary.collection_file, "Core API.json / POST /echo");
+    }
+}

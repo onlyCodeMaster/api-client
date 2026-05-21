@@ -1,0 +1,140 @@
+# Goal 2 Tasks
+
+- [x] Task 1: 创建 `goal-2/input.md`、`goal-2/plan.md`、`goal-2/tasks.md`
+  - 目标：按 `/goal` workflow 创建新的递增 goal 目录，完整保存原始输入，并建立执行计划与任务拆解。
+  - 独立验证：确认 `goal-2/input.md`、`goal-2/plan.md`、`goal-2/tasks.md` 三个文件存在，且 `input.md` 逐字保留用户原始输入。
+  - 完成内容：已创建 `goal-2/` 三件套；`input.md` 保存本次 `/goal` 原文；`plan.md` 写入需求、上下文、风险、执行方案、验证方式、回滚方案；`tasks.md` 建立后续单任务推进清单。
+  - 自信度检查：当前 task 只涉及 goal 文件创建，不修改代码；文件路径、编号递增和内容职责均符合 workflow，具备 100% 结束信心。
+
+- [x] Task 2: 基于实际文件做完整基线审计
+  - 目标：不依赖 `goal-1` 记录，重新检查当前项目真实状态，并建立 prompt-to-artifact checklist。
+  - 独立验证：逐项列出前端 UI、Tauri Bridge、Rust Core、本地数据层要求，对应到具体文件、命令或缺口。
+  - 完成内容：已重新读取 `goal-2/input.md`、`goal-2/plan.md`、`goal-2/tasks.md` 和当前实际代码，不依赖 `goal-1` 文字记录；建立了原始目标到当前 artifact 的审计清单。
+  - 审计清单与真实证据：
+    - 项目技术栈：`package.json` 显示 React 19、TypeScript、Vite、Tauri 2、Zustand、TanStack Query；`src/main.tsx` 已接 `QueryClientProvider`。
+    - 前端 UI 层 - 请求编辑器：`src/App.tsx` 包含请求 tab、method select、URL input、Send / Save 操作；`src/store/requestStore.ts` 包含请求状态和更新函数。
+    - 前端 UI 层 - Header / Query / Body 表单：`src/App.tsx` 调用 `updateParamRow`、`updateHeaderRow`、`updateRequestBody`；`src/store/requestStore.ts` 有 `params`、`headers`、`body` 状态。
+    - 前端 UI 层 - 响应查看器：`src/App.tsx` 包含 `responseTabs`、`response.summary`、Body / Headers / Timeline 展示；`src/store/requestStore.ts` 有 `ResponseState`。
+    - 前端 UI 层 - 历史记录：`src/App.tsx` 的 History sidebar 可切换请求；`src/store/requestStore.ts` 在 `sendActiveRequest` 后追加本地 history；`src-tauri/src/storage.rs` 将历史写入 SQLite。
+    - 前端 UI 层 - 环境变量：`src/App.tsx` 有 environment sidebar 和 Environment Editor；`saveEnvironment` 通过 Tauri invoke 保存。
+    - 前端 UI 层 - Collection 管理：`src/App.tsx` 根据 requests 动态生成 collection tree；`saveRequest` 写回 collection 文件。
+    - 前端 UI 层 - 设置页面：`src/App.tsx` Settings 面板展示 SQLite、Filesystem、Keychain、Bridge、Core，并包含 Keychain Secrets 管理。
+    - Tauri Bridge - command 暴露：`src-tauri/src/commands.rs` 暴露 `load_bootstrap_state`、`record_history_entry`、`save_secret`、`save_environment`、`save_request`、`send_request`；`src-tauri/src/lib.rs` 注册到 `generate_handler!`。
+    - Tauri Bridge - 类型转换：`src/lib/tauri.ts` 定义前端 invoke 类型；`src-tauri/src/models.rs` 定义 serde camelCase 模型。
+    - Tauri Bridge - 错误封装：`src-tauri/src/error.rs` 定义 `AppError`；`src-tauri/src/commands.rs` 用 `to_command_error` 转换成 command error string。
+    - Tauri Bridge - 参数校验：Rust 层通过 URL parse、HTTP method parse、HeaderName/HeaderValue parse、JSON parse 等做基础校验；尚缺更系统的业务级校验。
+    - Tauri Bridge - 前后端事件通信：当前只看到 UI 文案和 Tauri schema 里的事件能力，实际应用代码中没有 `emit` / `listen` / event command 使用；这是明确缺口。
+    - Rust Core - HTTP 请求引擎：`src-tauri/src/http.rs` 用 `reqwest::blocking::Client` 执行真实请求；HTTP 单测验证 method、URL、query、header、body、响应映射。
+    - Rust Core - 环境变量解析：`src-tauri/src/http.rs` 的 `resolve_template` 支持 `{{key}}`、`{{env.key}}` 与 `{{secret.name}}`。
+    - Rust Core - Auth 处理：`src-tauri/src/http.rs` 支持 bearer token 并写入 Authorization header；其他 auth 类型尚未实现。
+    - Rust Core - Cookie 管理：SQLite 有 `cookie_jars` 表，响应 summary 展示 cookie jar 名称，但没有真实 Set-Cookie 解析、Cookie 持久化和请求注入；属于部分实现。
+    - Rust Core - Proxy / TLS 配置：`Cargo.toml` 使用 `reqwest` 的 `rustls-tls`，环境里有 `proxy` 字段，UI 展示 proxy；但没有把 proxy/TLS 配置应用到 reqwest client；属于部分实现或缺口。
+    - Rust Core - cURL 导入导出：前端有 `Import cURL` 按钮文案，但没有对应 command、parser 或导出实现；缺口。
+    - Rust Core - Postman Collection 导入：前端有 `Import Postman` 按钮文案，但没有对应 command 或导入器；缺口。
+    - Rust Core - 文件上传下载：没有发现 upload/download command、模型或 UI 文件选择/保存流程；缺口。
+    - 本地数据层 - SQLite：`src-tauri/src/storage.rs` 创建 `settings`、`request_history`、`cookie_jars` 表；storage 单测覆盖 history 和 schema migration。
+    - 本地数据层 - JSON/YAML 文件：workspace、collection、environment 当前为 JSON 读写；前端 seed 有 `local.yaml` 字样，但 Rust 只用 `serde_json::from_str`，没有 YAML 解析依赖或实现；YAML 是缺口。
+    - 本地数据层 - 系统 Keychain：`src-tauri/src/secrets.rs` 使用 `keyring_core::Entry` 读写 secrets；Settings 页有保存流程。
+    - 本地数据层 - 本地缓存：没有独立缓存模型或缓存读写逻辑，除 seed state / SQLite 设置外未见 cache 实现；缺口。
+    - 本地数据层 - 日志：没有应用级日志依赖、日志文件写入或 UI 日志查看；缺口。
+  - 验证结果：
+    - `npm run build` 通过，产物包含 `dist/index.html`、`dist/assets/index-BYrWHbdo.css`、`dist/assets/index-DDMjf23m.js`。
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过。
+    - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过，4 个 storage 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml http::tests::` 在默认沙箱因 `127.0.0.1` bind 权限失败；提权重跑后通过，1 个 HTTP 测试成功。
+  - 当前缺口排序：
+    - 最高优先级：补齐 Tauri 前后端事件通信。该项是 Bridge 层明确要求，当前完全未接真实代码，且可用一个最小事件闭环独立验证。
+    - 后续优先级：补齐 cURL / Postman 导入导出、文件上传下载、真实 Cookie jar、Proxy/TLS 应用、YAML 环境文件、日志和缓存。
+  - 自信度检查：审计覆盖了原始 prompt 的每个明确条目，并用实际文件、搜索结果、构建结果、Rust check、storage 单测和 HTTP 单测作为证据；对“已实现 / 部分实现 / 缺口”的判断有直接证据支撑，当前 task 具备 100% 结束信心。
+
+- [x] Task 3: 修复或补齐审计中最高优先级的一个缺口
+  - 目标：只处理 Task 2 发现的一个最关键、最小可验证缺口。
+  - 独立验证：对应测试、构建或运行检查通过，并在本 task 内说明修复范围。
+  - 完成内容：补齐了 Tauri Bridge 层的真实前后端事件通信闭环。
+  - 具体改动：
+    - `src-tauri/src/models.rs`
+      - 新增 `BridgeEvent` serde 模型，作为 Rust emit 与前端 listen 共享的结构化事件 payload。
+    - `src-tauri/src/commands.rs`
+      - 新增 `api-client://bridge-event` 事件名和 `emit_bridge_event` helper。
+      - `load_bootstrap_state` 在 started / completed / failed 阶段发出 bridge event。
+      - `record_history_entry`、`save_secret`、`save_environment`、`save_request` 在 completed / failed 阶段发出 bridge event。
+      - `send_request` 在 started / completed / failed 阶段发出 bridge event，并保留原有错误封装行为。
+    - `src/lib/tauri.ts`
+      - 引入 `@tauri-apps/api/event` 的 `listen`。
+      - 新增 `BridgeEvent` 类型和 `listenBridgeEvents` 订阅函数。
+    - `src/App.tsx`
+      - 新增 `bridgeEvents` 状态。
+      - 在 Tauri runtime 中订阅 `api-client://bridge-event`，保留最近 8 条事件。
+      - 将事件监听 effect 放在 bootstrap 加载 effect 前，降低启动事件被错过的概率。
+      - Settings 页新增 `Bridge Events / Frontend Backend Channel` 事件流面板。
+    - `src/styles.css`
+      - 新增事件列表、事件卡片、started / completed / failed 状态样式。
+  - 验证结果：
+    - `npm run build` 通过，TypeScript 与 Vite 构建成功。
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过。
+    - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过，4 个 storage 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml http::tests::` 默认沙箱仍因 `127.0.0.1` bind 权限失败；提权重跑后通过，1 个 HTTP 测试成功。
+    - `cargo fmt --manifest-path src-tauri/Cargo.toml` 已执行。
+    - `rg` 复核确认 `BridgeEvent`、`api-client://bridge-event`、`emit_bridge_event`、`listenBridgeEvents`、`bridgeEvents` 和 CSS 事件样式均已落到实际代码。
+  - 提交状态：
+    - 当前仓库是尚无任何 commit 的初始仓库，且几乎所有项目文件均为未跟踪状态。
+    - 本 task 有代码改动，但无法通过普通 `git diff` 区分“本轮修改”和“此前未提交项目基线”；若只提交本轮 touched 文件，会产生一个无法独立构建的残缺初始提交。
+    - 因此本 task 暂不强行提交，避免把上下文不清的未跟踪项目整体打包进历史；下一步大型全面检查后，应统一决定是否创建完整初始提交。
+  - 自信度检查：当前实现已把 Bridge 层事件通信从 UI 文案补成真实 Rust emit + TypeScript listen + Settings 可视化事件流；构建、Rust check、相关 storage 测试和 HTTP 行为测试均通过或在受限环境下给出明确原因并提权验证通过。唯一未做的是 Tauri GUI 运行态视觉确认，按任务边界不阻塞本 task，当前具备 100% 结束信心。
+
+- [x] Task 4: 大型全面检查 - debug 循环
+  - 目标：对 Task 1-3 的结果做全面回归，确认没有新 bug 或遗漏。
+  - 独立验证：至少覆盖前端构建、Rust 编译、相关单测、关键运行链路或明确说明受限原因。
+  - 完成内容：完成 Task 1-3 后的第一轮大型全面检查，并在检查中修复了一个事件通信时序边缘问题。
+  - 检查中发现并修复的问题：
+    - `src/App.tsx`
+      - 发现风险：`listenBridgeEvents` 注册是异步的，而 `loadBootstrapState` 会立即 invoke Rust command；在 Tauri runtime 中，启动阶段的 `started / completed` bridge event 可能先于 listener 注册完成而被错过。
+      - 修复方式：新增 `isBridgeListenerReady` 状态。事件监听注册成功后，或浏览器 seed 模式下监听失败并明确降级后，才触发 bootstrap 加载。
+      - 效果：Tauri runtime 下更稳定地捕获启动事件；非 Tauri 浏览器模式不会卡在等待事件监听。
+  - 回归范围：
+    - 前端 UI：请求编辑器、Params / Headers / Body / Auth、响应查看器、History / Environments / Settings 结构仍可构建。
+    - Bridge：`api-client://bridge-event` Rust emit + TypeScript listen + Settings 事件流面板存在。
+    - Rust Core：真实 HTTP 请求链路未因事件改动回归。
+    - 本地数据层：SQLite history / collection / environment 路径相关 storage 单测未回归。
+    - 运行态：Tauri dev 能启动到 `Running target/debug/api-client`；Vite seed 模式能打开页面并切到 Settings。
+  - 验证结果：
+    - `npm run build` 通过，TypeScript 与 Vite 构建成功，产物包含 `dist/index.html`、`dist/assets/index-C96amyWt.css`、`dist/assets/index-Ci7g2pl0.js`。
+    - `cargo fmt --manifest-path src-tauri/Cargo.toml` 已执行。
+    - `cargo check --manifest-path src-tauri/Cargo.toml` 通过。
+    - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过，4 个 storage 测试成功。
+    - `cargo test --manifest-path src-tauri/Cargo.toml http::tests::` 默认沙箱仍因 `127.0.0.1` bind 权限失败；提权重跑后通过，1 个 HTTP 测试成功。
+    - `npm run tauri -- dev` 提权启动成功，日志到达 `Running target/debug/api-client`。
+    - `npm run dev` 启动 Vite 后，用 in-app browser 打开 `http://localhost:1420/`，页面正常显示 API Client 工作台。
+    - 在浏览器中切换到 Settings，确认 `Frontend / Backend Channel` 和 `Waiting for runtime events` 可见，说明事件面板在 seed 模式下不阻塞渲染。
+    - 验证结束后执行 `pkill -f "npm run dev"`，`curl -s http://localhost:1420` 返回连接失败，确认 dev server 未继续占用端口。
+  - 当前仍未完成 / 下一步建议：
+    - Task 2 标出的剩余核心缺口仍存在：cURL / Postman 导入导出、文件上传下载、真实 Cookie jar、Proxy/TLS 应用、YAML 环境文件、日志和缓存。
+    - 下一轮 Task 5 建议优先补齐 cURL 导入导出，因为 UI 已有 `Import cURL` 入口文案，且它能直接提升请求编辑器的实际可用性。
+  - 提交状态：
+    - 当前仓库仍是尚无任何 commit 的初始仓库，且所有项目文件均处于未跟踪状态。
+    - Task 4 已完成大型检查并形成一个可构建、可测试的整体基线；本轮按完整基线方式暂存项目文件，准备创建初始提交，而不是只提交少量 touched 文件形成残缺历史。
+  - 自信度检查：我是否对当前实现 100% 有信心？对于 Task 4 的范围是有信心的：事件时序风险已修复，前端构建、Rust check、storage 单测、HTTP 行为测试、Tauri dev 启动和浏览器 seed 模式检查均有真实证据。剩余缺口已明确记录为后续 Task 5+ 的目标，不属于本轮全面检查必须一次性完成的内容。
+
+- [ ] Task 5: 补齐下一项核心能力缺口
+  - 目标：根据 Task 4 的结论选择下一个最有价值的能力闭环，例如导入导出、上传下载、Proxy/TLS、Cookie/Auth 或日志缓存。
+  - 独立验证：该能力有明确 UI/Bridge/Core/Data 证据或被清晰标记为不属于当前基础版本。
+  - 完成内容：
+  - 自信度检查：
+
+- [ ] Task 6: 完成最终交付审计前的必要修缮
+  - 目标：处理剩余必须修复的问题，避免最终审计时存在已知阻断项。
+  - 独立验证：相关构建、检查、测试通过。
+  - 完成内容：
+  - 自信度检查：
+
+- [ ] Task 7: 大型全面检查 - debug 循环
+  - 目标：对 Task 5-6 和整体系统做第二轮全面回归。
+  - 独立验证：形成完整的真实证据清单，标记所有已完成、部分完成和不在当前边界内的能力。
+  - 完成内容：
+  - 自信度检查：
+
+- [ ] Task 8: 最终最大的 review 与 goal 完成判定
+  - 目标：从 C 端体验、代码、安全性、数据持久化、错误处理、测试覆盖和原始目标覆盖度做最终审计。
+  - 独立验证：只有当 prompt-to-artifact checklist 全部满足或边界清晰且无必需缺口时，才可标记 goal 完成。
+  - 完成内容：
+  - 自信度检查：
