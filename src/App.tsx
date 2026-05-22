@@ -1749,19 +1749,24 @@ export default function App() {
     }
   };
 
-  const handleCreateRequest = () => {
-    const draft = buildDraftRequest(requests, {
-      collection: activeCollection?.name ?? "Unfiled",
-      collectionFile: activeCollection?.filePath ?? "collections/unfiled.json",
-    });
-
+  const persistDraftRequest = async (draft: RequestRecord) => {
     upsertRequests([draft]);
     setSavedRequestSignatures((current) => ({
       ...current,
       [draft.id]: "",
     }));
     setRequestSaveFeedback(null);
+    await handleSaveRequest(draft);
+  };
+
+  const handleCreateRequest = async () => {
+    const draft = buildDraftRequest(requests, {
+      collection: activeCollection?.name ?? "Unfiled",
+      collectionFile: activeCollection?.filePath ?? "collections/unfiled.json",
+    });
+
     setRequestTab("body");
+    await persistDraftRequest(draft);
   };
 
   const handleCreateCollection = async () => {
@@ -1793,7 +1798,7 @@ export default function App() {
     }
   };
 
-  const handleDuplicateRequest = () => {
+  const handleDuplicateRequest = async () => {
     if (!hasActiveCollectionRequests) {
       return;
     }
@@ -1805,12 +1810,7 @@ export default function App() {
       source: activeRequest,
     });
 
-    upsertRequests([duplicate]);
-    setSavedRequestSignatures((current) => ({
-      ...current,
-      [duplicate.id]: "",
-    }));
-    setRequestSaveFeedback(null);
+    await persistDraftRequest(duplicate);
   };
 
   const handleRenameRequest = async () => {

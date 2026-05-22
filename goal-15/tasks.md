@@ -185,11 +185,52 @@
         - 发现真实缺口时再做最小修复，而不是重新实现整块功能。
   - 自信度检查：当前对 `Task 2` 达到 100% 结束信心。审计结论来自代码阅读、bridge / Rust / storage 链路核对，以及已实际执行并通过的前端测试、Rust storage 测试、构建、格式和 diff 健全性检查，而不是历史印象或未验证推断。
 
-- [ ] Task 3: 实现或修复 `P0-1 Collection / Request CRUD`
+- [x] Task 3: 实现或修复 `P0-1 Collection / Request CRUD`
   - 目标：让 collection 与 request 的新建、重命名、删除、复制、排序与移动形成完整闭环并持久化到本地文件。
   - 独立验证：相关操作跨 UI、bridge、Rust、数据层全部生效，重载后保持，并有测试证据支撑。
   - 完成内容：
-  - 自信度检查：
+    - 已针对 `P0-1` 的真实剩余缺口做最小修复：把 request 的“新建 / 复制”从仅创建前端 draft，升级为立即走 `save_request` 持久化。
+    - 前端实现：
+      - `src/App.tsx`
+        - 新增 `persistDraftRequest(draft)` 辅助方法：
+          - 先把 draft request 放入 store
+          - 建立空 baseline signature
+          - 清空旧的 request save feedback
+          - 立即调用 `handleSaveRequest(draft)` 走 bridge 持久化
+        - `handleCreateRequest` 改为：
+          - 仍然创建 draft request
+          - 保持进入 `body` tab 的既有体验
+          - 然后立即执行 `persistDraftRequest(draft)`
+        - `handleDuplicateRequest` 改为：
+          - 仍然基于 active request 创建 copy
+          - 然后立即执行 `persistDraftRequest(duplicate)`
+    - 这次改动没有重写已有的 rename / delete / move / reorder 逻辑，只补齐了此前 `Task 2` 审计里确认的 request create / duplicate 持久化边界。
+    - 已同步更新前端验证：
+      - `src/App.crud.test.tsx`
+        - 在 `sends create, move, reorder and delete collection/request commands with persisted state updates` 中新增断言：
+          - `New Request` 后会触发 `save_request`，且 payload 名称为 `Untitled Request`
+          - `Duplicate` 后会触发 `save_request`，且 payload 名称为 `Untitled Request copy`
+        - 因为 request 现在会真实留在 `Payments` collection 中，测试也已更新为匹配新的真实持久化结果：
+          - `Payments` collection 的 request 数量从旧预期 `0` 调整为 `1`
+          - 切回 `Payments` 后页面会落到已保存的 `Untitled Request` 编辑器，而不再是“空 collection”视图
+    - 结果上，`P0-1` 当前已满足：
+      - collection：
+        - 新建、重命名、删除、排序
+      - request：
+        - 新建、复制、重命名、删除、排序、跨 collection 移动
+      - 持久化：
+        - 新建 request / 复制 request 不再依赖后续手动保存或 autosave 才落盘
+    - 已运行验证：
+      - `npm test -- --run src/App.crud.test.tsx` 通过
+        - `1` test file, `4` tests passed
+      - `npm test -- --run src/App.params-headers.test.tsx` 通过
+        - `1` test file, `1` test passed
+      - `npm run build` 通过
+      - `git diff --check` 通过
+    - 与 `Task 2` 结合后的证据链：
+      - 前端 create / duplicate 现在已真实触发 `save_request`
+      - bridge / Rust / storage 的 `save_request` 持久化路径和相关 CRUD 测试在前一 task 已完成审计并实际验证通过
+  - 自信度检查：当前对 `Task 3` 达到 100% 结束信心。此前 `P0-1` 唯一显著未闭环的是新建 / 复制 request 默认不立即落盘；现在这条链路已经补齐，并且新行为直接体现在前端自动化测试通过、构建通过和 diff 健全性通过上，没有留下新的已知漏洞。
 
 - [ ] Task 4: 大型全面检查 - CRUD / 持久化 / 数据一致性
   - 目标：围绕前 3 个 task 做一次全面 debug 循环，确认不存在伪持久化、引用丢失、排序错乱和删除后残留。

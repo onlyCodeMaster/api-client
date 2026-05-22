@@ -385,10 +385,26 @@ describe("App P0-1 CRUD flows", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Untitled Request" })).toBeInTheDocument();
     });
+    await waitFor(() => {
+      const nextSaveCall = calls.find(
+        (call) =>
+          call.cmd === "save_request" &&
+          (call.payload as { input?: { name?: string } }).input?.name === "Untitled Request",
+      );
+      expect(nextSaveCall).toBeTruthy();
+    });
 
     await user.click(screen.getByRole("button", { name: "Duplicate" }));
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Untitled Request copy" })).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      const duplicateSaveCall = calls.find(
+        (call) =>
+          call.cmd === "save_request" &&
+          (call.payload as { input?: { name?: string } }).input?.name === "Untitled Request copy",
+      );
+      expect(duplicateSaveCall).toBeTruthy();
     });
 
     await user.click(screen.getByRole("button", { name: "Rename Req" }));
@@ -477,11 +493,11 @@ describe("App P0-1 CRUD flows", () => {
 
     await user.click(
       screen.getByRole("button", {
-        name: collectionTogglePattern("Payments", "payments.json", 0),
+        name: collectionTogglePattern("Payments", "payments.json", 1),
       }),
     );
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Payments" })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Untitled Request" })).toBeInTheDocument();
     });
 
     await user.click(screen.getByRole("button", { name: "Delete Col" }));
