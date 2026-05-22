@@ -769,12 +769,20 @@ export default function App() {
               ],
             };
   const normalizedExplorerSearch = explorerSearch.trim().toLowerCase();
+  const isExplorerFiltering = normalizedExplorerSearch.length > 0;
   const filteredCollectionSections =
-    normalizedExplorerSearch.length === 0
+    !isExplorerFiltering
       ? collectionSections
       : collectionSections
           .map((section) => {
-            const collectionSearchTarget = [section.title, section.subtitle].join(" ").toLowerCase();
+            const collectionSearchTarget = [
+              section.title,
+              section.subtitle,
+              section.group,
+              section.filePath,
+            ]
+              .join(" ")
+              .toLowerCase();
             if (collectionSearchTarget.includes(normalizedExplorerSearch)) {
               return section;
             }
@@ -785,6 +793,8 @@ export default function App() {
                 const searchTarget = [
                   section.title,
                   section.subtitle,
+                  section.group,
+                  section.filePath,
                   request.name,
                   request.method,
                   request.url,
@@ -799,16 +809,37 @@ export default function App() {
           .filter(
             (section) =>
               section.requests.length > 0 ||
-              [section.title, section.subtitle].join(" ").toLowerCase().includes(normalizedExplorerSearch),
+              [section.title, section.subtitle, section.group, section.filePath]
+                .join(" ")
+                .toLowerCase()
+                .includes(normalizedExplorerSearch),
           );
   const filteredHistory =
-    normalizedExplorerSearch.length === 0
+    !isExplorerFiltering
       ? history
       : history.filter((item) =>
-          [item.title, item.meta].join(" ").toLowerCase().includes(normalizedExplorerSearch),
+          [
+            item.title,
+            item.meta,
+            item.method,
+            item.url,
+            safePathname(item.url),
+            item.status,
+            item.requestName,
+            item.collection,
+            item.environment.name,
+            item.environment.source,
+            item.createdAt,
+            ...item.params.flatMap((row) => [row.key, row.value, row.description]),
+            ...item.headers.flatMap((row) => [row.key, row.value, row.description]),
+            ...item.environment.vars.flatMap((row) => [row.key, row.value]),
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes(normalizedExplorerSearch),
         );
   const filteredEnvironments =
-    normalizedExplorerSearch.length === 0
+    !isExplorerFiltering
       ? displayEnvironments
       : displayEnvironments.filter((environment) =>
           [
@@ -834,6 +865,10 @@ export default function App() {
       : activeSidebarPanel === "history"
         ? "No matching history entries."
         : "No matching environments or variables.";
+  const visibleHistory = activeSidebarPanel === "history" ? filteredHistory : history;
+  const historyPanelEmptyMessage = isExplorerFiltering
+    ? "No matching history entries."
+    : "Send a request to start building a replayable request history.";
   const visibleCollectionItemCount = filteredCollectionSections.reduce(
     (count, section) => count + section.requests.length,
     0,
@@ -3847,11 +3882,13 @@ export default function App() {
                   <span>History</span>
                   <h2>Recent Request Sessions</h2>
                 </div>
-                <span className="workspace-panel__meta">{history.length} sessions</span>
+                <span className="workspace-panel__meta">
+                  {visibleHistory.length} session{visibleHistory.length === 1 ? "" : "s"}
+                </span>
               </div>
               <div className="workspace-panel__grid">
-                {hasHistory ? (
-                  history.map((item) => (
+                {visibleHistory.length > 0 ? (
+                  visibleHistory.map((item) => (
                     <article
                       key={item.id}
                       className={`workspace-card workspace-card--interactive history-session-card ${
@@ -3903,8 +3940,8 @@ export default function App() {
                   ))
                 ) : (
                   <article className="workspace-card workspace-card--empty">
-                    <strong>No history yet</strong>
-                    <small>Send a request to start building a replayable request history.</small>
+                    <strong>{isExplorerFiltering ? "No matching history entries" : "No history yet"}</strong>
+                    <small>{historyPanelEmptyMessage}</small>
                   </article>
                 )}
               </div>

@@ -343,11 +343,66 @@
       - 在当前代码与验证证据下，`P0-2` 已达到“管理不再只限于切换和保存现有项，且变更真实持久化”的完成标准。
   - 自信度检查：当前对 `Task 5` 达到 100% 结束信心。原因是这轮不是停留在复述已有实现，而是找到了一个真实的 rename 行为缺陷，完成了最小修复，并通过新增的前端回归测试、现有 Rust environment 存储测试、生产构建和 diff 健全性检查共同证明链路成立，没有留下新的已知漏洞。
 
-- [ ] Task 6: 实现或修复 `P0-3 Explorer 搜索过滤`
+- [x] Task 6: 实现或修复 `P0-3 Explorer 搜索过滤`
   - 目标：让 Collections、History、Environments 的搜索/过滤真正实时生效。
   - 独立验证：输入搜索词时列表即时过滤，空结果有清晰反馈，清空后列表恢复。
   - 完成内容：
-  - 自信度检查：
+    - 已按 goal 要求重新全量阅读 `goal-15/input.md`、`goal-15/plan.md`、`goal-15/tasks.md`，并针对 `P0-3` 单独复核 explorer 搜索的前端实现与当前验证覆盖。
+    - 复核中确认 `src/App.tsx` 原本已经具备三类过滤入口：
+      - `filteredCollectionSections`
+      - `filteredHistory`
+      - `filteredEnvironments`
+      - 以及 `explorerListEmpty / explorerEmptyMessage`
+    - 但这轮没有止步于“代码里有过滤变量”，而是找到了一个真实缺口：
+      - History 左侧 sidebar 确实使用了 `filteredHistory`
+      - 右侧 workspace panel 却仍然直接渲染完整 `history`
+      - 结果是：输入搜索词时，History 只能算“半过滤”，右侧仍会显示所有 history session，不满足“搜索/过滤真正生效”
+    - 已完成前端修复：
+      - `src/App.tsx`
+        - 新增 `isExplorerFiltering`，统一驱动三类 explorer 过滤
+        - Collections 搜索目标补充了：
+          - `group`
+          - `filePath`
+        - History 搜索目标补充了：
+          - `method / url / safePathname / status`
+          - `requestName / collection / createdAt`
+          - `environment.name / environment.source / environment vars`
+          - `params / headers` 的 key、value、description
+        - History 右侧 workspace panel 现在改为使用 `visibleHistory`（即当前过滤结果），不再无视搜索条件
+        - History panel 的 session 数量与空状态文案现在也会跟随过滤结果同步更新：
+          - 有搜索且无结果时显示 `No matching history entries`
+          - 无历史时保留原本的 `No history yet`
+    - 已新增专门的前端回归测试：
+      - `src/App.explorer-search.test.tsx`
+        - `filters collections by collection and request content with empty feedback`
+          - 证明 collections 搜索会实时收敛到匹配 request，空结果时显示 `No matching requests or collections.`
+        - `filters history in both sidebar and workspace panel with empty feedback`
+          - 证明 history 搜索现在会同时过滤 sidebar 和右侧 history panel，而不是只过滤一边
+          - 也证明可按 history 关联的 environment 数据命中搜索
+        - `filters environments by names and variables with empty feedback`
+          - 证明 environments 搜索会按环境名与变量内容实时过滤，空结果时显示 `No matching environments or variables.`
+    - 结果上，`P0-3` 当前已满足：
+      - Collections：
+        - 搜索 collection 元信息和 request 内容会即时过滤
+      - History：
+        - 搜索结果会同时作用于 sidebar 和 workspace panel
+      - Environments：
+        - 搜索环境名、来源路径和变量 key/value 会即时过滤
+      - 空结果：
+        - 三类视图都会显示 `No results` 和各自对应的解释文案
+      - 清空恢复：
+        - 三类视图清空搜索词后都会恢复完整列表
+    - 已完成本轮验证：
+      - `npm test -- --run src/App.explorer-search.test.tsx` 通过
+        - `1` test file, `3` tests passed
+      - `npm test -- --run src/App.crud.test.tsx src/App.explorer-search.test.tsx` 通过
+        - `2` test files, `8` tests passed
+      - `npm run build` 通过
+      - `git diff --check` 通过
+    - 结论：
+      - Explorer 搜索现在不只是“有过滤变量”，而是在 Collections、History、Environments 三类视图上都具备真实、可见、可回归验证的过滤行为。
+      - 特别是 History 已不再存在“一边过滤、一边不变”的伪完成状态。
+  - 自信度检查：当前对 `Task 6` 达到 100% 结束信心。原因是这轮找到了一个真实的 History 过滤缺口，完成了最小修复，并通过新增的专门 explorer 搜索测试、现有 CRUD 回归测试、生产构建和 diff 健全性检查证明三类 explorer 搜索都已真实生效，没有留下新的已知漏洞。
 
 - [ ] Task 7: 实现或修复 `P0-4 请求编辑器基础闭环`
   - 目标：补齐 Params/Headers 行删除、空行聚焦、dirty 状态、save 成功/失败反馈。
