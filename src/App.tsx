@@ -1586,6 +1586,7 @@ export default function App() {
       ...activeRequest,
       bodyContentType: value,
     });
+    scheduleRequestAutosave();
   };
 
   const handleRequestBodyModeChange = (bodyMode: RequestRecord["bodyMode"]) => {
@@ -1605,6 +1606,7 @@ export default function App() {
     if (shouldSeedRows) {
       focusEditorRow("body", seededRows[0]?.id ?? "");
     }
+    scheduleRequestAutosave();
   };
 
   const handleUpdateBodyRow = (
@@ -1622,6 +1624,7 @@ export default function App() {
         row.id === rowId ? { ...row, [field]: value } : row,
       ),
     });
+    scheduleRequestAutosave();
   };
 
   const handleUpdateBodyRowFieldType = (
@@ -1638,6 +1641,7 @@ export default function App() {
         row.id === rowId ? { ...row, fieldType } : row,
       ),
     });
+    scheduleRequestAutosave();
   };
 
   const handleToggleBodyRow = (rowId: string) => {
@@ -1651,6 +1655,7 @@ export default function App() {
         row.id === rowId ? { ...row, enabled: !row.enabled } : row,
       ),
     });
+    scheduleRequestAutosave();
   };
 
   const handleAddBodyRow = () => {
@@ -1683,6 +1688,7 @@ export default function App() {
       bodyRows: next.rows,
     });
     focusEditorRow("body", next.focusRowId);
+    scheduleRequestAutosave();
   };
 
   const handleAddParamRow = () => {
@@ -1719,6 +1725,7 @@ export default function App() {
     }
 
     focusEditorRow("params", removeParamRow(rowId));
+    scheduleRequestAutosave();
   };
 
   const handleRemoveHeaderRow = (rowId: string) => {
@@ -1727,6 +1734,7 @@ export default function App() {
     }
 
     focusEditorRow("headers", removeHeaderRow(rowId));
+    scheduleRequestAutosave();
   };
 
   const handleRestoreHistory = (historyItem: (typeof history)[number]) => {
@@ -3145,9 +3153,10 @@ export default function App() {
                   <select
                     className="method-select"
                     value={activeRequest.method}
-                    onChange={(event) =>
-                      updateRequestMethod(event.target.value as RequestMethod)
-                    }
+                    onChange={(event) => {
+                      updateRequestMethod(event.target.value as RequestMethod);
+                      scheduleRequestAutosave();
+                    }}
                   >
                     {requestMethods.map((method) => (
                       <option key={method} value={method}>
@@ -3256,7 +3265,10 @@ export default function App() {
                             <input
                               type="checkbox"
                               checked={row.enabled}
-                              onChange={() => toggleParamRow(row.id)}
+                              onChange={() => {
+                                toggleParamRow(row.id);
+                                scheduleRequestAutosave();
+                              }}
                             />
                           </label>
                           <input
@@ -3321,7 +3333,10 @@ export default function App() {
                             <input
                               type="checkbox"
                               checked={row.enabled}
-                              onChange={() => toggleHeaderRow(row.id)}
+                              onChange={() => {
+                                toggleHeaderRow(row.id);
+                                scheduleRequestAutosave();
+                              }}
                             />
                           </label>
                           <input

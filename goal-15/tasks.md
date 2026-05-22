@@ -404,11 +404,76 @@
       - 特别是 History 已不再存在“一边过滤、一边不变”的伪完成状态。
   - 自信度检查：当前对 `Task 6` 达到 100% 结束信心。原因是这轮找到了一个真实的 History 过滤缺口，完成了最小修复，并通过新增的专门 explorer 搜索测试、现有 CRUD 回归测试、生产构建和 diff 健全性检查证明三类 explorer 搜索都已真实生效，没有留下新的已知漏洞。
 
-- [ ] Task 7: 实现或修复 `P0-4 请求编辑器基础闭环`
+- [x] Task 7: 实现或修复 `P0-4 请求编辑器基础闭环`
   - 目标：补齐 Params/Headers 行删除、空行聚焦、dirty 状态、save 成功/失败反馈。
   - 独立验证：编辑器具备基础可用性，编辑、保存、失败回滚和状态提示都可验证。
   - 完成内容：
-  - 自信度检查：
+    - 已按 goal 要求重新全量阅读 `goal-15/input.md`、`goal-15/plan.md`、`goal-15/tasks.md`，并针对 `P0-4` 单独复核 request editor 的保存状态、焦点管理和自动保存链路。
+    - 复核结论不是“功能不存在”，而是主干已经具备：
+      - `handleRemoveParamRow / handleRemoveHeaderRow`
+      - `pendingEditorFocus / focusEditorRow`
+      - `requestDirty / requestStatus / requestSaveFeedback`
+      - `handleSaveRequest / scheduleRequestAutosave`
+    - 但这轮确认了一个真实可用性缺口：
+      - editor 里很多“结构性编辑”会让请求变脏，却不会触发 autosave 调度
+      - 典型包括：
+        - method 切换
+        - Params / Headers 删除
+        - Params / Headers 排序
+        - Params / Headers bulk apply
+        - structured body 的开关、字段类型、key/value 变更、行删除
+      - 结果是：当前 autosave 更像“改文字会存，改结构不一定会存”，这会让请求编辑器的基本闭环出现不一致。
+    - 已完成前端修复：
+      - `src/App.tsx`
+        - 为以下编辑动作补齐 `scheduleRequestAutosave()`：
+          - request method 切换
+          - body content type 更新
+          - body mode 切换
+          - structured body row 的 key/value 编辑
+          - structured body row 的启用切换 / field type 切换 / 删除
+          - Params / Headers 删除
+          - Params / Headers 排序
+          - Params / Headers bulk apply
+        - 这次没有给“新增空白行”直接接 autosave，避免仅添加空白占位行就被保存链路立刻清洗掉，保留当前 editor 的可编辑体验。
+    - 已新增专门的前端回归测试：
+      - `src/App.request-editor.test.tsx`
+        - `focuses the next editable row and autosaves param/header deletions`
+          - 证明 Params 删除后焦点会落到下一个可编辑 key 输入框
+          - 证明 Headers 删除到空时会生成并聚焦新的空白行
+          - 证明这类结构性删除在 auto-save 打开时会真实触发 `save_request`
+        - `shows dirty, error, and success request save states`
+          - 证明请求编辑后会显示 `Unsaved changes`
+          - 证明保存失败时会显示明确错误反馈
+          - 证明再次编辑后错误提示会回退为 dirty 状态
+          - 证明后续保存成功后会显示 `Request saved to collection`
+        - `keeps blank body rows local until edited and autosaves body row removals`
+          - 证明新增空白 body 行不会被 autosave 立即清洗掉
+          - 证明删除 body 行时会真实触发 `save_request`
+    - 与当前实现结合后，`P0-4` 当前已满足：
+      - Params / Headers 行删除：
+        - 删除动作存在
+        - 删除后焦点会落到下一个可编辑行或新的空白行
+      - 空行聚焦：
+        - Params / Headers / structured body 都有 `pendingEditorFocus` 驱动的聚焦逻辑
+      - dirty 状态：
+        - 修改后会显示 `Unsaved changes`
+        - 保存成功后回到已保存状态
+      - save 成功 / 失败反馈：
+        - 成功显示 `Request saved to collection`
+        - 失败显示 bridge 返回的明确错误消息
+      - 结构性编辑闭环：
+        - 不再只限于“改文本内容”才能走 autosave，结构性调整也能进入保存链路
+    - 已完成本轮验证：
+      - `npm test -- --run src/App.request-editor.test.tsx` 通过
+        - `1` test file, `3` tests passed
+      - `npm test -- --run src/App.request-editor.test.tsx src/App.params-headers.test.tsx` 通过
+        - `2` test files, `4` tests passed
+      - `npm run build` 通过
+      - `git diff --check` 通过
+    - 结论：
+      - request editor 现在不只是“能改值”，而是对删除、焦点、dirty/save 状态和失败反馈都有直接证据，而且结构性编辑也被纳入了真实保存链路。
+      - 本轮没有再发现 “删除了但不存”“报错后状态卡住” 或 “空白行焦点丢失” 这类基础闭环问题。
+  - 自信度检查：当前对 `Task 7` 达到 100% 结束信心。原因是这轮找到了一个真实的 autosave 一致性缺口，完成了最小修复，并通过新增的 request-editor 专门测试、现有 params/headers 回归测试、生产构建和 diff 健全性检查证明编辑器基础闭环已经成立，没有留下新的已知漏洞。
 
 - [ ] Task 8: 大型全面检查 - Explorer / Environment / Editor
   - 目标：围绕 Task 5 到 Task 7 做第二次全面 debug 循环，确认搜索、编辑和保存反馈真实可靠。
