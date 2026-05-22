@@ -325,6 +325,31 @@ function slugifyEnvironmentName(name: string) {
   return slug || "environment";
 }
 
+function deriveEnvironmentRenamePath(currentSource: string, nextName: string) {
+  const trimmedSource = currentSource.trim();
+  const fallbackPath = `environments/${slugifyEnvironmentName(nextName)}.json`;
+  if (!trimmedSource) {
+    return fallbackPath;
+  }
+
+  const lastSeparator = Math.max(
+    trimmedSource.lastIndexOf("/"),
+    trimmedSource.lastIndexOf("\\"),
+  );
+  const directory =
+    lastSeparator >= 0 ? trimmedSource.slice(0, lastSeparator + 1) : "environments/";
+  const currentFileName =
+    lastSeparator >= 0 ? trimmedSource.slice(lastSeparator + 1) : trimmedSource;
+  const extensionMatch = currentFileName.match(/(\.[^.]+)$/);
+  const extension = extensionMatch?.[1]?.toLowerCase();
+  const safeExtension =
+    extension === ".json" || extension === ".yaml" || extension === ".yml"
+      ? extension
+      : ".json";
+
+  return `${directory}${slugifyEnvironmentName(nextName)}${safeExtension}`;
+}
+
 function normalizeStoredRequest(request: PersistedRequest): RequestRecord {
   return {
     id: request.id,
@@ -1383,7 +1408,10 @@ export default function App() {
       const saved = await renameEnvironment({
         currentFilePath: activeEnvironment.source,
         newName: environmentActionValue.trim(),
-        newFilePath: `environments/${slugifyEnvironmentName(environmentActionValue)}.json`,
+        newFilePath: deriveEnvironmentRenamePath(
+          activeEnvironment.source,
+          environmentActionValue,
+        ),
       });
 
       const normalizedEnvironment = normalizeEnvironmentRecord(

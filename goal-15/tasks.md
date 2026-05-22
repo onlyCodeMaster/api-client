@@ -281,11 +281,67 @@
       - 本轮没有再发现 request/collection 删除残留、排序丢失、组织元数据丢失或 workspace 串写的问题。
   - 自信度检查：当前对 `Task 4` 达到 100% 结束信心。原因不是主观判断，而是已经找到真实缺陷、完成最小修复、补上专门回归测试，并实际通过 Rust 存储测试、前端 CRUD 测试、生产构建、格式检查和 diff 健全性检查；同时也对 `recentWorkspace` 的运行时语义做了边界确认，避免引入新的“读写 workspace 不一致”回归。
 
-- [ ] Task 5: 实现或修复 `P0-2 Environment CRUD`
+- [x] Task 5: 实现或修复 `P0-2 Environment CRUD`
   - 目标：补齐 environment 的新建、重命名、删除，以及变量新增、删除、编辑能力。
   - 独立验证：environment 管理不再只限于切换和保存现有项，且变更持久化。
   - 完成内容：
-  - 自信度检查：
+    - 已按 goal 要求重新全量阅读 `goal-15/input.md`、`goal-15/plan.md`、`goal-15/tasks.md`，并针对 `P0-2` 单独复核前端、bridge、Rust、数据层和现有自动化测试。
+    - 复核结论不是“整块缺失”，而是主能力已完成，但前端 rename 环境存在一个真实边界漏洞：
+      - `src-tauri/src/storage.rs` 已支持 `json / yaml / yml` 环境文件，并允许 rename 时保留或变更目标文件路径。
+      - 但 `src/App.tsx` 里的 `handleRenameEnvironment` 之前固定把目标路径写成 `environments/<slug>.json`。
+      - 结果是：如果当前环境本来是 `yaml / yml` 文件，或者位于 `environments/` 下的子目录，只是做 rename，前端也会把它偷偷迁移到根目录并改成 `.json`，这会破坏原始文件组织和格式。
+    - 已完成前端修复：
+      - `src/App.tsx`
+        - 新增 `deriveEnvironmentRenamePath(currentSource, nextName)`：
+          - 保留当前 environment 文件所在目录
+          - 保留当前 environment 的 `json / yaml / yml` 扩展名
+          - 仅替换 slugified 文件名；当前 source 为空时才回退到 `environments/<slug>.json`
+        - `handleRenameEnvironment` 现在会调用该 helper，而不再无条件生成 `.json` 目标路径
+    - 已补齐前端级回归测试：
+      - `src/App.crud.test.tsx`
+        - 新增 `preserves environment folder and file format when renaming`
+        - 该测试使用 `environments/team/shared-qa.yaml` 作为现有 environment，断言 rename 后 bridge payload 为：
+          - `currentFilePath: environments/team/shared-qa.yaml`
+          - `newFilePath: environments/team/shared-qa-stable.yaml`
+        - 这条断言直接证明：
+          - rename 不会把子目录环境文件平铺回根目录
+          - rename 不会把 `yaml` 文件偷偷转成 `json`
+    - 与此前已存在的能力和证据链结合后，`P0-2` 当前已满足：
+      - create environment：
+        - `handleCreateEnvironment`
+        - `saveEnvironment`
+        - `storage::save_environment`
+      - rename environment：
+        - `handleRenameEnvironment`
+        - `renameEnvironment`
+        - `storage::rename_environment`
+        - 且现在已保留原目录与原格式
+      - delete environment：
+        - `handleDeleteEnvironment`
+        - `deleteEnvironment`
+        - `storage::delete_environment`
+      - var add / remove / edit：
+        - `handleAddEnvironmentVar`
+        - `handleRemoveEnvironmentVar`
+        - `updateEnvironmentVar / addEnvironmentVar / removeEnvironmentVar`
+        - `handleSaveEnvironment`
+    - 已完成本轮验证：
+      - `npm test -- --run src/App.crud.test.tsx` 通过
+        - `1` test file, `5` tests passed
+      - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过
+        - `31` tests passed
+        - 其中包含 environment 相关存储验证：
+          - `list_environments_reads_json_yaml_and_yml_files`
+          - `save_environment_writes_json_yaml_and_yml_by_extension`
+          - `rename_environment_updates_name_and_file_path`
+          - `rename_environment_rejects_existing_target_file`
+          - `delete_environment_removes_file`
+      - `npm run build` 通过
+      - `git diff --check` 通过
+    - 结论：
+      - environment CRUD 现在不只是“能新建/保存/删除”，也不会在 rename 时破坏已有 environment 文件的目录结构和格式。
+      - 在当前代码与验证证据下，`P0-2` 已达到“管理不再只限于切换和保存现有项，且变更真实持久化”的完成标准。
+  - 自信度检查：当前对 `Task 5` 达到 100% 结束信心。原因是这轮不是停留在复述已有实现，而是找到了一个真实的 rename 行为缺陷，完成了最小修复，并通过新增的前端回归测试、现有 Rust environment 存储测试、生产构建和 diff 健全性检查共同证明链路成立，没有留下新的已知漏洞。
 
 - [ ] Task 6: 实现或修复 `P0-3 Explorer 搜索过滤`
   - 目标：让 Collections、History、Environments 的搜索/过滤真正实时生效。

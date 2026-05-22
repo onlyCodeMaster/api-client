@@ -719,4 +719,92 @@ describe("App P0-1 CRUD flows", () => {
     expect(calls.some((call) => call.cmd === "rename_environment")).toBe(true);
     expect(calls.some((call) => call.cmd === "delete_environment")).toBe(true);
   });
+
+  it("preserves environment folder and file format when renaming", async () => {
+    const calls: Array<{ cmd: string; payload: unknown }> = [];
+    const collections = initialCollections();
+    const environments: MockEnvironment[] = [
+      {
+        name: "Shared QA",
+        filePath: "environments/team/shared-qa.yaml",
+        vars: [
+          { key: "base_url", value: "https://qa.example.com" },
+          { key: "proxy", value: "system" },
+          { key: "cookie_jar", value: "workspace_qa" },
+        ],
+      },
+    ];
+
+    mockIPC((cmd, payload) => {
+      calls.push({ cmd, payload });
+
+      switch (cmd) {
+        case "plugin:event|listen":
+          return 1;
+        case "load_bootstrap_state":
+          return {
+            ...bootstrapState,
+            collections: cloneCollections(collections),
+            environments: cloneEnvironments(environments),
+          };
+        case "rename_environment": {
+          const input = (payload as {
+            input: { currentFilePath: string; newName: string; newFilePath: string };
+          }).input;
+          const environment = findEnvironment(environments, input.currentFilePath);
+          environment.name = input.newName;
+          environment.filePath = input.newFilePath;
+          return { ...environment };
+        }
+        default:
+          return null;
+      }
+    }, { shouldMockEvents: true });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Workspace Explorer")).toBeInTheDocument();
+    });
+
+    const user = userEvent.setup();
+
+    await user.click(screen.getAllByRole("button", { name: "Environments" })[0]);
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Shared QA" })).toBeInTheDocument();
+    });
+
+    const environmentPanel = screen
+      .getByRole("heading", { name: "Shared QA" })
+      .closest("section");
+    if (!environmentPanel) {
+      throw new Error("shared qa environment panel not found");
+    }
+
+    await user.click(within(environmentPanel).getByRole("button", { name: "Rename Env" }));
+    const renameEnvironmentCard = getActionCard("Rename Environment");
+    const renameEnvironmentInput = within(renameEnvironmentCard).getByPlaceholderText(
+      "Enter a name",
+    ) as HTMLInputElement;
+    await user.clear(renameEnvironmentInput);
+    await user.type(renameEnvironmentInput, "Shared QA Stable");
+    await user.click(within(renameEnvironmentCard).getByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Shared QA Stable" })).toBeInTheDocument();
+    });
+
+    const renameEnvironmentCall = calls.find((call) => call.cmd === "rename_environment");
+    expect(renameEnvironmentCall?.payload).toMatchObject({
+      input: {
+        currentFilePath: "environments/team/shared-qa.yaml",
+        newName: "Shared QA Stable",
+        newFilePath: "environments/team/shared-qa-stable.yaml",
+      },
+    });
+  });
 });
