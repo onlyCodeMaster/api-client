@@ -525,11 +525,56 @@
       - 本轮没有再发现 explorer 过滤失真、environment 保存滞后、或 editor 状态提示失真的新问题。
   - 自信度检查：当前对 `Task 8` 达到 100% 结束信心。原因是这轮不是只依赖既有绿灯，而是通过代码复核抓到了 environment autosave 的真实缺陷，完成了最小修复，并用新增专门测试、现有 explorer/editor 回归、生产构建和 diff 健全性检查共同证明第二次大检查已经闭环，没有留下新的已知漏洞。
 
-- [ ] Task 9: 实现或修复 `P0-5 History 基础回放`
+- [x] Task 9: 实现或修复 `P0-5 History 基础回放`
   - 目标：让用户可以从 history 恢复请求、快速 resend，并看到真实状态与时间。
   - 独立验证：History 不再只是静态展示列表，而是可操作的回放入口。
   - 完成内容：
-  - 自信度检查：
+    - 已按 goal 要求重新全量阅读 `goal-15/input.md`、`goal-15/plan.md`、`goal-15/tasks.md` 后，围绕 `P0-5 History 基础回放` 做了专门审计与修复。
+    - 本轮确认现有主链路本身已经存在：
+      - `src/App.tsx`
+        - `handleRestoreHistory`
+        - `handleResendHistory`
+      - `src/store/requestStore.ts`
+        - `upsertRequestFromHistory`
+        - `sendActiveRequest`
+      - 也即：
+        - 点击 history 可恢复 replay request / replay environment
+        - 点击 resend 会基于 replay 快照真实发送请求
+        - 成功发送后会写入新的 history entry，并带上真实状态、耗时与时间
+    - 本轮抓到并修复了一个真实 UX 缺陷：
+      - history restore 之后，新生成的 replay request / replay environment 此前没有建立保存基线。
+      - 结果是用户刚点击 `Restore`，界面就会把 replay 请求和 replay 环境都显示成 dirty / unsaved，像是“刚恢复就已经被改脏”。
+      - 这会直接破坏 `P0-5` 的基础回放体验，也会让后续 resend 的心智变差。
+    - 已完成前端修复：
+      - `src/App.tsx`
+        - 在 `handleRestoreHistory` 中补上 replay request 与 replay environment 的 baseline signature 初始化：
+          - `savedRequestSignatures[replayRequest.id] = serializeEditableRequest(replayRequest)`
+          - `savedEnvironmentSignatures[replayEnvironment.id] = serializeEnvironment(replayEnvironment)`
+        - restore 后会同步清空旧的 request / environment save feedback，避免把上一次保存提示误带到 replay 会话里。
+        - restore 后会清空 store 里的 `lastError`，避免历史错误残留误导当前 replay 会话。
+      - 修复结果：
+        - `Restore` 后 replay request 立即是干净状态，显示 `All changes saved`
+        - replay environment 立即是干净状态，显示 `Environment saved`
+        - `Resend` 发送的就是 replay 快照本身，而不是旧 active request / environment 的残留状态
+    - 已新增专门前端回归：
+      - `src/App.history-replay.test.tsx`
+        - `restores a history session into a clean replay request and replay environment`
+          - 直接证明 restore 后 URL / params / 环境值被正确恢复
+          - 直接证明 replay request / replay environment 不会一恢复就变成 unsaved
+        - `resends a restored history session with its replay snapshot and records fresh status and time`
+          - 直接证明 resend 使用的是 replay request id、replay environment、历史 params / headers / auth / body 快照
+          - 直接证明 resend 成功后会展示真实 `201 Created`、`19 ms`，并把新的 session 追加回 history
+    - 已完成本轮验证：
+      - `npm test -- --run src/App.history-replay.test.tsx` 通过
+        - `1` test file, `2` tests passed
+      - `npm test -- --run src/App.crud.test.tsx src/App.explorer-search.test.tsx src/App.request-editor.test.tsx src/App.environment-autosave.test.tsx src/App.history-replay.test.tsx` 通过
+        - `5` test files, `15` tests passed
+      - `npm run build` 通过
+      - `git diff --check` 通过
+    - 结论：
+      - `P0-5` 在当前代码下已经不再只是“可以展示历史列表”，而是具备可恢复、可重发、状态/耗时可追踪的真实回放能力。
+      - 本轮修复的是一个会直接伤害用户信任感的状态基线问题，而不是只补测试不修行为。
+  - 自信度检查：当前对 `Task 9` 达到 100% 结束信心。原因是这轮先确认了 history replay 主链路已经存在，再针对 restore 后立即 dirty 的真实缺陷做了最小修复，并用新增专门测试、相关回归集合、生产构建和 diff 健全性检查共同证明 replay 恢复与 resend 体验已经闭环，没有留下新的已知漏洞。
 
 - [ ] Task 10: 实现或修复 `P0-6 首次启动与空状态`
   - 目标：在无 collection、无 environment、无 history 的情况下，仍能顺利进入可操作状态并得到明确引导。

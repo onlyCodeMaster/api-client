@@ -1785,6 +1785,30 @@ export default function App() {
   const handleRestoreHistory = (historyItem: (typeof history)[number]) => {
     setActiveHistory(historyItem.id);
     const replayRequestId = upsertRequestFromHistory(historyItem);
+    const replayEnvironmentId = `${historyItem.environment.id}-history-${historyItem.id}`;
+    const latestState = useRequestStore.getState();
+    const replayRequest = latestState.requests.find((request) => request.id === replayRequestId);
+    const replayEnvironment = latestState.environments.find(
+      (environment) => environment.id === replayEnvironmentId,
+    );
+
+    if (replayRequest) {
+      setSavedRequestSignatures((current) => ({
+        ...current,
+        [replayRequest.id]: serializeEditableRequest(replayRequest),
+      }));
+    }
+
+    if (replayEnvironment) {
+      setSavedEnvironmentSignatures((current) => ({
+        ...current,
+        [replayEnvironment.id]: serializeEnvironment(replayEnvironment),
+      }));
+    }
+
+    setRequestSaveFeedback(null);
+    setEnvironmentSaveFeedback(null);
+    useRequestStore.setState({ lastError: "" });
     setRequestTab("params");
     return replayRequestId;
   };
