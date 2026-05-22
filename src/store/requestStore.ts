@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { sendRequest } from "../lib/tauri";
+import { sendRequest, type RequestBodyMode as PersistedRequestBodyMode } from "../lib/tauri";
 
 export type RequestMethod =
   | "GET"
@@ -24,6 +24,17 @@ export type EnvironmentVar = {
   value: string;
 };
 
+export type RequestBodyMode = PersistedRequestBodyMode;
+export type RequestBodyFieldType = "text" | "file";
+
+export type RequestBodyRow = {
+  id: string;
+  key: string;
+  value: string;
+  enabled: boolean;
+  fieldType: RequestBodyFieldType;
+};
+
 export type EnvironmentRecord = {
   id: string;
   name: string;
@@ -41,6 +52,9 @@ export type RequestRecord = {
   params: KeyValueRow[];
   headers: KeyValueRow[];
   body: string;
+  bodyMode: RequestBodyMode;
+  bodyContentType: string;
+  bodyRows: RequestBodyRow[];
   authType: AuthType;
   authToken: string;
 };
@@ -87,6 +101,9 @@ export type HistoryRecord = {
   params: KeyValueRow[];
   headers: KeyValueRow[];
   body: string;
+  bodyMode: RequestBodyMode;
+  bodyContentType: string;
+  bodyRows: RequestBodyRow[];
   authType: AuthType;
   authToken: string;
   environment: EnvironmentRecord;
@@ -195,9 +212,25 @@ const scratchRequest: RequestRecord = {
   params: [],
   headers: [],
   body: "",
+  bodyMode: "raw",
+  bodyContentType: "",
+  bodyRows: [],
   authType: "none",
   authToken: "",
 };
+
+function normalizeBodyRows(
+  rows: Array<{ key: string; value: string; enabled: boolean; fieldType: string }>,
+  prefix: string,
+): RequestBodyRow[] {
+  return rows.map((row, index) => ({
+    id: `${prefix}-body-${index + 1}-${row.key || "row"}`,
+    key: row.key,
+    value: row.value,
+    enabled: row.enabled,
+    fieldType: row.fieldType === "file" ? "file" : "text",
+  }));
+}
 
 export function makeScratchEnvironment(): EnvironmentRecord {
   return {
@@ -254,6 +287,9 @@ const initialRequests: RequestRecord[] = [
       },
     ],
     body: "",
+    bodyMode: "raw",
+    bodyContentType: "",
+    bodyRows: [],
     authType: "bearer",
     authToken: "{{secret.prod_token}}",
   },
@@ -289,6 +325,9 @@ const initialRequests: RequestRecord[] = [
   },
   "preview": true
 }`,
+    bodyMode: "json",
+    bodyContentType: "application/json",
+    bodyRows: [],
     authType: "bearer",
     authToken: "{{secret.prod_token}}",
   },
@@ -308,6 +347,9 @@ const initialRequests: RequestRecord[] = [
   "email": "dev@example.com",
   "password": "••••••••"
 }`,
+    bodyMode: "json",
+    bodyContentType: "application/json",
+    bodyRows: [],
     authType: "none",
     authToken: "",
   },
@@ -401,6 +443,9 @@ const initialHistory: HistoryRecord[] = [
       },
     ],
     body: "",
+    bodyMode: "raw",
+    bodyContentType: "",
+    bodyRows: [],
     authType: "bearer",
     authToken: "{{secret.prod_token}}",
     environment: initialEnvironments[0],
@@ -426,6 +471,9 @@ const initialHistory: HistoryRecord[] = [
   "email": "dev@example.com",
   "password": "••••••••"
 }`,
+    bodyMode: "json",
+    bodyContentType: "application/json",
+    bodyRows: [],
     authType: "none",
     authToken: "",
     environment: initialEnvironments[0],
@@ -467,6 +515,9 @@ const initialHistory: HistoryRecord[] = [
   },
   "preview": true
 }`,
+    bodyMode: "json",
+    bodyContentType: "application/json",
+    bodyRows: [],
     authType: "bearer",
     authToken: "{{secret.prod_token}}",
     environment: initialEnvironments[0],
@@ -730,6 +781,12 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
         id: `${replayRequestId}-header-${index + 1}`,
       })),
       body: historyEntry.body,
+      bodyMode: historyEntry.bodyMode,
+      bodyContentType: historyEntry.bodyContentType,
+      bodyRows: historyEntry.bodyRows.map((row, index) => ({
+        ...row,
+        id: `${replayRequestId}-body-${index + 1}`,
+      })),
       authType: historyEntry.authType,
       authToken: historyEntry.authToken,
     };
@@ -991,6 +1048,14 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
         params: request.params,
         headers: request.headers,
         body: request.body,
+        bodyMode: request.bodyMode,
+        bodyContentType: request.bodyContentType,
+        bodyRows: request.bodyRows.map((row) => ({
+          key: row.key,
+          value: row.value,
+          enabled: row.enabled,
+          fieldType: row.fieldType,
+        })),
         authType: request.authType,
         authToken: request.authToken,
         environment: {
@@ -1015,6 +1080,9 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
         params: request.params.map((row) => ({ ...row })),
         headers: request.headers.map((row) => ({ ...row })),
         body: request.body,
+        bodyMode: request.bodyMode,
+        bodyContentType: request.bodyContentType,
+        bodyRows: request.bodyRows.map((row) => ({ ...row })),
         authType: request.authType,
         authToken: request.authToken,
         environment: {

@@ -99,6 +99,9 @@ fn convert_request(
         params,
         headers,
         body,
+        body_mode: "raw".to_string(),
+        body_content_type: String::new(),
+        body_rows: Vec::new(),
         auth_type,
         auth_token,
     })

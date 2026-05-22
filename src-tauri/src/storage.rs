@@ -14,7 +14,8 @@ use crate::models::{
     DeleteCollectionInput, DeleteEnvironmentInput, DeleteRequestInput, EnvironmentSummary,
     EnvironmentVariable, HistoryEntry, LogSummary, MoveCollectionInput, MoveRequestInput,
     MoveRequestResult, RecordHistoryInput, RenameCollectionInput, RenameEnvironmentInput,
-    ReorderRequestInput, RuntimeSummary, SaveEnvironmentInput, SaveRequestInput, StoredRequest,
+    ReorderRequestInput, RequestBodyRow, RequestKeyValue, RuntimeSummary, SaveEnvironmentInput,
+    SaveRequestInput, StoredRequest,
 };
 
 const DEFAULT_SETTINGS_THEME: &str = "clay-light";
@@ -22,6 +23,107 @@ const DEFAULT_SETTINGS_WORKSPACE: &str = "default-workspace";
 const DEFAULT_COOKIE_PATH: &str = "/";
 const CACHE_INDEX_FILE_NAME: &str = "index.json";
 const ACTIVE_LOG_FILE_NAME: &str = "api-client.log";
+const DEFAULT_BODY_MODE: &str = "raw";
+
+fn normalize_body_mode(raw_mode: &str) -> String {
+    match raw_mode.trim().to_ascii_lowercase().as_str() {
+        "json" => "json".to_string(),
+        "raw" => "raw".to_string(),
+        "urlencoded" | "x-www-form-urlencoded" | "form-urlencoded" => {
+            "urlencoded".to_string()
+        }
+        "multipart" | "multipart/form-data" => "multipart".to_string(),
+        _ => DEFAULT_BODY_MODE.to_string(),
+    }
+}
+
+fn infer_body_mode(
+    explicit_mode: Option<&str>,
+    headers: &[RequestKeyValue],
+    body: &str,
+    body_rows: &[RequestBodyRow],
+) -> String {
+    if let Some(mode) = explicit_mode
+        .map(str::trim)
+        .filter(|mode| !mode.is_empty())
+    {
+        return normalize_body_mode(mode);
+    }
+
+    if !body_rows.is_empty() {
+        if body_rows
+            .iter()
+            .any(|row| row.field_type.eq_ignore_ascii_case("file"))
+        {
+            return "multipart".to_string();
+        }
+
+        return "urlencoded".to_string();
+    }
+
+    let header_content_type = headers.iter().find_map(|header| {
+        if header.key.eq_ignore_ascii_case("content-type") {
+            Some(header.value.to_ascii_lowercase())
+        } else {
+            None
+        }
+    });
+
+    if let Some(content_type) = header_content_type {
+        if content_type.contains("application/json") {
+            return "json".to_string();
+        }
+        if content_type.contains("application/x-www-form-urlencoded") {
+            return "urlencoded".to_string();
+        }
+        if content_type.contains("multipart/form-data") {
+            return "multipart".to_string();
+        }
+    }
+
+    if body.trim().is_empty() {
+        DEFAULT_BODY_MODE.to_string()
+    } else if serde_json::from_str::<Value>(body).is_ok() {
+        "json".to_string()
+    } else {
+        DEFAULT_BODY_MODE.to_string()
+    }
+}
+
+fn infer_body_content_type(
+    explicit_content_type: Option<&str>,
+    headers: &[RequestKeyValue],
+    body_mode: &str,
+) -> String {
+    if let Some(content_type) = explicit_content_type
+        .map(str::trim)
+        .filter(|content_type| !content_type.is_empty())
+    {
+        return content_type.to_string();
+    }
+
+    if let Some(header_content_type) = headers.iter().find_map(|header| {
+        if header.key.eq_ignore_ascii_case("content-type") {
+            let value = header.value.trim();
+            if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            }
+        } else {
+            None
+        }
+    }) {
+        return header_content_type;
+    }
+
+    match body_mode {
+        "json" => "application/json".to_string(),
+        "urlencoded" => "application/x-www-form-urlencoded".to_string(),
+        "multipart" => "multipart/form-data".to_string(),
+        _ => String::new(),
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct StoragePaths {
@@ -396,6 +498,9 @@ pub(crate) fn initialize_database(database_path: &Path) -> AppResult<()> {
             params_json TEXT NOT NULL DEFAULT '[]',
             headers_json TEXT NOT NULL DEFAULT '[]',
             body TEXT NOT NULL DEFAULT '',
+            body_mode TEXT NOT NULL DEFAULT 'raw',
+            body_content_type TEXT NOT NULL DEFAULT '',
+            body_rows_json TEXT NOT NULL DEFAULT '[]',
             auth_type TEXT NOT NULL DEFAULT 'none',
             auth_token TEXT NOT NULL DEFAULT '',
             environment_name TEXT NOT NULL DEFAULT '',
@@ -450,6 +555,9 @@ fn ensure_history_schema(connection: &Connection) -> AppResult<()> {
         ("params_json", "TEXT NOT NULL DEFAULT '[]'"),
         ("headers_json", "TEXT NOT NULL DEFAULT '[]'"),
         ("body", "TEXT NOT NULL DEFAULT ''"),
+        ("body_mode", "TEXT NOT NULL DEFAULT 'raw'"),
+        ("body_content_type", "TEXT NOT NULL DEFAULT ''"),
+        ("body_rows_json", "TEXT NOT NULL DEFAULT '[]'"),
         ("auth_type", "TEXT NOT NULL DEFAULT 'none'"),
         ("auth_token", "TEXT NOT NULL DEFAULT ''"),
         ("environment_name", "TEXT NOT NULL DEFAULT ''"),
@@ -806,6 +914,9 @@ pub fn list_history(paths: &StoragePaths) -> AppResult<Vec<HistoryEntry>> {
             params_json,
             headers_json,
             body,
+            body_mode,
+            body_content_type,
+            body_rows_json,
             auth_type,
             auth_token,
             environment_name,
@@ -820,7 +931,8 @@ pub fn list_history(paths: &StoragePaths) -> AppResult<Vec<HistoryEntry>> {
     let rows = statement.query_map([], |row| {
         let params_json = row.get::<_, String>(9)?;
         let headers_json = row.get::<_, String>(10)?;
-        let environment_vars_json = row.get::<_, String>(16)?;
+        let body_rows_json = row.get::<_, String>(14)?;
+        let environment_vars_json = row.get::<_, String>(19)?;
         Ok(HistoryEntry {
             id: row.get(0)?,
             request_id: row.get(1)?,
@@ -834,10 +946,13 @@ pub fn list_history(paths: &StoragePaths) -> AppResult<Vec<HistoryEntry>> {
             params: serde_json::from_str(&params_json).unwrap_or_default(),
             headers: serde_json::from_str(&headers_json).unwrap_or_default(),
             body: row.get(11)?,
-            auth_type: row.get(12)?,
-            auth_token: row.get(13)?,
-            environment_name: row.get(14)?,
-            environment_source: row.get(15)?,
+            body_mode: row.get(12)?,
+            body_content_type: row.get(13)?,
+            body_rows: serde_json::from_str(&body_rows_json).unwrap_or_default(),
+            auth_type: row.get(15)?,
+            auth_token: row.get(16)?,
+            environment_name: row.get(17)?,
+            environment_source: row.get(18)?,
             environment_vars: serde_json::from_str(&environment_vars_json).unwrap_or_default(),
         })
     })?;
@@ -855,6 +970,8 @@ pub fn record_history(
         .map_err(|error| AppError::InvalidData(error.to_string()))?;
     let headers_json = serde_json::to_string(&input.headers)
         .map_err(|error| AppError::InvalidData(error.to_string()))?;
+    let body_rows_json = serde_json::to_string(&input.body_rows)
+        .map_err(|error| AppError::InvalidData(error.to_string()))?;
     let environment_vars_json = serde_json::to_string(&input.environment.vars)
         .map_err(|error| AppError::InvalidData(error.to_string()))?;
     connection.execute(
@@ -870,13 +987,16 @@ pub fn record_history(
             params_json,
             headers_json,
             body,
+            body_mode,
+            body_content_type,
+            body_rows_json,
             auth_type,
             auth_token,
             environment_name,
             environment_source,
             environment_vars_json
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
         "#,
         params![
             input.request_id,
@@ -889,6 +1009,9 @@ pub fn record_history(
             params_json,
             headers_json,
             input.body,
+            input.body_mode,
+            input.body_content_type,
+            body_rows_json,
             input.auth_type,
             input.auth_token,
             input.environment.name,
@@ -1029,6 +1152,9 @@ pub fn save_request(paths: &StoragePaths, input: SaveRequestInput) -> AppResult<
         params: input.params,
         headers: input.headers,
         body: input.body,
+        body_mode: normalize_body_mode(&input.body_mode),
+        body_content_type: input.body_content_type,
+        body_rows: input.body_rows,
         auth_type: input.auth_type,
         auth_token: input.auth_token,
     };
@@ -1453,18 +1579,33 @@ fn read_collection_file(path: &Path) -> AppResult<CollectionSummary> {
     let requests = parsed
         .requests
         .into_iter()
-        .map(|request| StoredRequest {
-            id: request.id,
-            name: request.name,
-            collection: parsed.name.clone(),
-            collection_file: file_path.clone(),
-            method: request.method,
-            url: request.url,
-            params: request.params,
-            headers: request.headers,
-            body: request.body,
-            auth_type: request.auth_type,
-            auth_token: request.auth_token,
+        .map(|request| {
+            let body_mode = infer_body_mode(
+                request.body_mode.as_deref(),
+                &request.headers,
+                &request.body,
+                &request.body_rows,
+            );
+            StoredRequest {
+                id: request.id,
+                name: request.name,
+                collection: parsed.name.clone(),
+                collection_file: file_path.clone(),
+                method: request.method,
+                url: request.url,
+                params: request.params.clone(),
+                headers: request.headers.clone(),
+                body: request.body,
+                body_content_type: infer_body_content_type(
+                    request.body_content_type.as_deref(),
+                    &request.headers,
+                    &body_mode,
+                ),
+                body_rows: request.body_rows,
+                body_mode,
+                auth_type: request.auth_type,
+                auth_token: request.auth_token,
+            }
         })
         .collect();
 
@@ -1807,6 +1948,12 @@ struct CollectionFileRequest {
     headers: Vec<crate::models::RequestKeyValue>,
     #[serde(default)]
     body: String,
+    #[serde(default)]
+    body_mode: Option<String>,
+    #[serde(default)]
+    body_content_type: Option<String>,
+    #[serde(default)]
+    body_rows: Vec<RequestBodyRow>,
     auth_type: String,
     auth_token: String,
 }
@@ -1868,6 +2015,9 @@ mod tests {
                     enabled: true,
                 }],
                 body: "{\"query\":\"workspace\"}".to_string(),
+                body_mode: "json".to_string(),
+                body_content_type: "application/json".to_string(),
+                body_rows: Vec::new(),
                 auth_type: "bearer".to_string(),
                 auth_token: "{{secret.prod_token}}".to_string(),
                 environment: EnvironmentSummary {
@@ -2000,6 +2150,9 @@ mod tests {
                     enabled: true,
                 }],
                 body: "".to_string(),
+                body_mode: "raw".to_string(),
+                body_content_type: String::new(),
+                body_rows: Vec::new(),
                 auth_type: "none".to_string(),
                 auth_token: "".to_string(),
             },
@@ -2095,6 +2248,9 @@ mod tests {
                 params: vec![],
                 headers: vec![],
                 body: "{}".to_string(),
+                body_mode: "json".to_string(),
+                body_content_type: "application/json".to_string(),
+                body_rows: Vec::new(),
                 auth_type: "none".to_string(),
                 auth_token: "".to_string(),
             },
@@ -2210,6 +2366,9 @@ mod tests {
                 params: vec![],
                 headers: vec![],
                 body: "".to_string(),
+                body_mode: "raw".to_string(),
+                body_content_type: String::new(),
+                body_rows: Vec::new(),
                 auth_type: "none".to_string(),
                 auth_token: "".to_string(),
             },
@@ -2228,6 +2387,9 @@ mod tests {
                 params: vec![],
                 headers: vec![],
                 body: "".to_string(),
+                body_mode: "raw".to_string(),
+                body_content_type: String::new(),
+                body_rows: Vec::new(),
                 auth_type: "none".to_string(),
                 auth_token: "".to_string(),
             },
@@ -2328,6 +2490,9 @@ mod tests {
                     params: vec![],
                     headers: vec![],
                     body: "".to_string(),
+                    body_mode: "raw".to_string(),
+                    body_content_type: String::new(),
+                    body_rows: Vec::new(),
                     auth_type: "none".to_string(),
                     auth_token: "".to_string(),
                 },
@@ -2372,6 +2537,9 @@ mod tests {
                 params: vec![],
                 headers: vec![],
                 body: "".to_string(),
+                body_mode: "raw".to_string(),
+                body_content_type: String::new(),
+                body_rows: Vec::new(),
                 auth_type: "none".to_string(),
                 auth_token: "".to_string(),
             },
@@ -2389,6 +2557,9 @@ mod tests {
                 params: vec![],
                 headers: vec![],
                 body: "".to_string(),
+                body_mode: "raw".to_string(),
+                body_content_type: String::new(),
+                body_rows: Vec::new(),
                 auth_type: "none".to_string(),
                 auth_token: "".to_string(),
             },
@@ -2448,6 +2619,9 @@ mod tests {
                 params: vec![],
                 headers: vec![],
                 body: "".to_string(),
+                body_mode: "raw".to_string(),
+                body_content_type: String::new(),
+                body_rows: Vec::new(),
                 auth_type: "none".to_string(),
                 auth_token: "".to_string(),
             },
@@ -2516,6 +2690,9 @@ mod tests {
                 params: vec![],
                 headers: vec![],
                 body: "".to_string(),
+                body_mode: "raw".to_string(),
+                body_content_type: String::new(),
+                body_rows: Vec::new(),
                 auth_type: "none".to_string(),
                 auth_token: "".to_string(),
             },

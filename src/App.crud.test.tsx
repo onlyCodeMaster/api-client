@@ -21,6 +21,14 @@ type MockCollection = {
     params: Array<{ key: string; value: string; enabled: boolean }>;
     headers: Array<{ key: string; value: string; enabled: boolean }>;
     body: string;
+    bodyMode: "json" | "raw" | "urlencoded" | "multipart";
+    bodyContentType: string;
+    bodyRows: Array<{
+      key: string;
+      value: string;
+      enabled: boolean;
+      fieldType: "text" | "file";
+    }>;
     authType: string;
     authToken: string;
   }>;
@@ -93,6 +101,9 @@ const initialCollections = (): MockCollection[] => [
         params: [],
         headers: [],
         body: "",
+        bodyMode: "raw",
+        bodyContentType: "",
+        bodyRows: [],
         authType: "none",
         authToken: "",
       },
@@ -106,6 +117,9 @@ const initialCollections = (): MockCollection[] => [
         params: [],
         headers: [],
         body: "{}",
+        bodyMode: "json",
+        bodyContentType: "application/json",
+        bodyRows: [],
         authType: "none",
         authToken: "",
       },
@@ -125,6 +139,9 @@ const initialCollections = (): MockCollection[] => [
         params: [],
         headers: [],
         body: "{}",
+        bodyMode: "json",
+        bodyContentType: "application/json",
+        bodyRows: [],
         authType: "none",
         authToken: "",
       },
@@ -329,7 +346,7 @@ describe("App P0-1 CRUD flows", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Local Data Ready")).toBeInTheDocument();
+      expect(screen.getByText("Workspace Explorer")).toBeInTheDocument();
     });
 
     const user = userEvent.setup();
@@ -550,7 +567,7 @@ describe("App P0-1 CRUD flows", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Local Data Ready")).toBeInTheDocument();
+      expect(screen.getByText("Workspace Explorer")).toBeInTheDocument();
     });
 
     const user = userEvent.setup();
@@ -631,7 +648,11 @@ describe("App P0-1 CRUD flows", () => {
     ) as HTMLInputElement[];
     const newKeyInput = keyInputs[keyInputs.length - 1];
     const newValueInput = valueInputs[valueInputs.length - 1];
+    await user.click(newKeyInput);
+    await user.clear(newKeyInput);
     await user.type(newKeyInput, "timeout_ms");
+    await user.click(newValueInput);
+    await user.clear(newValueInput);
     await user.type(newValueInput, "5000");
 
     await user.click(within(qaStableEnvironmentPanel).getByRole("button", { name: "Save Env" }));

@@ -33,6 +33,9 @@ pub struct HistoryEntry {
     pub request_name: String,
     pub collection: String,
     pub body: String,
+    pub body_mode: String,
+    pub body_content_type: String,
+    pub body_rows: Vec<RequestBodyRow>,
     pub auth_type: String,
     pub auth_token: String,
     pub environment_name: String,
@@ -135,6 +138,9 @@ pub struct RecordHistoryInput {
     pub params: Vec<RequestKeyValue>,
     pub headers: Vec<RequestKeyValue>,
     pub body: String,
+    pub body_mode: String,
+    pub body_content_type: String,
+    pub body_rows: Vec<RequestBodyRow>,
     pub auth_type: String,
     pub auth_token: String,
     pub environment: EnvironmentSummary,
@@ -181,6 +187,9 @@ pub struct SaveRequestInput {
     pub params: Vec<RequestKeyValue>,
     pub headers: Vec<RequestKeyValue>,
     pub body: String,
+    pub body_mode: String,
+    pub body_content_type: String,
+    pub body_rows: Vec<RequestBodyRow>,
     pub auth_type: String,
     pub auth_token: String,
 }
@@ -262,6 +271,9 @@ pub struct CurlExportInput {
     pub params: Vec<RequestKeyValue>,
     pub headers: Vec<RequestKeyValue>,
     pub body: String,
+    pub body_mode: String,
+    pub body_content_type: String,
+    pub body_rows: Vec<RequestBodyRow>,
     pub auth_type: String,
     pub auth_token: String,
 }
@@ -324,6 +336,9 @@ pub struct SendRequestInput {
     pub params: Vec<RequestKeyValue>,
     pub headers: Vec<RequestKeyValue>,
     pub body: String,
+    pub body_mode: String,
+    pub body_content_type: String,
+    pub body_rows: Vec<RequestBodyRow>,
     pub auth_type: String,
     pub auth_token: String,
     pub environment: EnvironmentSummary,
@@ -335,6 +350,15 @@ pub struct RequestKeyValue {
     pub key: String,
     pub value: String,
     pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestBodyRow {
+    pub key: String,
+    pub value: String,
+    pub enabled: bool,
+    pub field_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -349,6 +373,9 @@ pub struct StoredRequest {
     pub params: Vec<RequestKeyValue>,
     pub headers: Vec<RequestKeyValue>,
     pub body: String,
+    pub body_mode: String,
+    pub body_content_type: String,
+    pub body_rows: Vec<RequestBodyRow>,
     pub auth_type: String,
     pub auth_token: String,
 }

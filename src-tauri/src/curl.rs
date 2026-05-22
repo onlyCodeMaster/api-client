@@ -108,6 +108,9 @@ pub fn import_command(input: CurlImportInput) -> AppResult<StoredRequest> {
         params,
         headers,
         body,
+        body_mode: "raw".to_string(),
+        body_content_type: String::new(),
+        body_rows: Vec::new(),
         auth_type,
         auth_token,
     })
@@ -383,6 +386,9 @@ mod tests {
                 enabled: true,
             }],
             body: "{\"limit\":20}".to_string(),
+            body_mode: "json".to_string(),
+            body_content_type: "application/json".to_string(),
+            body_rows: Vec::new(),
             auth_type: "bearer".to_string(),
             auth_token: "{{secret.prod_token}}".to_string(),
         })

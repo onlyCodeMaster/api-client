@@ -1,6 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+export type RequestBodyMode = "json" | "raw" | "urlencoded" | "multipart";
+export type RequestBodyFieldType = "text" | "file";
+export type RequestBodyRow = {
+  key: string;
+  value: string;
+  enabled: boolean;
+  fieldType: RequestBodyFieldType;
+};
+
 export type BootstrapState = {
   paths: {
     appDataDir: string;
@@ -45,6 +54,9 @@ export type BootstrapState = {
     params: Array<{ key: string; value: string; enabled: boolean }>;
     headers: Array<{ key: string; value: string; enabled: boolean }>;
     body: string;
+    bodyMode: RequestBodyMode;
+    bodyContentType: string;
+    bodyRows: RequestBodyRow[];
     authType: string;
     authToken: string;
     environmentName: string;
@@ -67,6 +79,9 @@ export type BootstrapState = {
       params: Array<{ key: string; value: string; enabled: boolean }>;
       headers: Array<{ key: string; value: string; enabled: boolean }>;
       body: string;
+      bodyMode: RequestBodyMode;
+      bodyContentType: string;
+      bodyRows: RequestBodyRow[];
       authType: string;
       authToken: string;
     }>;
@@ -96,6 +111,9 @@ export type RecordHistoryInput = {
   params: Array<{ key: string; value: string; enabled: boolean }>;
   headers: Array<{ key: string; value: string; enabled: boolean }>;
   body: string;
+  bodyMode: RequestBodyMode;
+  bodyContentType: string;
+  bodyRows: RequestBodyRow[];
   authType: string;
   authToken: string;
   environment: BootstrapState["environments"][number];
@@ -110,6 +128,9 @@ export type SendRequestInput = {
   params: Array<{ key: string; value: string; enabled: boolean }>;
   headers: Array<{ key: string; value: string; enabled: boolean }>;
   body: string;
+  bodyMode: RequestBodyMode;
+  bodyContentType: string;
+  bodyRows: RequestBodyRow[];
   authType: string;
   authToken: string;
   environment: BootstrapState["environments"][number];
@@ -273,6 +294,9 @@ export async function exportCurl(input: {
   params: Array<{ key: string; value: string; enabled: boolean }>;
   headers: Array<{ key: string; value: string; enabled: boolean }>;
   body: string;
+  bodyMode: RequestBodyMode;
+  bodyContentType: string;
+  bodyRows: RequestBodyRow[];
   authType: string;
   authToken: string;
 }) {

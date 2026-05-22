@@ -1,6 +1,7 @@
 use std::time::Instant;
 
-use reqwest::header::{HeaderValue, COOKIE};
+use reqwest::blocking::multipart;
+use reqwest::header::{HeaderValue, CONTENT_TYPE, COOKIE};
 use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
@@ -54,14 +55,17 @@ pub fn execute_request(
     let method = reqwest::Method::from_bytes(input.method.as_bytes())
         .map_err(|error| AppError::InvalidData(error.to_string()))?;
     let started_at = Instant::now();
-    let mut request = client.request(method, url.clone()).headers(headers);
-
-    if !input.body.trim().is_empty() {
-        request = request.body(transport::resolve_template(
-            &input.body,
-            &resolved_environment,
-        )?);
-    }
+    let request = client.request(method, url.clone());
+    let body_mode = normalize_body_mode(&input.body_mode);
+    let request = apply_request_body(
+        request,
+        headers,
+        &body_mode,
+        &input.body,
+        &input.body_content_type,
+        &input.body_rows,
+        &resolved_environment,
+    )?;
 
     let response = request
         .send()
@@ -130,6 +134,140 @@ fn format_body(body: String) -> String {
     }
 }
 
+fn normalize_body_mode(raw_mode: &str) -> String {
+    match raw_mode.trim().to_ascii_lowercase().as_str() {
+        "json" => "json".to_string(),
+        "raw" => "raw".to_string(),
+        "urlencoded" | "x-www-form-urlencoded" | "form-urlencoded" => {
+            "urlencoded".to_string()
+        }
+        "multipart" | "multipart/form-data" => "multipart".to_string(),
+        _ => "raw".to_string(),
+    }
+}
+
+fn apply_request_body(
+    request: reqwest::blocking::RequestBuilder,
+    mut headers: reqwest::header::HeaderMap,
+    body_mode: &str,
+    body: &str,
+    body_content_type: &str,
+    body_rows: &[crate::models::RequestBodyRow],
+    environment: &transport::EnvironmentMap,
+) -> AppResult<reqwest::blocking::RequestBuilder> {
+    match body_mode {
+        "json" | "raw" => {
+            maybe_insert_content_type(&mut headers, body_mode, body_content_type, environment)?;
+            let request = request.headers(headers);
+
+            if body.trim().is_empty() {
+                Ok(request)
+            } else {
+                Ok(request.body(transport::resolve_template(body, environment)?))
+            }
+        }
+        "urlencoded" => {
+            maybe_insert_content_type(&mut headers, body_mode, body_content_type, environment)?;
+            let request = request.headers(headers);
+            let encoded = encode_urlencoded_body(body_rows, environment)?;
+            if encoded.is_empty() {
+                Ok(request)
+            } else {
+                Ok(request.body(encoded))
+            }
+        }
+        "multipart" => {
+            headers.remove(CONTENT_TYPE);
+            let request = request.headers(headers);
+            let form = build_multipart_form(body_rows, environment)?;
+            Ok(request.multipart(form))
+        }
+        other => Err(AppError::InvalidData(format!(
+            "unsupported body mode: {other}"
+        ))),
+    }
+}
+
+fn maybe_insert_content_type(
+    headers: &mut reqwest::header::HeaderMap,
+    body_mode: &str,
+    body_content_type: &str,
+    environment: &transport::EnvironmentMap,
+) -> AppResult<()> {
+    if headers.contains_key(CONTENT_TYPE) {
+        return Ok(());
+    }
+
+    let default_content_type = match body_mode {
+        "json" => "application/json",
+        "urlencoded" => "application/x-www-form-urlencoded",
+        "raw" => body_content_type.trim(),
+        _ => "",
+    };
+    let candidate = if body_content_type.trim().is_empty() {
+        default_content_type.to_string()
+    } else {
+        transport::resolve_template(body_content_type, environment)?
+    };
+
+    if candidate.trim().is_empty() {
+        return Ok(());
+    }
+
+    let header_value =
+        HeaderValue::from_str(candidate.trim()).map_err(|error| AppError::InvalidData(error.to_string()))?;
+    headers.insert(CONTENT_TYPE, header_value);
+    Ok(())
+}
+
+fn encode_urlencoded_body(
+    body_rows: &[crate::models::RequestBodyRow],
+    environment: &transport::EnvironmentMap,
+) -> AppResult<String> {
+    let mut serializer = form_urlencoded::Serializer::new(String::new());
+
+    for row in body_rows
+        .iter()
+        .filter(|row| row.enabled && !row.key.trim().is_empty())
+    {
+        let key = transport::resolve_template(&row.key, environment)?;
+        let value = transport::resolve_template(&row.value, environment)?;
+        serializer.append_pair(&key, &value);
+    }
+
+    Ok(serializer.finish())
+}
+
+fn build_multipart_form(
+    body_rows: &[crate::models::RequestBodyRow],
+    environment: &transport::EnvironmentMap,
+) -> AppResult<multipart::Form> {
+    let mut form = multipart::Form::new();
+
+    for row in body_rows
+        .iter()
+        .filter(|row| row.enabled && !row.key.trim().is_empty())
+    {
+        let key = transport::resolve_template(&row.key, environment)?;
+
+        if row.field_type.eq_ignore_ascii_case("file") {
+            let path = transport::resolve_template(&row.value, environment)?;
+            if path.trim().is_empty() {
+                continue;
+            }
+
+            let part = multipart::Part::file(path)
+                .map_err(|error| AppError::InvalidData(error.to_string()))?;
+            form = form.part(key, part);
+        } else {
+            let value = transport::resolve_template(&row.value, environment)?;
+            form = form.text(key, value);
+        }
+    }
+
+    Ok(form)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -142,7 +280,7 @@ mod tests {
     use reqwest::header::{HeaderMap, HeaderValue, SET_COOKIE};
 
     use super::*;
-    use crate::models::{EnvironmentSummary, EnvironmentVariable, RequestKeyValue};
+    use crate::models::{EnvironmentSummary, EnvironmentVariable, RequestBodyRow, RequestKeyValue};
     use crate::storage::StoragePaths;
 
     fn make_test_paths(label: &str) -> StoragePaths {
@@ -167,6 +305,137 @@ mod tests {
             cache_dir: root.join("cache"),
             logs_dir: root.join("logs"),
         }
+    }
+
+    #[test]
+    fn urlencoded_body_encodes_enabled_rows_and_templates() {
+        let environment = transport::environment_map(&[
+            EnvironmentVariable {
+                key: "query".to_string(),
+                value: "workspace search".to_string(),
+            },
+            EnvironmentVariable {
+                key: "limit".to_string(),
+                value: "20".to_string(),
+            },
+        ]);
+
+        let encoded = encode_urlencoded_body(
+            &[
+                RequestBodyRow {
+                    key: "q".to_string(),
+                    value: "{{query}}".to_string(),
+                    enabled: true,
+                    field_type: "text".to_string(),
+                },
+                RequestBodyRow {
+                    key: "limit".to_string(),
+                    value: "{{limit}}".to_string(),
+                    enabled: true,
+                    field_type: "text".to_string(),
+                },
+                RequestBodyRow {
+                    key: "".to_string(),
+                    value: "ignored".to_string(),
+                    enabled: true,
+                    field_type: "text".to_string(),
+                },
+                RequestBodyRow {
+                    key: "disabled".to_string(),
+                    value: "ignored".to_string(),
+                    enabled: false,
+                    field_type: "text".to_string(),
+                },
+            ],
+            &environment,
+        )
+        .expect("encode urlencoded body");
+
+        assert_eq!(encoded, "q=workspace+search&limit=20");
+    }
+
+    #[test]
+    fn multipart_body_builds_text_and_file_parts() {
+        let root = std::env::temp_dir().join(format!(
+            "api-client-http-multipart-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time before unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("create temp root");
+        let upload_path = root.join("sample.txt");
+        fs::write(&upload_path, "hello multipart").expect("write upload file");
+
+        let environment = transport::environment_map(&[EnvironmentVariable {
+            key: "asset_path".to_string(),
+            value: upload_path.to_string_lossy().into_owned(),
+        }]);
+
+        let form = build_multipart_form(
+            &[
+                RequestBodyRow {
+                    key: "note".to_string(),
+                    value: "hello {{env.asset_path}}".to_string(),
+                    enabled: true,
+                    field_type: "text".to_string(),
+                },
+                RequestBodyRow {
+                    key: "asset".to_string(),
+                    value: "{{asset_path}}".to_string(),
+                    enabled: true,
+                    field_type: "file".to_string(),
+                },
+            ],
+            &environment,
+        )
+        .expect("build multipart form");
+
+        let mut body = String::new();
+        form.into_reader()
+            .read_to_string(&mut body)
+            .expect("read multipart body");
+
+        assert!(body.contains("name=\"note\""));
+        assert!(body.contains("hello "));
+        assert!(body.contains("name=\"asset\""));
+        assert!(body.contains("filename=\"sample.txt\""));
+        assert!(body.contains("hello multipart"));
+    }
+
+    #[test]
+    fn maybe_insert_content_type_defaults_for_json_urlencoded_and_raw() {
+        let environment = transport::environment_map(&[]);
+
+        let mut json_headers = reqwest::header::HeaderMap::new();
+        maybe_insert_content_type(&mut json_headers, "json", "", &environment)
+            .expect("insert json content-type");
+        assert_eq!(
+            json_headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+
+        let mut urlencoded_headers = reqwest::header::HeaderMap::new();
+        maybe_insert_content_type(&mut urlencoded_headers, "urlencoded", "", &environment)
+            .expect("insert urlencoded content-type");
+        assert_eq!(
+            urlencoded_headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/x-www-form-urlencoded")
+        );
+
+        let mut raw_headers = reqwest::header::HeaderMap::new();
+        maybe_insert_content_type(&mut raw_headers, "raw", "text/plain", &environment)
+            .expect("insert raw content-type");
+        assert_eq!(
+            raw_headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/plain")
+        );
     }
 
     #[test]
@@ -290,6 +559,9 @@ mod tests {
                     },
                 ],
                 body: r#"{"query":"{{query_value}}"}"#.to_string(),
+                body_mode: "json".to_string(),
+                body_content_type: "application/json".to_string(),
+                body_rows: Vec::new(),
                 auth_type: "bearer".to_string(),
                 auth_token: "{{api_token}}".to_string(),
                 environment: EnvironmentSummary {

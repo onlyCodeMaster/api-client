@@ -27,6 +27,7 @@ import {
   useRequestStore,
   type EnvironmentRecord,
   type KeyValueRow,
+  type RequestBodyRow,
   type RequestMethod,
   type RequestRecord,
 } from "./store/requestStore";
@@ -168,6 +169,30 @@ function sanitizeEditableRows(rows: KeyValueRow[]) {
   return rows.filter((row) => row.key.trim() !== "" || row.value.trim() !== "");
 }
 
+function normalizeRequestBodyRows(
+  rows: Array<{ key: string; value: string; enabled: boolean; fieldType: string }>,
+  prefix: string,
+): RequestBodyRow[] {
+  return rows.map((row, index) => ({
+    id: `${prefix}-body-${index + 1}-${row.key || "row"}`,
+    key: row.key,
+    value: row.value,
+    enabled: row.enabled,
+    fieldType: row.fieldType === "file" ? "file" : "text",
+  }));
+}
+
+function sanitizeBodyRows(rows: RequestBodyRow[]) {
+  return rows
+    .filter((row) => row.key.trim() !== "" || row.value.trim() !== "")
+    .map((row) => ({
+      key: row.key,
+      value: row.value,
+      enabled: row.enabled,
+      fieldType: row.fieldType,
+    }));
+}
+
 function serializeEditableRequest(request: RequestRecord) {
   return JSON.stringify({
     name: request.name,
@@ -178,6 +203,9 @@ function serializeEditableRequest(request: RequestRecord) {
     params: sanitizeEditableRows(request.params),
     headers: sanitizeEditableRows(request.headers),
     body: request.body,
+    bodyMode: request.bodyMode,
+    bodyContentType: request.bodyContentType,
+    bodyRows: sanitizeBodyRows(request.bodyRows),
     authType: request.authType,
     authToken: request.authToken,
   });
@@ -218,6 +246,9 @@ function normalizeStoredRequest(request: PersistedRequest): RequestRecord {
     params: normalizeRows(request.params, `${request.id}-param`),
     headers: normalizeRows(request.headers, `${request.id}-header`),
     body: request.body,
+    bodyMode: request.bodyMode,
+    bodyContentType: request.bodyContentType,
+    bodyRows: normalizeRequestBodyRows(request.bodyRows, request.id),
     authType: request.authType as "none" | "bearer",
     authToken: request.authToken,
   };
@@ -234,6 +265,9 @@ function makeScratchRequest(): RequestRecord {
     params: [],
     headers: [],
     body: "",
+    bodyMode: "raw",
+    bodyContentType: "",
+    bodyRows: [],
     authType: "none",
     authToken: "",
   };
@@ -370,6 +404,12 @@ function buildDraftRequest(
       id: `${nextId}-header-${index + 1}`,
     })),
     body: source?.body ?? "",
+    bodyMode: source?.bodyMode ?? "raw",
+    bodyContentType: source?.bodyContentType ?? "",
+    bodyRows: (source?.bodyRows ?? []).map((row, index) => ({
+      ...row,
+      id: `${nextId}-body-${index + 1}`,
+    })),
     authType: source?.authType ?? "none",
     authToken: source?.authToken ?? "",
   };
@@ -993,6 +1033,9 @@ export default function App() {
             params: normalizeRows(item.params, `history-${item.id}-param`),
             headers: normalizeRows(item.headers, `history-${item.id}-header`),
             body: item.body,
+            bodyMode: item.bodyMode,
+            bodyContentType: item.bodyContentType,
+            bodyRows: normalizeRequestBodyRows(item.bodyRows, `history-${item.id}`),
             authType: (item.authType === "bearer" ? "bearer" : "none") as "none" | "bearer",
             authToken: item.authToken,
             environment: (() => {
@@ -1032,6 +1075,9 @@ export default function App() {
               params: normalizeRows(request.params, `${request.id}-param`),
               headers: normalizeRows(request.headers, `${request.id}-header`),
               body: request.body,
+              bodyMode: request.bodyMode,
+              bodyContentType: request.bodyContentType,
+              bodyRows: normalizeRequestBodyRows(request.bodyRows, request.id),
               authType: request.authType as "none" | "bearer",
               authToken: request.authToken,
             })),
@@ -1428,6 +1474,9 @@ export default function App() {
         params,
         headers,
         body: activeRequest.body,
+        bodyMode: activeRequest.bodyMode,
+        bodyContentType: activeRequest.bodyContentType,
+        bodyRows: sanitizeBodyRows(activeRequest.bodyRows),
         authType: activeRequest.authType,
         authToken: activeRequest.authToken,
       });
@@ -1444,6 +1493,9 @@ export default function App() {
           params: normalizeRows(savedRequest.params, `${savedRequest.id}-param`),
           headers: normalizeRows(savedRequest.headers, `${savedRequest.id}-header`),
           body: savedRequest.body,
+          bodyMode: savedRequest.bodyMode,
+          bodyContentType: savedRequest.bodyContentType,
+          bodyRows: normalizeRequestBodyRows(savedRequest.bodyRows, savedRequest.id),
           authType: savedRequest.authType as "none" | "bearer",
           authToken: savedRequest.authToken,
         };
@@ -1560,6 +1612,9 @@ export default function App() {
         params: sanitizeEditableRows(renamedRequest.params),
         headers: sanitizeEditableRows(renamedRequest.headers),
         body: renamedRequest.body,
+        bodyMode: renamedRequest.bodyMode,
+        bodyContentType: renamedRequest.bodyContentType,
+        bodyRows: sanitizeBodyRows(renamedRequest.bodyRows),
         authType: renamedRequest.authType,
         authToken: renamedRequest.authToken,
       });
@@ -1990,6 +2045,9 @@ export default function App() {
         params: normalizeRows(imported.params, `${imported.id}-param`),
         headers: normalizeRows(imported.headers, `${imported.id}-header`),
         body: imported.body,
+        bodyMode: imported.bodyMode,
+        bodyContentType: imported.bodyContentType,
+        bodyRows: normalizeRequestBodyRows(imported.bodyRows, imported.id),
         authType: imported.authType as "none" | "bearer",
         authToken: imported.authToken,
       };
@@ -2020,6 +2078,9 @@ export default function App() {
         params: activeRequest.params,
         headers: activeRequest.headers,
         body: activeRequest.body,
+        bodyMode: activeRequest.bodyMode,
+        bodyContentType: activeRequest.bodyContentType,
+        bodyRows: sanitizeBodyRows(activeRequest.bodyRows),
         authType: activeRequest.authType,
         authToken: activeRequest.authToken,
       });
@@ -2059,6 +2120,9 @@ export default function App() {
           params: normalizeRows(request.params, `${request.id}-param`),
           headers: normalizeRows(request.headers, `${request.id}-header`),
           body: request.body,
+          bodyMode: request.bodyMode,
+          bodyContentType: request.bodyContentType,
+          bodyRows: normalizeRequestBodyRows(request.bodyRows, request.id),
           authType: request.authType as "none" | "bearer",
           authToken: request.authToken,
         })),
