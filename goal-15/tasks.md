@@ -623,8 +623,179 @@
       - 本轮还顺手修掉了首个 request 命名被 scratch placeholder 污染的真实 P0-6 边界问题。
   - 自信度检查：当前对 `Task 10` 达到 100% 结束信心。原因是这轮不是只依赖已有空状态文案，而是通过专门的空 bootstrap 前端测试证明首次进入流程真实可操作，并且在验证中抓到并修复了首个 request 命名异常这一真实首启缺陷，再用相关 CRUD / environment / history 回归、生产构建和 diff 健全性检查共同证明 `P0-6` 已经闭环，没有留下新的已知漏洞。
 
-- [ ] Task 11: 最终最大的 review - P0 全量验收与修缮
+- [x] Task 11: 最终最大的 review - P0 全量验收与修缮
   - 目标：从 C 端体验、代码质量、数据安全、异常路径和回归风险角度做最终审计，直到 P0 达到可交付状态。
   - 独立验证：`P0-1` 到 `P0-6` 的显式要求全部有实现与验证证据支撑，剩余问题被修缮或明确记录。
   - 完成内容：
-  - 自信度检查：
+    - 已按 goal 要求重新全量阅读 `goal-15/input.md`、`goal-15/plan.md`、`goal-15/tasks.md`，并执行了一次只针对 P0 范围的最终 completion audit。
+    - 本轮先把原始目标重新落成可验收交付物：
+      - `P0-1`
+        - collection：新建、重命名、删除、排序
+        - request：新建、复制、重命名、删除、排序、跨 collection 移动
+        - 结果必须真实持久化到本地 workspace / collection 文件
+      - `P0-2`
+        - environment：新建、重命名、删除
+        - variables：新增、删除、编辑、保存
+      - `P0-3`
+        - Collections / History / Environments 搜索过滤真实生效
+        - 空结果有反馈
+      - `P0-4`
+        - Params / Headers 删除
+        - 空行焦点落位
+        - dirty 状态
+        - save 成功 / 失败反馈
+      - `P0-5`
+        - history 可恢复请求
+        - 可快速 resend
+        - 可展示真实状态与时间
+      - `P0-6`
+        - 无 collection / 无 environment / 无 history 时都有明确空状态
+        - 无 seed 数据也能进入并创建首个可用实体
+    - Prompt-to-artifact checklist：
+      - `P0-1 Collection / Request CRUD`
+        - 前端实现证据：
+          - `src/App.tsx`
+            - `handleCreateCollection`
+            - `handleRenameCollection`
+            - `handleDeleteCollection`
+            - `handleCreateRequest`
+            - `handleDuplicateRequest`
+            - `handleRenameRequest`
+            - `handleDeleteRequest`
+            - `handleMoveCollection`
+            - `handleReorderRequest`
+            - `handleMoveRequest`
+        - 前端交互验证：
+          - `src/App.crud.test.tsx`
+            - `sends create, move, reorder and delete collection/request commands with persisted state updates`
+            - `persists collection collapsed state through organization metadata`
+            - 直接覆盖：
+              - create collection
+              - empty collection -> first request
+              - duplicate / rename / move / reorder / delete request
+              - rename / move / delete collection
+        - Rust / 数据层验证：
+          - `src-tauri/src/storage.rs`
+            - `create_collection_persists_empty_collection_and_updates_workspace`
+            - `rename_collection_updates_file_requests_and_workspace_reference`
+            - `delete_collection_removes_file_and_workspace_reference`
+            - `delete_request_removes_request_from_collection_file`
+            - `move_collection_updates_workspace_order`
+            - `reorder_request_updates_request_order_in_collection_file`
+            - `move_request_transfers_request_between_collections`
+            - `save_request_creates_collection_file_and_updates_default_workspace`
+            - `save_request_in_workspace_creates_collection_reference_outside_default_workspace`
+            - `collection_management_respects_custom_workspace_file`
+        - 审计结论：
+          - CRUD、排序、移动和 workspace-aware 持久化都有代码与测试双重证据，未发现缺口
+      - `P0-2 Environment CRUD`
+        - 前端实现证据：
+          - `src/App.tsx`
+            - `handleCreateEnvironment`
+            - `handleRenameEnvironment`
+            - `handleDeleteEnvironment`
+            - `handleAddEnvironmentVar`
+            - `handleRemoveEnvironmentVar`
+            - `handleSaveEnvironment`
+        - 前端交互验证：
+          - `src/App.crud.test.tsx`
+            - `supports environment create, rename, variable edits, save and delete flows`
+            - `preserves environment folder and file format when renaming`
+          - `src/App.environment-autosave.test.tsx`
+            - `autosaves the latest environment edits and row removals`
+            - `disables Save Env while a save is already in flight`
+          - `src/App.empty-state.test.tsx`
+            - `shows empty environment guidance and creates the first local environment from the empty state`
+        - Rust / 数据层验证：
+          - `src-tauri/src/storage.rs`
+            - `list_environments_reads_json_yaml_and_yml_files`
+            - `save_environment_writes_json_yaml_and_yml_by_extension`
+            - `rename_environment_updates_name_and_file_path`
+            - `delete_environment_removes_file`
+        - 审计结论：
+          - environment 已不再只是切换 / 保存既有项，而是具备完整 CRUD、变量编辑和空状态首次创建能力
+      - `P0-3 Explorer 搜索过滤`
+        - 前端实现证据：
+          - `src/App.tsx`
+            - `filteredCollectionSections`
+            - `filteredHistory`
+            - `filteredEnvironments`
+            - `explorerListEmpty`
+            - `explorerEmptyMessage`
+        - 前端交互验证：
+          - `src/App.explorer-search.test.tsx`
+            - `filters collections by collection and request content with empty feedback`
+            - `filters history in both sidebar and workspace panel with empty feedback`
+            - `filters environments by names and variables with empty feedback`
+        - 审计结论：
+          - Collections / History / Environments 的实时过滤和空结果反馈都已直接自动化证明
+      - `P0-4 请求编辑器基础闭环`
+        - 前端实现证据：
+          - `src/App.tsx`
+            - `handleRemoveParamRow`
+            - `handleRemoveHeaderRow`
+            - `focusEditorRow`
+            - `scheduleRequestAutosave`
+            - `requestSaveFeedback`
+        - 前端交互验证：
+          - `src/App.request-editor.test.tsx`
+            - `focuses the next editable row and autosaves param/header deletions`
+            - `shows dirty, error, and success request save states`
+            - `keeps blank body rows local until edited and autosaves body row removals`
+        - 审计结论：
+          - Params / Headers 删除、空行焦点、dirty/save 状态和成功/失败反馈都已有直接 UI 级证据
+      - `P0-5 History 基础回放`
+        - 前端实现证据：
+          - `src/App.tsx`
+            - `handleRestoreHistory`
+            - `handleResendHistory`
+          - `src/store/requestStore.ts`
+            - `upsertRequestFromHistory`
+            - `sendActiveRequest`
+        - 前端交互验证：
+          - `src/App.history-replay.test.tsx`
+            - `restores a history session into a clean replay request and replay environment`
+            - `resends a restored history session with its replay snapshot and records fresh status and time`
+        - Rust / 数据层验证：
+          - `src-tauri/src/storage.rs`
+            - `record_history_persists_request_id`
+            - `initialize_database_migrates_history_table_with_request_id`
+        - 审计结论：
+          - history 已具备 restore / resend / 真实状态耗时回写能力，且 replay 基线污染问题已修复
+      - `P0-6 首次启动与空状态`
+        - 前端实现证据：
+          - `src/App.tsx`
+            - `No collections yet`
+            - `No environments yet`
+            - `No history yet`
+            - `Create your first request`
+          - `src/store/requestStore.ts`
+            - `applyBootstrap(...)` 的 `scratchRequest / scratchEnvironment` 回退
+        - 前端交互验证：
+          - `src/App.empty-state.test.tsx`
+            - `shows empty workspace guidance and lets the first request create a real local collection`
+            - `shows empty environment guidance and creates the first local environment from the empty state`
+        - Rust / 数据层验证：
+          - `src-tauri/src/storage.rs`
+            - `seed_files_create_empty_default_workspace_without_sample_data`
+        - 审计结论：
+          - 空 workspace 不依赖 seed 数据即可进入、引导并创建首个真实 request / environment，history 也有明确空状态反馈
+    - 本轮最终验证结果：
+      - 前端 P0 回归：
+        - `npm test -- --run src/App.crud.test.tsx src/App.explorer-search.test.tsx src/App.request-editor.test.tsx src/App.environment-autosave.test.tsx src/App.history-replay.test.tsx src/App.empty-state.test.tsx` 通过
+        - `6` test files, `17` tests passed
+      - Rust 数据层 / 持久化：
+        - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过
+        - `31` tests passed
+      - 工程与卫生门禁：
+        - `cargo fmt --manifest-path src-tauri/Cargo.toml --check` 通过
+        - `npm run build` 通过
+        - `git diff --check` 通过
+    - 剩余问题审计：
+      - 本轮未发现新的 P0 行为缺口、数据一致性问题、空状态断链、或 history / editor / environment 回归。
+      - 当前仍未做真实桌面端 E2E smoke，但这不再构成 P0 要求的不确定性：
+        - 前端交互层已经通过 P0 专项测试直接覆盖用户动作
+        - Rust 存储层已经通过 31 个单元测试覆盖持久化与 workspace 边界
+        - 前端构建与 Rust 格式门禁均通过
+      - 因此对 `/goal P0` 的显式交付标准，当前不存在未覆盖项。
+  - 自信度检查：当前对 `Task 11` 达到 100% 结束信心。原因是这轮不是复述已有结论，而是把 `P0-1` 到 `P0-6` 逐项重新映射到代码实现、前端交互测试、Rust 持久化测试和最终命令门禁上，再次确认没有任何显式 requirement 缺失、弱验证或未闭环项；在此基础上，`/goal P0` 已达到可完成状态。
