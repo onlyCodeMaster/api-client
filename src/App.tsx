@@ -595,6 +595,7 @@ export default function App() {
   const [environmentSaveFeedback, setEnvironmentSaveFeedback] = useState<{
     tone: "success" | "error";
     message: string;
+    signature: string;
   } | null>(null);
   const [savedEnvironmentSignatures, setSavedEnvironmentSignatures] = useState<
     Record<string, string>
@@ -665,6 +666,7 @@ export default function App() {
     tab: "params" | "headers" | "body";
     rowId: string;
   } | null>(null);
+  const environmentAutosaveTimerRef = useRef<number | null>(null);
   const rowInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const environmentInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const displayRequests = requests.filter((request) => request.id !== "scratch-request");
@@ -1049,7 +1051,7 @@ export default function App() {
     if (
       environmentSaveFeedback &&
       activeEnvironment.id &&
-      savedEnvironmentSignatures[activeEnvironment.id] !== activeEnvironmentSignature
+      environmentSaveFeedback.signature !== activeEnvironmentSignature
     ) {
       setEnvironmentSaveFeedback(null);
     }
@@ -1057,7 +1059,6 @@ export default function App() {
     activeEnvironment.id,
     activeEnvironmentSignature,
     environmentSaveFeedback,
-    savedEnvironmentSignatures,
   ]);
 
   useEffect(() => {
@@ -1295,8 +1296,12 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const handleSaveEnvironment = async () => {
-    if (!hasEnvironments) {
+  const handleSaveEnvironment = async (environmentOverride?: EnvironmentRecord) => {
+    const environmentToSave = environmentOverride ?? activeEnvironment;
+    if (
+      environmentToSave.id === "scratch-environment" ||
+      environmentToSave.source.trim() === ""
+    ) {
       return;
     }
 
@@ -1304,9 +1309,9 @@ export default function App() {
     setEnvironmentSaveFeedback(null);
     try {
       const saved = await saveEnvironment({
-        name: activeEnvironment.name,
-        filePath: activeEnvironment.source,
-        vars: activeEnvironment.vars
+        name: environmentToSave.name,
+        filePath: environmentToSave.source,
+        vars: environmentToSave.vars
           .filter((row) => row.key.trim() !== "" || row.value.trim() !== "")
           .map((row) => ({
             key: row.key,
@@ -1320,25 +1325,64 @@ export default function App() {
           source: saved.filePath,
           vars: saved.vars,
         },
-        activeEnvironment.id,
+        environmentToSave.id,
       );
       replaceEnvironment(normalizedEnvironment);
+      const signature = serializeEnvironment(normalizedEnvironment);
       setSavedEnvironmentSignatures((current) => ({
         ...current,
-        [normalizedEnvironment.id]: serializeEnvironment(normalizedEnvironment),
+        [normalizedEnvironment.id]: signature,
       }));
       setEnvironmentSaveFeedback({
         tone: "success",
         message: "Environment saved to local storage",
+        signature,
       });
     } catch (error) {
       setEnvironmentSaveFeedback({
         tone: "error",
         message: commandErrorMessage(error, "Save environment"),
+        signature: serializeEnvironment(environmentToSave),
       });
     } finally {
       setIsSavingEnvironment(false);
     }
+  };
+
+  const scheduleEnvironmentAutosave = () => {
+    if (!bootstrap.settings.autoSave || !hasEnvironments) {
+      return;
+    }
+
+    const environmentId = activeEnvironment.id;
+
+    if (environmentAutosaveTimerRef.current !== null) {
+      window.clearTimeout(environmentAutosaveTimerRef.current);
+    }
+
+    environmentAutosaveTimerRef.current = window.setTimeout(() => {
+      environmentAutosaveTimerRef.current = null;
+      const latestEnvironment = useRequestStore
+        .getState()
+        .environments.find((environment) => environment.id === environmentId);
+      if (
+        !latestEnvironment ||
+        latestEnvironment.id === "scratch-environment" ||
+        latestEnvironment.source.trim() === ""
+      ) {
+        return;
+      }
+
+      const latestSignature = serializeEnvironment(latestEnvironment);
+      if (
+        environmentSaveFeedback?.tone === "error" &&
+        environmentSaveFeedback.signature === latestSignature
+      ) {
+        return;
+      }
+
+      void handleSaveEnvironment(latestEnvironment);
+    }, 500);
   };
 
   const handleCreateFirstEnvironment = async () => {
@@ -1567,6 +1611,7 @@ export default function App() {
     if (nextRowId) {
       setPendingEnvironmentFocus(`${activeEnvironment.id}:${nextRowId}:key`);
     }
+    scheduleEnvironmentAutosave();
   };
 
   const focusEditorRow = (tab: "params" | "headers" | "body", rowId: string) => {
@@ -4006,7 +4051,11 @@ export default function App() {
                   <button
                     type="button"
                     className="secondary-button"
-                    disabled={!hasEnvironments || (isSavingEnvironment ? false : !environmentDirty && environmentSaveFeedback?.tone !== "error")}
+                    disabled={
+                      !hasEnvironments ||
+                      isSavingEnvironment ||
+                      (!environmentDirty && environmentSaveFeedback?.tone !== "error")
+                    }
                     onClick={() => {
                       void handleSaveEnvironment();
                     }}
@@ -4028,9 +4077,10 @@ export default function App() {
                     >
                       <input
                         value={row.key}
-                        onChange={(event) =>
-                          updateEnvironmentVar(activeEnvironment.id, row.id, "key", event.target.value)
-                        }
+                        onChange={(event) => {
+                          updateEnvironmentVar(activeEnvironment.id, row.id, "key", event.target.value);
+                          scheduleEnvironmentAutosave();
+                        }}
                         ref={(input) => {
                           environmentInputRefs.current[`${activeEnvironment.id}:${row.id}:key`] = input;
                         }}
@@ -4039,9 +4089,10 @@ export default function App() {
                       <div className="workspace-panel__table-row-value">
                         <input
                           value={row.value}
-                          onChange={(event) =>
-                            updateEnvironmentVar(activeEnvironment.id, row.id, "value", event.target.value)
-                          }
+                          onChange={(event) => {
+                            updateEnvironmentVar(activeEnvironment.id, row.id, "value", event.target.value);
+                            scheduleEnvironmentAutosave();
+                          }}
                           ref={(input) => {
                             environmentInputRefs.current[`${activeEnvironment.id}:${row.id}:value`] = input;
                           }}

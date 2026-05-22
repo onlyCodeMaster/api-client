@@ -475,11 +475,55 @@
       - 本轮没有再发现 “删除了但不存”“报错后状态卡住” 或 “空白行焦点丢失” 这类基础闭环问题。
   - 自信度检查：当前对 `Task 7` 达到 100% 结束信心。原因是这轮找到了一个真实的 autosave 一致性缺口，完成了最小修复，并通过新增的 request-editor 专门测试、现有 params/headers 回归测试、生产构建和 diff 健全性检查证明编辑器基础闭环已经成立，没有留下新的已知漏洞。
 
-- [ ] Task 8: 大型全面检查 - Explorer / Environment / Editor
+- [x] Task 8: 大型全面检查 - Explorer / Environment / Editor
   - 目标：围绕 Task 5 到 Task 7 做第二次全面 debug 循环，确认搜索、编辑和保存反馈真实可靠。
   - 独立验证：Explorer 过滤、environment 管理、editor dirty/save 全部有回归证据且无明显边界漏洞。
   - 完成内容：
-  - 自信度检查：
+    - 已按 goal 要求重新全量阅读 `goal-15/input.md`、`goal-15/plan.md`、`goal-15/tasks.md`，并对 `P0-2 / P0-3 / P0-4` 的当前实现重新做了一轮跨界面、状态管理和保存反馈检查。
+    - 这轮复核没有停在“已有测试是绿的”，而是沿着 autosave、状态提示和交互锁定逻辑继续深挖，最终抓到了三个真实的一致性缺口，全部集中在 environment 编辑链路：
+      - `scheduleEnvironmentAutosave` 之前直接依赖闭包里的 `activeEnvironment`，不会像 request autosave 那样回读 store 最新快照。
+      - 结果是：environment 开启 auto-save 时，快速编辑变量值会保存旧快照，而不是最终最新值。
+      - environment 变量删除之前不会触发 autosave，导致 auto-save 语义变成“编辑会存，删除不一定会存”。
+      - `Save Env` 按钮在 `isSavingEnvironment` 为 `true` 时之前不会禁用，存在重复点击和并发提交风险。
+    - 已完成前端修复：
+      - `src/App.tsx`
+        - `handleSaveEnvironment` 现在支持接收显式 `environmentOverride`，保存时使用目标 environment 的真实最新内容，而不是隐式依赖当前闭包环境。
+        - `scheduleEnvironmentAutosave` 现在会像 request autosave 一样：
+          - 捕获 `environmentId`
+          - 从 `useRequestStore.getState()` 回读最新 environment
+          - 用最新 signature 做错误短路判断
+          - 对已删除或 scratch environment 直接跳过
+        - `handleRemoveEnvironmentVar` 现在会调度 `scheduleEnvironmentAutosave()`，把变量删除纳入 autosave 链路。
+        - `Save Env` 按钮现在会在保存进行中正确禁用，避免重复提交。
+    - 已新增专门回归测试：
+      - `src/App.environment-autosave.test.tsx`
+        - `autosaves the latest environment edits and row removals`
+          - 直接证明 environment autosave 保存的是最新编辑值，而不是落后一拍的旧快照
+          - 也直接证明删除 environment 变量后会自动触发 `save_environment`
+        - `disables Save Env while a save is already in flight`
+          - 直接证明保存中的环境按钮会锁定，避免重复触发保存
+    - 与 Task 6 / Task 7 现有专门测试结合后，本轮大检查确认：
+      - Explorer：
+        - `src/App.explorer-search.test.tsx` 已真实覆盖 collections、history、environments 的过滤与空结果反馈
+      - Environment：
+        - 现在不只是 CRUD 可用，autosave 和保存中状态也具备一致性
+      - Request editor：
+        - `src/App.request-editor.test.tsx` 与 `src/App.params-headers.test.tsx` 已覆盖删除、焦点、dirty/save 状态、结构性 autosave
+    - 已完成本轮验证：
+      - `npm test -- --run src/App.environment-autosave.test.tsx` 通过
+        - `1` test file, `2` tests passed
+      - `npm test -- --run src/App.crud.test.tsx src/App.explorer-search.test.tsx src/App.request-editor.test.tsx src/App.environment-autosave.test.tsx` 通过
+        - `4` test files, `13` tests passed
+      - `npm run build` 通过
+      - `git diff --check` 通过
+    - 结论：
+      - 第二次大检查确实发现了 environment autosave / saving state 的真实漏洞，而不是空跑验证。
+      - 这些问题修复后，`P0-2 / P0-3 / P0-4` 这三块在当前代码下已经同时具备：
+        - 实时过滤与空结果反馈
+        - environment 管理与 autosave 一致性
+        - request editor 的 dirty/save/焦点/结构性保存闭环
+      - 本轮没有再发现 explorer 过滤失真、environment 保存滞后、或 editor 状态提示失真的新问题。
+  - 自信度检查：当前对 `Task 8` 达到 100% 结束信心。原因是这轮不是只依赖既有绿灯，而是通过代码复核抓到了 environment autosave 的真实缺陷，完成了最小修复，并用新增专门测试、现有 explorer/editor 回归、生产构建和 diff 健全性检查共同证明第二次大检查已经闭环，没有留下新的已知漏洞。
 
 - [ ] Task 9: 实现或修复 `P0-5 History 基础回放`
   - 目标：让用户可以从 history 恢复请求、快速 resend，并看到真实状态与时间。
