@@ -232,11 +232,54 @@
       - bridge / Rust / storage 的 `save_request` 持久化路径和相关 CRUD 测试在前一 task 已完成审计并实际验证通过
   - 自信度检查：当前对 `Task 3` 达到 100% 结束信心。此前 `P0-1` 唯一显著未闭环的是新建 / 复制 request 默认不立即落盘；现在这条链路已经补齐，并且新行为直接体现在前端自动化测试通过、构建通过和 diff 健全性通过上，没有留下新的已知漏洞。
 
-- [ ] Task 4: 大型全面检查 - CRUD / 持久化 / 数据一致性
+- [x] Task 4: 大型全面检查 - CRUD / 持久化 / 数据一致性
   - 目标：围绕前 3 个 task 做一次全面 debug 循环，确认不存在伪持久化、引用丢失、排序错乱和删除后残留。
   - 独立验证：CRUD 相关交互、重载恢复、异常路径和测试证据全部闭环。
   - 完成内容：
-  - 自信度检查：
+    - 已按 goal 要求重新全量阅读 `goal-15/input.md`、`goal-15/plan.md`、`goal-15/tasks.md` 后，对 `P0-1` 的 CRUD / 持久化链路做了一次跨层大检查。
+    - 本轮发现并修复了一个真实的数据一致性缺陷：
+      - `load_bootstrap_state` 会根据 `settings.recent_workspace` 读取当前 workspace 的 collections。
+      - 但 `src-tauri/src/storage.rs` 里 collection / request 相关写操作此前固定写入 `default-workspace.json`。
+      - 结果是：当当前加载的 workspace 不是默认 workspace 时，界面读的是 A，新增 / 重命名 / 删除 / 排序 / 分组写的是 B，形成“读写分离”的伪持久化风险。
+    - 已完成 Rust 侧修复：
+      - `src-tauri/src/storage.rs`
+        - 新增 workspace-aware 版本：
+          - `save_request_in_workspace`
+          - `create_collection_in_workspace`
+          - `rename_collection_in_workspace`
+          - `delete_collection_in_workspace`
+          - `move_collection_in_workspace`
+          - `save_collection_organization_in_workspace`
+        - 这些实现现在都会把 collection 引用维护、workspace 文件读写、collection 列表回读绑定到显式传入的 workspace，而不是硬编码 `default-workspace`。
+        - 保留默认 workspace wrapper 供现有测试复用，并在非测试构建下显式消除 `dead_code` 警告，保证编译输出干净。
+      - `src-tauri/src/commands.rs`
+        - `AppState` 增加 `current_workspace: Mutex<String>`。
+        - 新增 `current_workspace_name(...)`，统一从当前已加载的 runtime workspace 解析 CRUD 命令应落到哪个 workspace。
+        - `load_bootstrap_state` 成功后会同步刷新 `current_workspace`。
+        - `save_request / create_collection / rename_collection / delete_collection / move_collection / save_collection_organization` 已全部切到 workspace-aware storage API。
+      - `src-tauri/src/lib.rs`
+        - Tauri 启动时会读取已保存 settings，并用其 `recent_workspace` 初始化 `AppState.current_workspace`。
+    - 这次还额外确认了一个容易误修的边界：
+      - `save_settings` 修改的 `recentWorkspace` 在当前产品语义里更接近“下次 bootstrap 默认工作区”，不是即时切换已加载 workspace。
+      - 因此前述 runtime workspace 指针只在 `load_bootstrap_state` 同步，而不是在 `save_settings` 时立即切换，避免出现“界面仍是旧 workspace，后续 CRUD 却偷偷写到新 workspace”的新不一致。
+    - 已补齐并通过针对性回归测试：
+      - `src-tauri/src/storage.rs`
+        - `save_request_in_workspace_creates_collection_reference_outside_default_workspace`
+          - 证明自定义 workspace 下新建 request 只会更新目标 workspace，不会污染 `default-workspace.json`
+        - `collection_management_respects_custom_workspace_file`
+          - 证明 create / organization / rename / move / delete collection 全部只作用于目标 workspace 文件，并保持 group / collapsed 元数据
+    - 已完成本轮全面验证：
+      - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过
+        - `31` tests passed
+      - `npm test -- --run src/App.crud.test.tsx` 通过
+        - `1` test file, `4` tests passed
+      - `npm run build` 通过
+      - `cargo fmt --manifest-path src-tauri/Cargo.toml --check` 通过
+      - `git diff --check` 通过
+    - 结论：
+      - 当前 `P0-1` 的 CRUD 不只是默认 workspace 下可用；在“按当前 workspace 读取并回写”的数据一致性上也已闭环。
+      - 本轮没有再发现 request/collection 删除残留、排序丢失、组织元数据丢失或 workspace 串写的问题。
+  - 自信度检查：当前对 `Task 4` 达到 100% 结束信心。原因不是主观判断，而是已经找到真实缺陷、完成最小修复、补上专门回归测试，并实际通过 Rust 存储测试、前端 CRUD 测试、生产构建、格式检查和 diff 健全性检查；同时也对 `recentWorkspace` 的运行时语义做了边界确认，避免引入新的“读写 workspace 不一致”回归。
 
 - [ ] Task 5: 实现或修复 `P0-2 Environment CRUD`
   - 目标：补齐 environment 的新建、重命名、删除，以及变量新增、删除、编辑能力。

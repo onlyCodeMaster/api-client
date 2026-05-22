@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -14,24 +15,49 @@ use crate::models::{
     DeleteCollectionInput, DeleteEnvironmentInput, DeleteRequestInput, EnvironmentSummary,
     EnvironmentVariable, HistoryEntry, LogSummary, MoveCollectionInput, MoveRequestInput,
     MoveRequestResult, RecordHistoryInput, RenameCollectionInput, RenameEnvironmentInput,
-    ReorderRequestInput, RequestBodyRow, RequestKeyValue, RuntimeSummary, SaveEnvironmentInput,
-    SaveRequestInput, StoredRequest,
+    ReorderRequestInput, RequestBodyRow, RequestKeyValue, RuntimeSummary,
+    SaveCollectionOrganizationInput, SaveEnvironmentInput, SaveRequestInput, SaveSettingsInput,
+    StoredRequest,
 };
 
 const DEFAULT_SETTINGS_THEME: &str = "clay-light";
 const DEFAULT_SETTINGS_WORKSPACE: &str = "default-workspace";
+const DEFAULT_SETTINGS_PROXY_MODE: &str = "system";
+const DEFAULT_SETTINGS_PROXY_URL: &str = "";
 const DEFAULT_COOKIE_PATH: &str = "/";
 const CACHE_INDEX_FILE_NAME: &str = "index.json";
 const ACTIVE_LOG_FILE_NAME: &str = "api-client.log";
 const DEFAULT_BODY_MODE: &str = "raw";
+const DEFAULT_AUTH_TYPE: &str = "none";
+const DEFAULT_AUTH_API_KEY_IN: &str = "header";
+const SETTINGS_THEMES: [&str; 3] = ["clay-light", "graphite-dark", "system"];
+const SETTINGS_PROXY_MODES: [&str; 3] = ["system", "disabled", "custom"];
+
+fn normalize_loaded_setting(value: &str, allowed: &[&str], fallback: &str) -> String {
+    let trimmed = value.trim();
+    if allowed.contains(&trimmed) {
+        trimmed.to_string()
+    } else {
+        fallback.to_string()
+    }
+}
+
+fn validate_settings_option(raw_value: &str, allowed: &[&str], label: &str) -> AppResult<String> {
+    let value = raw_value.trim();
+    if allowed.contains(&value) {
+        Ok(value.to_string())
+    } else {
+        Err(AppError::InvalidData(format!(
+            "unsupported settings {label}: {value}"
+        )))
+    }
+}
 
 fn normalize_body_mode(raw_mode: &str) -> String {
     match raw_mode.trim().to_ascii_lowercase().as_str() {
         "json" => "json".to_string(),
         "raw" => "raw".to_string(),
-        "urlencoded" | "x-www-form-urlencoded" | "form-urlencoded" => {
-            "urlencoded".to_string()
-        }
+        "urlencoded" | "x-www-form-urlencoded" | "form-urlencoded" => "urlencoded".to_string(),
         "multipart" | "multipart/form-data" => "multipart".to_string(),
         _ => DEFAULT_BODY_MODE.to_string(),
     }
@@ -43,10 +69,7 @@ fn infer_body_mode(
     body: &str,
     body_rows: &[RequestBodyRow],
 ) -> String {
-    if let Some(mode) = explicit_mode
-        .map(str::trim)
-        .filter(|mode| !mode.is_empty())
-    {
+    if let Some(mode) = explicit_mode.map(str::trim).filter(|mode| !mode.is_empty()) {
         return normalize_body_mode(mode);
     }
 
@@ -503,6 +526,11 @@ pub(crate) fn initialize_database(database_path: &Path) -> AppResult<()> {
             body_rows_json TEXT NOT NULL DEFAULT '[]',
             auth_type TEXT NOT NULL DEFAULT 'none',
             auth_token TEXT NOT NULL DEFAULT '',
+            auth_basic_username TEXT NOT NULL DEFAULT '',
+            auth_basic_password TEXT NOT NULL DEFAULT '',
+            auth_api_key_name TEXT NOT NULL DEFAULT '',
+            auth_api_key_value TEXT NOT NULL DEFAULT '',
+            auth_api_key_in TEXT NOT NULL DEFAULT 'header',
             environment_name TEXT NOT NULL DEFAULT '',
             environment_source TEXT NOT NULL DEFAULT '',
             environment_vars_json TEXT NOT NULL DEFAULT '[]'
@@ -529,6 +557,22 @@ pub(crate) fn initialize_database(database_path: &Path) -> AppResult<()> {
     connection.execute(
         "INSERT OR IGNORE INTO settings (key, value) VALUES (?1, ?2)",
         params!["auto_save", "true"],
+    )?;
+    connection.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES (?1, ?2)",
+        params!["default_proxy_mode", DEFAULT_SETTINGS_PROXY_MODE],
+    )?;
+    connection.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES (?1, ?2)",
+        params!["default_proxy_url", DEFAULT_SETTINGS_PROXY_URL],
+    )?;
+    connection.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES (?1, ?2)",
+        params!["default_tls_verify", "true"],
+    )?;
+    connection.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES (?1, ?2)",
+        params!["default_tls_hostname_verify", "true"],
     )?;
 
     ensure_history_schema(&connection)?;
@@ -560,6 +604,11 @@ fn ensure_history_schema(connection: &Connection) -> AppResult<()> {
         ("body_rows_json", "TEXT NOT NULL DEFAULT '[]'"),
         ("auth_type", "TEXT NOT NULL DEFAULT 'none'"),
         ("auth_token", "TEXT NOT NULL DEFAULT ''"),
+        ("auth_basic_username", "TEXT NOT NULL DEFAULT ''"),
+        ("auth_basic_password", "TEXT NOT NULL DEFAULT ''"),
+        ("auth_api_key_name", "TEXT NOT NULL DEFAULT ''"),
+        ("auth_api_key_value", "TEXT NOT NULL DEFAULT ''"),
+        ("auth_api_key_in", "TEXT NOT NULL DEFAULT 'header'"),
         ("environment_name", "TEXT NOT NULL DEFAULT ''"),
         ("environment_source", "TEXT NOT NULL DEFAULT ''"),
         ("environment_vars_json", "TEXT NOT NULL DEFAULT '[]'"),
@@ -874,15 +923,98 @@ fn path_matches(request_path: &str, cookie_path: &str) -> bool {
 
 pub fn load_settings(paths: &StoragePaths) -> AppResult<AppSettings> {
     let connection = open_connection(&paths.database_path)?;
-    let theme = read_setting(&connection, "theme", DEFAULT_SETTINGS_THEME)?;
+    let theme = normalize_loaded_setting(
+        &read_setting(&connection, "theme", DEFAULT_SETTINGS_THEME)?,
+        &SETTINGS_THEMES,
+        DEFAULT_SETTINGS_THEME,
+    );
     let recent_workspace =
         read_setting(&connection, "recent_workspace", DEFAULT_SETTINGS_WORKSPACE)?;
     let auto_save = read_setting(&connection, "auto_save", "true")? == "true";
+    let default_proxy_mode = normalize_loaded_setting(
+        &read_setting(
+            &connection,
+            "default_proxy_mode",
+            DEFAULT_SETTINGS_PROXY_MODE,
+        )?,
+        &SETTINGS_PROXY_MODES,
+        DEFAULT_SETTINGS_PROXY_MODE,
+    );
+    let default_proxy_url =
+        read_setting(&connection, "default_proxy_url", DEFAULT_SETTINGS_PROXY_URL)?
+            .trim()
+            .to_string();
+    let default_tls_verify = read_setting(&connection, "default_tls_verify", "true")? == "true";
+    let default_tls_hostname_verify =
+        read_setting(&connection, "default_tls_hostname_verify", "true")? == "true";
 
     Ok(AppSettings {
         theme,
         recent_workspace,
         auto_save,
+        default_proxy_mode,
+        default_proxy_url,
+        default_tls_verify,
+        default_tls_hostname_verify,
+    })
+}
+
+pub fn save_settings(paths: &StoragePaths, input: SaveSettingsInput) -> AppResult<AppSettings> {
+    let theme = validate_settings_option(&input.theme, &SETTINGS_THEMES, "theme")?;
+    let recent_workspace = input.recent_workspace.trim().to_string();
+    let default_proxy_mode = validate_settings_option(
+        &input.default_proxy_mode,
+        &SETTINGS_PROXY_MODES,
+        "proxy mode",
+    )?;
+    let default_proxy_url = input.default_proxy_url.trim().to_string();
+    if default_proxy_mode == "custom" && default_proxy_url.is_empty() {
+        return Err(AppError::InvalidData(
+            "proxy URL is required when proxy mode is custom".to_string(),
+        ));
+    }
+
+    let mut connection = open_connection(&paths.database_path)?;
+    let transaction = connection.transaction()?;
+
+    write_setting(&transaction, "theme", &theme)?;
+    write_setting(&transaction, "recent_workspace", &recent_workspace)?;
+    write_setting(
+        &transaction,
+        "auto_save",
+        if input.auto_save { "true" } else { "false" },
+    )?;
+    write_setting(&transaction, "default_proxy_mode", &default_proxy_mode)?;
+    write_setting(&transaction, "default_proxy_url", &default_proxy_url)?;
+    write_setting(
+        &transaction,
+        "default_tls_verify",
+        if input.default_tls_verify {
+            "true"
+        } else {
+            "false"
+        },
+    )?;
+    write_setting(
+        &transaction,
+        "default_tls_hostname_verify",
+        if input.default_tls_hostname_verify {
+            "true"
+        } else {
+            "false"
+        },
+    )?;
+
+    transaction.commit()?;
+
+    Ok(AppSettings {
+        theme,
+        recent_workspace,
+        auto_save: input.auto_save,
+        default_proxy_mode,
+        default_proxy_url,
+        default_tls_verify: input.default_tls_verify,
+        default_tls_hostname_verify: input.default_tls_hostname_verify,
     })
 }
 
@@ -895,6 +1027,15 @@ fn read_setting(connection: &Connection, key: &str, fallback: &str) -> AppResult
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(fallback.to_owned()),
         Err(error) => Err(error.into()),
     }
+}
+
+fn write_setting(connection: &Connection, key: &str, value: &str) -> AppResult<()> {
+    connection.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
 }
 
 pub fn list_history(paths: &StoragePaths) -> AppResult<Vec<HistoryEntry>> {
@@ -919,6 +1060,11 @@ pub fn list_history(paths: &StoragePaths) -> AppResult<Vec<HistoryEntry>> {
             body_rows_json,
             auth_type,
             auth_token,
+            auth_basic_username,
+            auth_basic_password,
+            auth_api_key_name,
+            auth_api_key_value,
+            auth_api_key_in,
             environment_name,
             environment_source,
             environment_vars_json
@@ -932,7 +1078,7 @@ pub fn list_history(paths: &StoragePaths) -> AppResult<Vec<HistoryEntry>> {
         let params_json = row.get::<_, String>(9)?;
         let headers_json = row.get::<_, String>(10)?;
         let body_rows_json = row.get::<_, String>(14)?;
-        let environment_vars_json = row.get::<_, String>(19)?;
+        let environment_vars_json = row.get::<_, String>(24)?;
         Ok(HistoryEntry {
             id: row.get(0)?,
             request_id: row.get(1)?,
@@ -951,8 +1097,13 @@ pub fn list_history(paths: &StoragePaths) -> AppResult<Vec<HistoryEntry>> {
             body_rows: serde_json::from_str(&body_rows_json).unwrap_or_default(),
             auth_type: row.get(15)?,
             auth_token: row.get(16)?,
-            environment_name: row.get(17)?,
-            environment_source: row.get(18)?,
+            auth_basic_username: row.get(17)?,
+            auth_basic_password: row.get(18)?,
+            auth_api_key_name: row.get(19)?,
+            auth_api_key_value: row.get(20)?,
+            auth_api_key_in: normalize_auth_api_key_in(&row.get::<_, String>(21)?),
+            environment_name: row.get(22)?,
+            environment_source: row.get(23)?,
             environment_vars: serde_json::from_str(&environment_vars_json).unwrap_or_default(),
         })
     })?;
@@ -992,11 +1143,19 @@ pub fn record_history(
             body_rows_json,
             auth_type,
             auth_token,
+            auth_basic_username,
+            auth_basic_password,
+            auth_api_key_name,
+            auth_api_key_value,
+            auth_api_key_in,
             environment_name,
             environment_source,
             environment_vars_json
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+        VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+            ?19, ?20, ?21, ?22, ?23
+        )
         "#,
         params![
             input.request_id,
@@ -1012,8 +1171,13 @@ pub fn record_history(
             input.body_mode,
             input.body_content_type,
             body_rows_json,
-            input.auth_type,
+            normalize_auth_type(&input.auth_type),
             input.auth_token,
+            input.auth_basic_username,
+            input.auth_basic_password,
+            input.auth_api_key_name,
+            input.auth_api_key_value,
+            normalize_auth_api_key_in(&input.auth_api_key_in),
             input.environment.name,
             input.environment.file_path,
             environment_vars_json
@@ -1043,9 +1207,19 @@ pub fn list_collections(
     let workspace = read_workspace_file(paths, workspace_name)?;
     let mut collections = Vec::new();
 
-    for file_name in workspace.collections {
+    for file_name in &workspace.collections {
         let path = paths.collections_dir.join(file_name);
-        collections.push(read_collection_file(&path)?);
+        let mut collection = read_collection_file(&path)?;
+        collection.group = workspace
+            .collection_groups
+            .get(file_name)
+            .cloned()
+            .unwrap_or_default();
+        collection.collapsed = workspace
+            .collapsed_collections
+            .iter()
+            .any(|item| item == file_name);
+        collections.push(collection);
     }
 
     Ok(collections)
@@ -1127,7 +1301,16 @@ pub fn delete_environment(paths: &StoragePaths, input: DeleteEnvironmentInput) -
     Ok(())
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn save_request(paths: &StoragePaths, input: SaveRequestInput) -> AppResult<CollectionSummary> {
+    save_request_in_workspace(paths, DEFAULT_SETTINGS_WORKSPACE, input)
+}
+
+pub fn save_request_in_workspace(
+    paths: &StoragePaths,
+    workspace_name: &str,
+    input: SaveRequestInput,
+) -> AppResult<CollectionSummary> {
     let file_path = resolve_storage_path(&paths.collections_dir, &input.collection_file);
     if let Some(parent) = file_path.parent() {
         fs::create_dir_all(parent)?;
@@ -1139,6 +1322,8 @@ pub fn save_request(paths: &StoragePaths, input: SaveRequestInput) -> AppResult<
         CollectionSummary {
             name: input.collection.clone(),
             file_path: file_path.to_string_lossy().into_owned(),
+            group: String::new(),
+            collapsed: false,
             requests: Vec::new(),
         }
     };
@@ -1155,8 +1340,13 @@ pub fn save_request(paths: &StoragePaths, input: SaveRequestInput) -> AppResult<
         body_mode: normalize_body_mode(&input.body_mode),
         body_content_type: input.body_content_type,
         body_rows: input.body_rows,
-        auth_type: input.auth_type,
+        auth_type: normalize_auth_type(&input.auth_type),
         auth_token: input.auth_token,
+        auth_basic_username: input.auth_basic_username,
+        auth_basic_password: input.auth_basic_password,
+        auth_api_key_name: input.auth_api_key_name,
+        auth_api_key_value: input.auth_api_key_value,
+        auth_api_key_in: normalize_auth_api_key_in(&input.auth_api_key_in),
     };
 
     if let Some(position) = collection
@@ -1175,13 +1365,22 @@ pub fn save_request(paths: &StoragePaths, input: SaveRequestInput) -> AppResult<
     }))
     .map_err(|error| AppError::InvalidData(error.to_string()))?;
     fs::write(&file_path, format!("{payload}\n"))?;
-    ensure_workspace_collection_reference(paths, DEFAULT_SETTINGS_WORKSPACE, &file_path)?;
+    ensure_workspace_collection_reference(paths, workspace_name, &file_path)?;
 
     read_collection_file(&file_path)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn create_collection(
     paths: &StoragePaths,
+    input: CreateCollectionInput,
+) -> AppResult<CollectionSummary> {
+    create_collection_in_workspace(paths, DEFAULT_SETTINGS_WORKSPACE, input)
+}
+
+pub fn create_collection_in_workspace(
+    paths: &StoragePaths,
+    workspace_name: &str,
     input: CreateCollectionInput,
 ) -> AppResult<CollectionSummary> {
     let file_path = resolve_storage_path(&paths.collections_dir, &input.file_path);
@@ -1198,16 +1397,27 @@ pub fn create_collection(
     let collection = CollectionSummary {
         name: input.name,
         file_path: file_path.to_string_lossy().into_owned(),
+        group: String::new(),
+        collapsed: false,
         requests: Vec::new(),
     };
 
     write_collection_file(&file_path, &collection)?;
-    ensure_workspace_collection_reference(paths, DEFAULT_SETTINGS_WORKSPACE, &file_path)?;
+    ensure_workspace_collection_reference(paths, workspace_name, &file_path)?;
     read_collection_file(&file_path)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn rename_collection(
     paths: &StoragePaths,
+    input: RenameCollectionInput,
+) -> AppResult<CollectionSummary> {
+    rename_collection_in_workspace(paths, DEFAULT_SETTINGS_WORKSPACE, input)
+}
+
+pub fn rename_collection_in_workspace(
+    paths: &StoragePaths,
+    workspace_name: &str,
     input: RenameCollectionInput,
 ) -> AppResult<CollectionSummary> {
     let current_file_path = resolve_storage_path(&paths.collections_dir, &input.current_file_path);
@@ -1242,14 +1452,24 @@ pub fn rename_collection(
         fs::remove_file(&current_file_path)?;
     }
 
-    remove_workspace_collection_reference(paths, DEFAULT_SETTINGS_WORKSPACE, &current_file_path)?;
-    ensure_workspace_collection_reference(paths, DEFAULT_SETTINGS_WORKSPACE, &new_file_path)?;
+    rename_workspace_collection_reference(
+        paths,
+        workspace_name,
+        &current_file_path,
+        &new_file_path,
+    )?;
 
     read_collection_file(&new_file_path)
 }
 
-pub fn delete_collection(
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn delete_collection(paths: &StoragePaths, input: DeleteCollectionInput) -> AppResult<()> {
+    delete_collection_in_workspace(paths, DEFAULT_SETTINGS_WORKSPACE, input)
+}
+
+pub fn delete_collection_in_workspace(
     paths: &StoragePaths,
+    workspace_name: &str,
     input: DeleteCollectionInput,
 ) -> AppResult<()> {
     let file_path = resolve_storage_path(&paths.collections_dir, &input.file_path);
@@ -1261,11 +1481,14 @@ pub fn delete_collection(
     }
 
     fs::remove_file(&file_path)?;
-    remove_workspace_collection_reference(paths, DEFAULT_SETTINGS_WORKSPACE, &file_path)?;
+    remove_workspace_collection_reference(paths, workspace_name, &file_path)?;
     Ok(())
 }
 
-pub fn delete_request(paths: &StoragePaths, input: DeleteRequestInput) -> AppResult<CollectionSummary> {
+pub fn delete_request(
+    paths: &StoragePaths,
+    input: DeleteRequestInput,
+) -> AppResult<CollectionSummary> {
     let file_path = resolve_storage_path(&paths.collections_dir, &input.collection_file);
     if !file_path.exists() {
         return Err(AppError::NotFound(format!(
@@ -1291,8 +1514,17 @@ pub fn delete_request(paths: &StoragePaths, input: DeleteRequestInput) -> AppRes
     read_collection_file(&file_path)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn move_collection(
     paths: &StoragePaths,
+    input: MoveCollectionInput,
+) -> AppResult<Vec<CollectionSummary>> {
+    move_collection_in_workspace(paths, DEFAULT_SETTINGS_WORKSPACE, input)
+}
+
+pub fn move_collection_in_workspace(
+    paths: &StoragePaths,
+    workspace_name: &str,
     input: MoveCollectionInput,
 ) -> AppResult<Vec<CollectionSummary>> {
     let file_path = resolve_storage_path(&paths.collections_dir, &input.file_path);
@@ -1303,7 +1535,7 @@ pub fn move_collection(
         )));
     }
 
-    let mut workspace = read_workspace_file(paths, DEFAULT_SETTINGS_WORKSPACE)?;
+    let mut workspace = read_workspace_file(paths, workspace_name)?;
     let relative_collection = file_path
         .strip_prefix(&paths.collections_dir)
         .unwrap_or(&file_path)
@@ -1316,16 +1548,79 @@ pub fn move_collection(
         .ok_or_else(|| {
             AppError::NotFound(format!(
                 "collection {} is not referenced by workspace {}",
-                relative_collection, DEFAULT_SETTINGS_WORKSPACE
+                relative_collection, workspace_name
             ))
         })?;
 
     let entry = workspace.collections.remove(current_index);
     let target_index = input.target_index.min(workspace.collections.len());
     workspace.collections.insert(target_index, entry);
-    write_workspace_file(paths, DEFAULT_SETTINGS_WORKSPACE, &workspace)?;
+    write_workspace_file(paths, workspace_name, &workspace)?;
 
-    list_collections(paths, DEFAULT_SETTINGS_WORKSPACE)
+    list_collections(paths, workspace_name)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn save_collection_organization(
+    paths: &StoragePaths,
+    input: SaveCollectionOrganizationInput,
+) -> AppResult<Vec<CollectionSummary>> {
+    save_collection_organization_in_workspace(paths, DEFAULT_SETTINGS_WORKSPACE, input)
+}
+
+pub fn save_collection_organization_in_workspace(
+    paths: &StoragePaths,
+    workspace_name: &str,
+    input: SaveCollectionOrganizationInput,
+) -> AppResult<Vec<CollectionSummary>> {
+    let file_path = resolve_storage_path(&paths.collections_dir, &input.file_path);
+    if !file_path.exists() {
+        return Err(AppError::NotFound(format!(
+            "collection file does not exist: {}",
+            file_path.display()
+        )));
+    }
+
+    let relative_collection = workspace_relative_collection_path(paths, &file_path);
+    let mut workspace = read_workspace_file(paths, workspace_name)?;
+    if !workspace
+        .collections
+        .iter()
+        .any(|item| item == &relative_collection)
+    {
+        return Err(AppError::NotFound(format!(
+            "collection {} is not referenced by workspace {}",
+            relative_collection, workspace_name
+        )));
+    }
+
+    let group = input.group.trim().to_string();
+    if group.is_empty() {
+        workspace.collection_groups.remove(&relative_collection);
+    } else {
+        workspace
+            .collection_groups
+            .insert(relative_collection.clone(), group);
+    }
+
+    if input.collapsed {
+        if !workspace
+            .collapsed_collections
+            .iter()
+            .any(|item| item == &relative_collection)
+        {
+            workspace
+                .collapsed_collections
+                .push(relative_collection.clone());
+        }
+    } else {
+        workspace
+            .collapsed_collections
+            .retain(|item| item != &relative_collection);
+    }
+
+    write_workspace_file(paths, workspace_name, &workspace)?;
+    list_collections(paths, workspace_name)
 }
 
 pub fn reorder_request(
@@ -1360,11 +1655,9 @@ pub fn reorder_request(
     read_collection_file(&file_path)
 }
 
-pub fn move_request(
-    paths: &StoragePaths,
-    input: MoveRequestInput,
-) -> AppResult<MoveRequestResult> {
-    let source_file_path = resolve_storage_path(&paths.collections_dir, &input.source_collection_file);
+pub fn move_request(paths: &StoragePaths, input: MoveRequestInput) -> AppResult<MoveRequestResult> {
+    let source_file_path =
+        resolve_storage_path(&paths.collections_dir, &input.source_collection_file);
     if !source_file_path.exists() {
         return Err(AppError::NotFound(format!(
             "source collection file does not exist: {}",
@@ -1372,7 +1665,8 @@ pub fn move_request(
         )));
     }
 
-    let target_file_path = resolve_storage_path(&paths.collections_dir, &input.target_collection_file);
+    let target_file_path =
+        resolve_storage_path(&paths.collections_dir, &input.target_collection_file);
     if !target_file_path.exists() {
         return Err(AppError::NotFound(format!(
             "target collection file does not exist: {}",
@@ -1425,7 +1719,9 @@ pub fn move_request(
     moved_request.collection = target_collection.name.clone();
     moved_request.collection_file = target_file_path.to_string_lossy().into_owned();
     let target_index = input.target_index.min(target_collection.requests.len());
-    target_collection.requests.insert(target_index, moved_request.clone());
+    target_collection
+        .requests
+        .insert(target_index, moved_request.clone());
 
     write_collection_file(&source_file_path, &source_collection)?;
     write_collection_file(&target_file_path, &target_collection)?;
@@ -1463,6 +1759,14 @@ fn read_workspace_file(paths: &StoragePaths, workspace_name: &str) -> AppResult<
     serde_json::from_str(&contents).map_err(|error| AppError::InvalidData(error.to_string()))
 }
 
+fn workspace_relative_collection_path(paths: &StoragePaths, collection_file: &Path) -> String {
+    collection_file
+        .strip_prefix(&paths.collections_dir)
+        .unwrap_or(collection_file)
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn ensure_workspace_collection_reference(
     paths: &StoragePaths,
     workspace_name: &str,
@@ -1479,25 +1783,18 @@ fn ensure_workspace_collection_reference(
         serde_json::from_str::<WorkspaceFile>(&contents)
             .map_err(|error| AppError::InvalidData(error.to_string()))?
     } else {
-        WorkspaceFile {
-            collections: Vec::new(),
-        }
+        WorkspaceFile::default()
     };
 
-    let relative_collection = collection_file
-        .strip_prefix(&paths.collections_dir)
-        .unwrap_or(collection_file)
-        .to_string_lossy()
-        .into_owned();
+    let relative_collection = workspace_relative_collection_path(paths, collection_file);
 
-    if !workspace.collections.iter().any(|item| item == &relative_collection) {
+    if !workspace
+        .collections
+        .iter()
+        .any(|item| item == &relative_collection)
+    {
         workspace.collections.push(relative_collection);
-        let payload = serde_json::to_string_pretty(&serde_json::json!({
-            "name": "Default Workspace",
-            "collections": workspace.collections,
-        }))
-        .map_err(|error| AppError::InvalidData(error.to_string()))?;
-        fs::write(path, format!("{payload}\n"))?;
+        write_workspace_file(paths, workspace_name, &workspace)?;
     }
 
     Ok(())
@@ -1519,24 +1816,77 @@ fn remove_workspace_collection_reference(
         serde_json::from_str::<WorkspaceFile>(&contents)
             .map_err(|error| AppError::InvalidData(error.to_string()))?
     } else {
-        WorkspaceFile {
-            collections: Vec::new(),
-        }
+        WorkspaceFile::default()
     };
 
-    let relative_collection = collection_file
-        .strip_prefix(&paths.collections_dir)
-        .unwrap_or(collection_file)
-        .to_string_lossy()
-        .into_owned();
+    let relative_collection = workspace_relative_collection_path(paths, collection_file);
 
-    workspace.collections.retain(|item| item != &relative_collection);
-    let payload = serde_json::to_string_pretty(&serde_json::json!({
-        "name": "Default Workspace",
-        "collections": workspace.collections,
-    }))
-    .map_err(|error| AppError::InvalidData(error.to_string()))?;
-    fs::write(path, format!("{payload}\n"))?;
+    workspace
+        .collections
+        .retain(|item| item != &relative_collection);
+    workspace.collection_groups.remove(&relative_collection);
+    workspace
+        .collapsed_collections
+        .retain(|item| item != &relative_collection);
+    write_workspace_file(paths, workspace_name, &workspace)?;
+    Ok(())
+}
+
+fn rename_workspace_collection_reference(
+    paths: &StoragePaths,
+    workspace_name: &str,
+    current_collection_file: &Path,
+    new_collection_file: &Path,
+) -> AppResult<()> {
+    let file_name = if workspace_name.ends_with(".json") {
+        workspace_name.to_string()
+    } else {
+        format!("{workspace_name}.json")
+    };
+    let path = paths.workspaces_dir.join(file_name);
+    let mut workspace = if path.exists() {
+        let contents = fs::read_to_string(&path)?;
+        serde_json::from_str::<WorkspaceFile>(&contents)
+            .map_err(|error| AppError::InvalidData(error.to_string()))?
+    } else {
+        WorkspaceFile::default()
+    };
+
+    let current_relative = workspace_relative_collection_path(paths, current_collection_file);
+    let new_relative = workspace_relative_collection_path(paths, new_collection_file);
+
+    if let Some(position) = workspace
+        .collections
+        .iter()
+        .position(|item| item == &current_relative)
+    {
+        workspace.collections[position] = new_relative.clone();
+    } else if !workspace
+        .collections
+        .iter()
+        .any(|item| item == &new_relative)
+    {
+        workspace.collections.push(new_relative.clone());
+    }
+
+    if let Some(group) = workspace.collection_groups.remove(&current_relative) {
+        workspace
+            .collection_groups
+            .insert(new_relative.clone(), group);
+    }
+
+    let was_collapsed = workspace
+        .collapsed_collections
+        .iter()
+        .any(|item| item == &current_relative);
+    workspace
+        .collapsed_collections
+        .retain(|item| item != &current_relative && item != &new_relative);
+    if was_collapsed {
+        workspace.collapsed_collections.push(new_relative);
+    }
+
+    write_workspace_file(paths, workspace_name, &workspace)?;
     Ok(())
 }
 
@@ -1554,6 +1904,8 @@ fn write_workspace_file(
     let payload = serde_json::to_string_pretty(&serde_json::json!({
         "name": "Default Workspace",
         "collections": workspace.collections,
+        "collectionGroups": workspace.collection_groups,
+        "collapsedCollections": workspace.collapsed_collections,
     }))
     .map_err(|error| AppError::InvalidData(error.to_string()))?;
     fs::write(path, format!("{payload}\n"))?;
@@ -1603,8 +1955,13 @@ fn read_collection_file(path: &Path) -> AppResult<CollectionSummary> {
                 ),
                 body_rows: request.body_rows,
                 body_mode,
-                auth_type: request.auth_type,
+                auth_type: normalize_auth_type(&request.auth_type),
                 auth_token: request.auth_token,
+                auth_basic_username: request.auth_basic_username,
+                auth_basic_password: request.auth_basic_password,
+                auth_api_key_name: request.auth_api_key_name,
+                auth_api_key_value: request.auth_api_key_value,
+                auth_api_key_in: normalize_auth_api_key_in(&request.auth_api_key_in),
             }
         })
         .collect();
@@ -1612,6 +1969,8 @@ fn read_collection_file(path: &Path) -> AppResult<CollectionSummary> {
     Ok(CollectionSummary {
         name: parsed.name,
         file_path,
+        group: String::new(),
+        collapsed: false,
         requests,
     })
 }
@@ -1923,9 +2282,15 @@ fn yaml_scalar_from_value(value: &Value) -> String {
     serde_json::to_string(&scalar).unwrap_or_else(|_| "\"\"".to_string())
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WorkspaceFile {
+    #[serde(default)]
     collections: Vec<String>,
+    #[serde(default)]
+    collection_groups: BTreeMap<String, String>,
+    #[serde(default)]
+    collapsed_collections: Vec<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1954,8 +2319,45 @@ struct CollectionFileRequest {
     body_content_type: Option<String>,
     #[serde(default)]
     body_rows: Vec<RequestBodyRow>,
+    #[serde(default = "default_auth_type_value")]
     auth_type: String,
+    #[serde(default)]
     auth_token: String,
+    #[serde(default)]
+    auth_basic_username: String,
+    #[serde(default)]
+    auth_basic_password: String,
+    #[serde(default)]
+    auth_api_key_name: String,
+    #[serde(default)]
+    auth_api_key_value: String,
+    #[serde(default = "default_auth_api_key_in_value")]
+    auth_api_key_in: String,
+}
+
+fn normalize_auth_type(raw_auth_type: &str) -> String {
+    match raw_auth_type.trim() {
+        "bearer" => "bearer".to_string(),
+        "basic" => "basic".to_string(),
+        "apiKey" => "apiKey".to_string(),
+        _ => DEFAULT_AUTH_TYPE.to_string(),
+    }
+}
+
+fn normalize_auth_api_key_in(raw_auth_api_key_in: &str) -> String {
+    if raw_auth_api_key_in.trim().eq_ignore_ascii_case("query") {
+        "query".to_string()
+    } else {
+        DEFAULT_AUTH_API_KEY_IN.to_string()
+    }
+}
+
+fn default_auth_type_value() -> String {
+    DEFAULT_AUTH_TYPE.to_string()
+}
+
+fn default_auth_api_key_in_value() -> String {
+    DEFAULT_AUTH_API_KEY_IN.to_string()
 }
 
 #[cfg(test)]
@@ -2008,11 +2410,13 @@ mod tests {
                     key: "query".to_string(),
                     value: "workspace".to_string(),
                     enabled: true,
+                    description: "Search term".to_string(),
                 }],
                 headers: vec![crate::models::RequestKeyValue {
                     key: "Accept".to_string(),
                     value: "application/json".to_string(),
                     enabled: true,
+                    description: "Preferred response type".to_string(),
                 }],
                 body: "{\"query\":\"workspace\"}".to_string(),
                 body_mode: "json".to_string(),
@@ -2020,6 +2424,11 @@ mod tests {
                 body_rows: Vec::new(),
                 auth_type: "bearer".to_string(),
                 auth_token: "{{secret.prod_token}}".to_string(),
+                auth_basic_username: String::new(),
+                auth_basic_password: String::new(),
+                auth_api_key_name: String::new(),
+                auth_api_key_value: String::new(),
+                auth_api_key_in: "header".to_string(),
                 environment: EnvironmentSummary {
                     name: "Production".to_string(),
                     file_path: "environments/production.json".to_string(),
@@ -2040,6 +2449,8 @@ mod tests {
         assert_eq!(history[0].collection, "Core API");
         assert_eq!(history[0].params.len(), 1);
         assert_eq!(history[0].headers.len(), 1);
+        assert_eq!(history[0].params[0].description, "Search term");
+        assert_eq!(history[0].headers[0].description, "Preferred response type");
         assert_eq!(history[0].auth_type, "bearer");
         assert_eq!(history[0].environment_name, "Production");
     }
@@ -2081,7 +2492,9 @@ mod tests {
         assert!(columns.iter().any(|column| column == "request_id"));
         assert!(columns.iter().any(|column| column == "request_name"));
         assert!(columns.iter().any(|column| column == "params_json"));
-        assert!(columns.iter().any(|column| column == "environment_vars_json"));
+        assert!(columns
+            .iter()
+            .any(|column| column == "environment_vars_json"));
     }
 
     #[test]
@@ -2127,6 +2540,8 @@ mod tests {
             list_collections(&paths, "default-workspace").expect("list workspace collections");
         assert_eq!(collections.len(), 1);
         assert_eq!(collections[0].name, "Core API");
+        assert_eq!(collections[0].group, "");
+        assert!(!collections[0].collapsed);
         assert_eq!(collections[0].requests.len(), 1);
         assert_eq!(collections[0].requests[0].collection, "Core API");
 
@@ -2143,11 +2558,13 @@ mod tests {
                     key: "page".to_string(),
                     value: "2".to_string(),
                     enabled: true,
+                    description: "Page number".to_string(),
                 }],
                 headers: vec![crate::models::RequestKeyValue {
                     key: "Accept".to_string(),
                     value: "application/json".to_string(),
                     enabled: true,
+                    description: "Preferred response type".to_string(),
                 }],
                 body: "".to_string(),
                 body_mode: "raw".to_string(),
@@ -2155,6 +2572,11 @@ mod tests {
                 body_rows: Vec::new(),
                 auth_type: "none".to_string(),
                 auth_token: "".to_string(),
+                auth_basic_username: String::new(),
+                auth_basic_password: String::new(),
+                auth_api_key_name: String::new(),
+                auth_api_key_value: String::new(),
+                auth_api_key_in: "header".to_string(),
             },
         )
         .expect("save request");
@@ -2162,6 +2584,7 @@ mod tests {
         assert_eq!(saved.requests.len(), 1);
         assert_eq!(saved.requests[0].url, "http://localhost:3000/hello-updated");
         assert_eq!(saved.requests[0].params.len(), 1);
+        assert_eq!(saved.requests[0].params[0].description, "Page number");
 
         let reloaded =
             read_collection_file(&collection_file).expect("reload updated collection file");
@@ -2171,9 +2594,117 @@ mod tests {
         );
         assert_eq!(reloaded.requests[0].headers.len(), 1);
         assert_eq!(
+            reloaded.requests[0].headers[0].description,
+            "Preferred response type"
+        );
+        assert_eq!(
             reloaded.requests[0].collection_file,
             collection_file.to_string_lossy()
         );
+    }
+
+    #[test]
+    fn save_collection_organization_persists_group_and_collapsed_state() {
+        let paths = make_test_paths("collection-organization");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
+
+        create_collection(
+            &paths,
+            CreateCollectionInput {
+                name: "Core API".to_string(),
+                file_path: "collections/core-api.json".to_string(),
+            },
+        )
+        .expect("create collection");
+
+        let organized = save_collection_organization(
+            &paths,
+            SaveCollectionOrganizationInput {
+                file_path: "collections/core-api.json".to_string(),
+                group: "Platform".to_string(),
+                collapsed: true,
+            },
+        )
+        .expect("save organization");
+
+        assert_eq!(organized.len(), 1);
+        assert_eq!(organized[0].group, "Platform");
+        assert!(organized[0].collapsed);
+
+        let reloaded =
+            list_collections(&paths, DEFAULT_SETTINGS_WORKSPACE).expect("reload organization");
+        assert_eq!(reloaded[0].group, "Platform");
+        assert!(reloaded[0].collapsed);
+
+        let workspace_contents =
+            fs::read_to_string(paths.workspaces_dir.join("default-workspace.json"))
+                .expect("read workspace");
+        assert!(workspace_contents.contains("\"collectionGroups\""));
+        assert!(workspace_contents.contains("\"collapsedCollections\""));
+        assert!(workspace_contents.contains("\"core-api.json\": \"Platform\""));
+
+        let cleared = save_collection_organization(
+            &paths,
+            SaveCollectionOrganizationInput {
+                file_path: "collections/core-api.json".to_string(),
+                group: " ".to_string(),
+                collapsed: false,
+            },
+        )
+        .expect("clear organization");
+
+        assert_eq!(cleared[0].group, "");
+        assert!(!cleared[0].collapsed);
+    }
+
+    #[test]
+    fn rename_collection_preserves_organization_metadata() {
+        let paths = make_test_paths("collection-organization-rename");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
+
+        create_collection(
+            &paths,
+            CreateCollectionInput {
+                name: "Payments".to_string(),
+                file_path: "collections/payments.json".to_string(),
+            },
+        )
+        .expect("create collection");
+        save_collection_organization(
+            &paths,
+            SaveCollectionOrganizationInput {
+                file_path: "collections/payments.json".to_string(),
+                group: "Billing".to_string(),
+                collapsed: true,
+            },
+        )
+        .expect("save organization");
+
+        rename_collection(
+            &paths,
+            RenameCollectionInput {
+                current_file_path: "collections/payments.json".to_string(),
+                new_name: "Invoices".to_string(),
+                new_file_path: "collections/invoices.json".to_string(),
+            },
+        )
+        .expect("rename collection");
+
+        let collections =
+            list_collections(&paths, DEFAULT_SETTINGS_WORKSPACE).expect("list collections");
+        assert_eq!(collections.len(), 1);
+        assert_eq!(collections[0].name, "Invoices");
+        assert_eq!(collections[0].group, "Billing");
+        assert!(collections[0].collapsed);
+
+        let workspace_contents =
+            fs::read_to_string(paths.workspaces_dir.join("default-workspace.json"))
+                .expect("read workspace");
+        assert!(workspace_contents.contains("invoices.json"));
+        assert!(workspace_contents.contains("\"invoices.json\": \"Billing\""));
+        assert!(!workspace_contents.contains("payments.json"));
     }
 
     #[test]
@@ -2202,6 +2733,59 @@ mod tests {
     }
 
     #[test]
+    fn save_request_in_workspace_creates_collection_reference_outside_default_workspace() {
+        let paths = make_test_paths("save-request-custom-workspace");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
+
+        let saved = save_request_in_workspace(
+            &paths,
+            "workspace-ops",
+            SaveRequestInput {
+                id: "req-workspace".to_string(),
+                name: "GET /workspace".to_string(),
+                collection: "Workspace Ops".to_string(),
+                collection_file: "collections/workspace-ops.json".to_string(),
+                method: "GET".to_string(),
+                url: "http://localhost:3000/workspace".to_string(),
+                params: vec![],
+                headers: vec![],
+                body: "".to_string(),
+                body_mode: "raw".to_string(),
+                body_content_type: String::new(),
+                body_rows: Vec::new(),
+                auth_type: "none".to_string(),
+                auth_token: "".to_string(),
+                auth_basic_username: String::new(),
+                auth_basic_password: String::new(),
+                auth_api_key_name: String::new(),
+                auth_api_key_value: String::new(),
+                auth_api_key_in: "header".to_string(),
+            },
+        )
+        .expect("save request in custom workspace");
+
+        assert_eq!(saved.name, "Workspace Ops");
+        assert_eq!(saved.requests.len(), 1);
+
+        let custom_workspace_contents =
+            fs::read_to_string(paths.workspaces_dir.join("workspace-ops.json"))
+                .expect("read custom workspace");
+        assert!(custom_workspace_contents.contains("workspace-ops.json"));
+
+        let default_workspace_contents =
+            fs::read_to_string(paths.workspaces_dir.join("default-workspace.json"))
+                .expect("read default workspace");
+        assert!(!default_workspace_contents.contains("workspace-ops.json"));
+
+        let custom_collections =
+            list_collections(&paths, "workspace-ops").expect("list custom workspace collections");
+        assert_eq!(custom_collections.len(), 1);
+        assert_eq!(custom_collections[0].name, "Workspace Ops");
+        assert_eq!(custom_collections[0].requests.len(), 1);
+    }
+
+    #[test]
     fn create_collection_rejects_existing_file() {
         let paths = make_test_paths("create-collection-duplicate");
         ensure_directories(&paths).expect("create directories");
@@ -2225,9 +2809,7 @@ mod tests {
         )
         .expect_err("reject duplicate collection file");
 
-        assert!(error
-            .to_string()
-            .contains("collection file already exists"));
+        assert!(error.to_string().contains("collection file already exists"));
     }
 
     #[test]
@@ -2253,6 +2835,11 @@ mod tests {
                 body_rows: Vec::new(),
                 auth_type: "none".to_string(),
                 auth_token: "".to_string(),
+                auth_basic_username: String::new(),
+                auth_basic_password: String::new(),
+                auth_api_key_name: String::new(),
+                auth_api_key_value: String::new(),
+                auth_api_key_in: "header".to_string(),
             },
         )
         .expect("seed payments collection");
@@ -2319,6 +2906,98 @@ mod tests {
     }
 
     #[test]
+    fn collection_management_respects_custom_workspace_file() {
+        let paths = make_test_paths("custom-workspace-collection-management");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
+
+        create_collection_in_workspace(
+            &paths,
+            "workspace-ops",
+            CreateCollectionInput {
+                name: "Alpha".to_string(),
+                file_path: "collections/alpha.json".to_string(),
+            },
+        )
+        .expect("create alpha in custom workspace");
+        create_collection_in_workspace(
+            &paths,
+            "workspace-ops",
+            CreateCollectionInput {
+                name: "Bravo".to_string(),
+                file_path: "collections/bravo.json".to_string(),
+            },
+        )
+        .expect("create bravo in custom workspace");
+
+        save_collection_organization_in_workspace(
+            &paths,
+            "workspace-ops",
+            SaveCollectionOrganizationInput {
+                file_path: "collections/bravo.json".to_string(),
+                group: "Ops".to_string(),
+                collapsed: true,
+            },
+        )
+        .expect("save custom workspace organization");
+
+        let renamed = rename_collection_in_workspace(
+            &paths,
+            "workspace-ops",
+            RenameCollectionInput {
+                current_file_path: "collections/bravo.json".to_string(),
+                new_name: "Beta".to_string(),
+                new_file_path: "collections/beta.json".to_string(),
+            },
+        )
+        .expect("rename custom workspace collection");
+        assert_eq!(renamed.name, "Beta");
+
+        let moved = move_collection_in_workspace(
+            &paths,
+            "workspace-ops",
+            MoveCollectionInput {
+                file_path: "collections/beta.json".to_string(),
+                target_index: 0,
+            },
+        )
+        .expect("move custom workspace collection");
+        assert_eq!(moved[0].name, "Beta");
+        assert_eq!(moved[0].group, "Ops");
+        assert!(moved[0].collapsed);
+
+        delete_collection_in_workspace(
+            &paths,
+            "workspace-ops",
+            DeleteCollectionInput {
+                file_path: "collections/alpha.json".to_string(),
+            },
+        )
+        .expect("delete alpha from custom workspace");
+
+        let workspace_ops =
+            list_collections(&paths, "workspace-ops").expect("list custom workspace after delete");
+        assert_eq!(workspace_ops.len(), 1);
+        assert_eq!(workspace_ops[0].name, "Beta");
+        assert_eq!(workspace_ops[0].group, "Ops");
+        assert!(workspace_ops[0].collapsed);
+
+        let custom_workspace_contents =
+            fs::read_to_string(paths.workspaces_dir.join("workspace-ops.json"))
+                .expect("read custom workspace");
+        assert!(custom_workspace_contents.contains("beta.json"));
+        assert!(!custom_workspace_contents.contains("alpha.json"));
+        assert!(custom_workspace_contents.contains("\"beta.json\": \"Ops\""));
+
+        let default_workspace_contents =
+            fs::read_to_string(paths.workspaces_dir.join("default-workspace.json"))
+                .expect("read default workspace");
+        assert!(!default_workspace_contents.contains("alpha.json"));
+        assert!(!default_workspace_contents.contains("bravo.json"));
+        assert!(!default_workspace_contents.contains("beta.json"));
+    }
+
+    #[test]
     fn delete_collection_removes_file_and_workspace_reference() {
         let paths = make_test_paths("delete-collection");
         ensure_directories(&paths).expect("create directories");
@@ -2371,6 +3050,11 @@ mod tests {
                 body_rows: Vec::new(),
                 auth_type: "none".to_string(),
                 auth_token: "".to_string(),
+                auth_basic_username: String::new(),
+                auth_basic_password: String::new(),
+                auth_api_key_name: String::new(),
+                auth_api_key_value: String::new(),
+                auth_api_key_in: "header".to_string(),
             },
         )
         .expect("save first request");
@@ -2392,6 +3076,11 @@ mod tests {
                 body_rows: Vec::new(),
                 auth_type: "none".to_string(),
                 auth_token: "".to_string(),
+                auth_basic_username: String::new(),
+                auth_basic_password: String::new(),
+                auth_api_key_name: String::new(),
+                auth_api_key_value: String::new(),
+                auth_api_key_in: "header".to_string(),
             },
         )
         .expect("save second request");
@@ -2408,9 +3097,8 @@ mod tests {
         assert_eq!(collection.requests.len(), 1);
         assert_eq!(collection.requests[0].id, "req-2");
 
-        let reloaded =
-            read_collection_file(&paths.collections_dir.join("core-api.json"))
-                .expect("reload collection");
+        let reloaded = read_collection_file(&paths.collections_dir.join("core-api.json"))
+            .expect("reload collection");
         assert_eq!(reloaded.requests.len(), 1);
         assert_eq!(reloaded.requests[0].id, "req-2");
     }
@@ -2456,7 +3144,8 @@ mod tests {
         .expect("move collection");
 
         assert_eq!(collections[0].name, "Charlie");
-        let workspace = read_workspace_file(&paths, DEFAULT_SETTINGS_WORKSPACE).expect("read workspace");
+        let workspace =
+            read_workspace_file(&paths, DEFAULT_SETTINGS_WORKSPACE).expect("read workspace");
         assert_eq!(
             workspace.collections,
             vec![
@@ -2495,6 +3184,11 @@ mod tests {
                     body_rows: Vec::new(),
                     auth_type: "none".to_string(),
                     auth_token: "".to_string(),
+                    auth_basic_username: String::new(),
+                    auth_basic_password: String::new(),
+                    auth_api_key_name: String::new(),
+                    auth_api_key_value: String::new(),
+                    auth_api_key_in: "header".to_string(),
                 },
             )
             .expect("seed request");
@@ -2511,9 +3205,8 @@ mod tests {
         .expect("reorder request");
 
         assert_eq!(reordered.requests[0].id, "req-3");
-        let reloaded =
-            read_collection_file(&paths.collections_dir.join("core-api.json"))
-                .expect("reload collection");
+        let reloaded = read_collection_file(&paths.collections_dir.join("core-api.json"))
+            .expect("reload collection");
         assert_eq!(reloaded.requests[0].id, "req-3");
         assert_eq!(reloaded.requests[1].id, "req-1");
         assert_eq!(reloaded.requests[2].id, "req-2");
@@ -2542,6 +3235,11 @@ mod tests {
                 body_rows: Vec::new(),
                 auth_type: "none".to_string(),
                 auth_token: "".to_string(),
+                auth_basic_username: String::new(),
+                auth_basic_password: String::new(),
+                auth_api_key_name: String::new(),
+                auth_api_key_value: String::new(),
+                auth_api_key_in: "header".to_string(),
             },
         )
         .expect("seed source request");
@@ -2562,6 +3260,11 @@ mod tests {
                 body_rows: Vec::new(),
                 auth_type: "none".to_string(),
                 auth_token: "".to_string(),
+                auth_basic_username: String::new(),
+                auth_basic_password: String::new(),
+                auth_api_key_name: String::new(),
+                auth_api_key_value: String::new(),
+                auth_api_key_in: "header".to_string(),
             },
         )
         .expect("seed target request");
@@ -2582,12 +3285,10 @@ mod tests {
         assert_eq!(moved.target_collection.requests[0].id, "req-source");
         assert_eq!(moved.target_collection.requests[0].collection, "Target");
 
-        let source_reloaded =
-            read_collection_file(&paths.collections_dir.join("source.json"))
-                .expect("reload source collection");
-        let target_reloaded =
-            read_collection_file(&paths.collections_dir.join("target.json"))
-                .expect("reload target collection");
+        let source_reloaded = read_collection_file(&paths.collections_dir.join("source.json"))
+            .expect("reload source collection");
+        let target_reloaded = read_collection_file(&paths.collections_dir.join("target.json"))
+            .expect("reload target collection");
         assert!(source_reloaded.requests.is_empty());
         assert_eq!(target_reloaded.requests[0].id, "req-source");
         assert_eq!(target_reloaded.requests[1].id, "req-target");
@@ -2624,6 +3325,11 @@ mod tests {
                 body_rows: Vec::new(),
                 auth_type: "none".to_string(),
                 auth_token: "".to_string(),
+                auth_basic_username: String::new(),
+                auth_basic_password: String::new(),
+                auth_api_key_name: String::new(),
+                auth_api_key_value: String::new(),
+                auth_api_key_in: "header".to_string(),
             },
         )
         .expect("save normalized request");
@@ -2695,6 +3401,11 @@ mod tests {
                 body_rows: Vec::new(),
                 auth_type: "none".to_string(),
                 auth_token: "".to_string(),
+                auth_basic_username: String::new(),
+                auth_basic_password: String::new(),
+                auth_api_key_name: String::new(),
+                auth_api_key_value: String::new(),
+                auth_api_key_in: "header".to_string(),
             },
         )
         .expect("save first request");
@@ -2873,7 +3584,13 @@ cookie_jar: workspace_local
         .expect("rename environment");
 
         assert_eq!(renamed.name, "Staging");
-        assert_eq!(renamed.file_path, paths.environments_dir.join("staging.yaml").to_string_lossy());
+        assert_eq!(
+            renamed.file_path,
+            paths
+                .environments_dir
+                .join("staging.yaml")
+                .to_string_lossy()
+        );
         assert_eq!(renamed.vars.len(), 1);
         assert!(paths.environments_dir.join("staging.yaml").exists());
         assert!(!paths.environments_dir.join("production.json").exists());
@@ -2998,6 +3715,119 @@ cookie_jar: workspace_local
             fs::read_to_string(paths.logs_dir.join(ACTIVE_LOG_FILE_NAME)).expect("read log");
         assert!(log_payload.contains("runtime\tinitialized"));
         assert!(log_payload.contains("load_bootstrap_state\tcompleted"));
+    }
+
+    #[test]
+    fn save_settings_persists_and_loads_roundtrip() {
+        let paths = make_test_paths("save-settings-roundtrip");
+        initialize_database(&paths.database_path).expect("initialize database");
+
+        let saved = save_settings(
+            &paths,
+            SaveSettingsInput {
+                theme: "graphite-dark".to_string(),
+                recent_workspace: "workspace-ops".to_string(),
+                auto_save: false,
+                default_proxy_mode: "custom".to_string(),
+                default_proxy_url: "http://proxy.internal:8080".to_string(),
+                default_tls_verify: false,
+                default_tls_hostname_verify: true,
+            },
+        )
+        .expect("save settings");
+
+        assert_eq!(saved.theme, "graphite-dark");
+        assert_eq!(saved.recent_workspace, "workspace-ops");
+        assert!(!saved.auto_save);
+        assert_eq!(saved.default_proxy_mode, "custom");
+        assert_eq!(saved.default_proxy_url, "http://proxy.internal:8080");
+        assert!(!saved.default_tls_verify);
+        assert!(saved.default_tls_hostname_verify);
+
+        let loaded = load_settings(&paths).expect("load settings");
+        assert_eq!(loaded.theme, "graphite-dark");
+        assert_eq!(loaded.recent_workspace, "workspace-ops");
+        assert!(!loaded.auto_save);
+        assert_eq!(loaded.default_proxy_mode, "custom");
+        assert_eq!(loaded.default_proxy_url, "http://proxy.internal:8080");
+        assert!(!loaded.default_tls_verify);
+        assert!(loaded.default_tls_hostname_verify);
+    }
+
+    #[test]
+    fn save_settings_rejects_invalid_values() {
+        let paths = make_test_paths("save-settings-invalid-values");
+        initialize_database(&paths.database_path).expect("initialize database");
+
+        let invalid_theme = save_settings(
+            &paths,
+            SaveSettingsInput {
+                theme: "purple".to_string(),
+                recent_workspace: "workspace-ops".to_string(),
+                auto_save: true,
+                default_proxy_mode: "system".to_string(),
+                default_proxy_url: "".to_string(),
+                default_tls_verify: true,
+                default_tls_hostname_verify: true,
+            },
+        )
+        .expect_err("reject invalid theme");
+        assert!(invalid_theme
+            .to_string()
+            .contains("unsupported settings theme"));
+
+        let invalid_proxy_mode = save_settings(
+            &paths,
+            SaveSettingsInput {
+                theme: "system".to_string(),
+                recent_workspace: "workspace-ops".to_string(),
+                auto_save: true,
+                default_proxy_mode: "tunnel".to_string(),
+                default_proxy_url: "".to_string(),
+                default_tls_verify: true,
+                default_tls_hostname_verify: true,
+            },
+        )
+        .expect_err("reject invalid proxy mode");
+        assert!(invalid_proxy_mode
+            .to_string()
+            .contains("unsupported settings proxy mode"));
+
+        let missing_custom_proxy_url = save_settings(
+            &paths,
+            SaveSettingsInput {
+                theme: "system".to_string(),
+                recent_workspace: "workspace-ops".to_string(),
+                auto_save: true,
+                default_proxy_mode: "custom".to_string(),
+                default_proxy_url: " ".to_string(),
+                default_tls_verify: true,
+                default_tls_hostname_verify: true,
+            },
+        )
+        .expect_err("reject custom proxy without url");
+        assert!(missing_custom_proxy_url
+            .to_string()
+            .contains("proxy URL is required"));
+
+        let loaded = load_settings(&paths).expect("load default settings after rejections");
+        assert_eq!(loaded.theme, DEFAULT_SETTINGS_THEME);
+        assert_eq!(loaded.default_proxy_mode, DEFAULT_SETTINGS_PROXY_MODE);
+    }
+
+    #[test]
+    fn load_settings_returns_expected_defaults() {
+        let paths = make_test_paths("settings-defaults");
+        initialize_database(&paths.database_path).expect("initialize database");
+
+        let loaded = load_settings(&paths).expect("load default settings");
+        assert_eq!(loaded.theme, DEFAULT_SETTINGS_THEME);
+        assert_eq!(loaded.recent_workspace, DEFAULT_SETTINGS_WORKSPACE);
+        assert!(loaded.auto_save);
+        assert_eq!(loaded.default_proxy_mode, DEFAULT_SETTINGS_PROXY_MODE);
+        assert_eq!(loaded.default_proxy_url, DEFAULT_SETTINGS_PROXY_URL);
+        assert!(loaded.default_tls_verify);
+        assert!(loaded.default_tls_hostname_verify);
     }
 
     #[test]

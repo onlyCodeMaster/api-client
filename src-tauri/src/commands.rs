@@ -1,3 +1,4 @@
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::{AppHandle, Emitter, State};
@@ -12,7 +13,8 @@ use crate::models::{
     EnvironmentSummary, FileDownloadInput, FileDownloadResult, FileUploadInput, FileUploadResult,
     MoveCollectionInput, MoveRequestInput, MoveRequestResult, PostmanImportInput,
     RecordHistoryInput, RenameCollectionInput, RenameEnvironmentInput, ReorderRequestInput,
-    SaveEnvironmentInput, SaveRequestInput, SaveSecretInput, SecretStatus, SendRequestInput,
+    SaveCollectionOrganizationInput, SaveEnvironmentInput, SaveRequestInput, SaveResponseBodyInput,
+    SaveResponseBodyResult, SaveSecretInput, SaveSettingsInput, SecretStatus, SendRequestInput,
     SendRequestResult, StoredRequest,
 };
 use crate::postman;
@@ -21,6 +23,22 @@ use crate::storage::{self, StoragePaths};
 
 pub struct AppState {
     pub paths: StoragePaths,
+    pub current_workspace: Mutex<String>,
+}
+
+fn current_workspace_name(state: &State<'_, AppState>) -> String {
+    state
+        .current_workspace
+        .lock()
+        .map(|workspace| {
+            let trimmed = workspace.trim();
+            if trimmed.is_empty() {
+                "default-workspace".to_string()
+            } else {
+                trimmed.to_string()
+            }
+        })
+        .unwrap_or_else(|_| "default-workspace".to_string())
 }
 
 const BRIDGE_EVENT_NAME: &str = "api-client://bridge-event";
@@ -94,6 +112,9 @@ pub fn load_bootstrap_state(
             return Err(message);
         }
     };
+    if let Ok(mut workspace) = state.current_workspace.lock() {
+        *workspace = settings.recent_workspace.clone();
+    }
     let history = match storage::list_history(&state.paths) {
         Ok(history) => history,
         Err(error) => {
@@ -206,6 +227,39 @@ pub fn load_bootstrap_state(
         environments,
         secrets,
     })
+}
+
+#[tauri::command]
+pub fn save_settings(
+    app: AppHandle,
+    input: SaveSettingsInput,
+    state: State<'_, AppState>,
+) -> Result<crate::models::AppSettings, String> {
+    match storage::save_settings(&state.paths, input) {
+        Ok(settings) => {
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "save_settings",
+                "completed",
+                "Settings saved",
+                Some(settings.recent_workspace.clone()),
+            );
+            Ok(settings)
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "save_settings",
+                "failed",
+                "Failed to save settings",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
 }
 
 #[tauri::command]
@@ -381,7 +435,8 @@ pub fn save_request(
     input: SaveRequestInput,
     state: State<'_, AppState>,
 ) -> Result<CollectionSummary, String> {
-    match storage::save_request(&state.paths, input) {
+    let workspace_name = current_workspace_name(&state);
+    match storage::save_request_in_workspace(&state.paths, &workspace_name, input) {
         Ok(collection) => {
             emit_bridge_event(
                 &app,
@@ -414,7 +469,8 @@ pub fn create_collection(
     input: CreateCollectionInput,
     state: State<'_, AppState>,
 ) -> Result<CollectionSummary, String> {
-    match storage::create_collection(&state.paths, input) {
+    let workspace_name = current_workspace_name(&state);
+    match storage::create_collection_in_workspace(&state.paths, &workspace_name, input) {
         Ok(collection) => {
             emit_bridge_event(
                 &app,
@@ -447,7 +503,8 @@ pub fn rename_collection(
     input: RenameCollectionInput,
     state: State<'_, AppState>,
 ) -> Result<CollectionSummary, String> {
-    match storage::rename_collection(&state.paths, input) {
+    let workspace_name = current_workspace_name(&state);
+    match storage::rename_collection_in_workspace(&state.paths, &workspace_name, input) {
         Ok(collection) => {
             emit_bridge_event(
                 &app,
@@ -480,7 +537,8 @@ pub fn delete_collection(
     input: DeleteCollectionInput,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    match storage::delete_collection(&state.paths, input) {
+    let workspace_name = current_workspace_name(&state);
+    match storage::delete_collection_in_workspace(&state.paths, &workspace_name, input) {
         Ok(()) => {
             emit_bridge_event(
                 &app,
@@ -546,7 +604,8 @@ pub fn move_collection(
     input: MoveCollectionInput,
     state: State<'_, AppState>,
 ) -> Result<Vec<CollectionSummary>, String> {
-    match storage::move_collection(&state.paths, input) {
+    let workspace_name = current_workspace_name(&state);
+    match storage::move_collection_in_workspace(&state.paths, &workspace_name, input) {
         Ok(collections) => {
             emit_bridge_event(
                 &app,
@@ -566,6 +625,40 @@ pub fn move_collection(
                 "move_collection",
                 "failed",
                 "Failed to move collection",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn save_collection_organization(
+    app: AppHandle,
+    input: SaveCollectionOrganizationInput,
+    state: State<'_, AppState>,
+) -> Result<Vec<CollectionSummary>, String> {
+    let workspace_name = current_workspace_name(&state);
+    match storage::save_collection_organization_in_workspace(&state.paths, &workspace_name, input) {
+        Ok(collections) => {
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "save_collection_organization",
+                "completed",
+                "Collection organization saved",
+                Some(format!("{} collections", collections.len())),
+            );
+            Ok(collections)
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "save_collection_organization",
+                "failed",
+                "Failed to save collection organization",
                 Some(message.clone()),
             );
             Err(message)
@@ -811,6 +904,42 @@ pub fn download_file(
 }
 
 #[tauri::command]
+pub fn save_response_body(
+    app: AppHandle,
+    input: SaveResponseBodyInput,
+    state: State<'_, AppState>,
+) -> Result<SaveResponseBodyResult, String> {
+    match file_transfer::save_response_body(input) {
+        Ok(result) => {
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "save_response_body",
+                "completed",
+                "Response body saved",
+                Some(format!(
+                    "{} bytes -> {}",
+                    result.size_bytes, result.destination_path
+                )),
+            );
+            Ok(result)
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "save_response_body",
+                "failed",
+                "Failed to save response body",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
 pub fn send_request(
     app: AppHandle,
     input: SendRequestInput,
@@ -859,6 +988,11 @@ pub fn send_request(
             body_rows: input.body_rows,
             auth_type: input.auth_type,
             auth_token: input.auth_token,
+            auth_basic_username: input.auth_basic_username,
+            auth_basic_password: input.auth_basic_password,
+            auth_api_key_name: input.auth_api_key_name,
+            auth_api_key_value: input.auth_api_key_value,
+            auth_api_key_in: input.auth_api_key_in,
             environment: input.environment,
         },
     ) {

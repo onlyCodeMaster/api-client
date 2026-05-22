@@ -9,6 +9,7 @@ mod secrets;
 mod storage;
 mod transport;
 
+use std::sync::Mutex;
 use tauri::Manager;
 
 use commands::AppState;
@@ -20,11 +21,16 @@ pub fn run() {
     builder
         .setup(|app| {
             let paths = storage::initialize(&app.handle())?;
-            app.manage(AppState { paths });
+            let settings = storage::load_settings(&paths)?;
+            app.manage(AppState {
+                paths,
+                current_workspace: Mutex::new(settings.recent_workspace),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::load_bootstrap_state,
+            commands::save_settings,
             commands::record_history_entry,
             commands::save_secret,
             commands::save_environment,
@@ -36,6 +42,7 @@ pub fn run() {
             commands::delete_collection,
             commands::delete_request,
             commands::move_collection,
+            commands::save_collection_organization,
             commands::reorder_request,
             commands::move_request,
             commands::import_curl,
@@ -43,6 +50,7 @@ pub fn run() {
             commands::import_postman_collection,
             commands::upload_file,
             commands::download_file,
+            commands::save_response_body,
             commands::send_request
         ])
         .run(tauri::generate_context!())
