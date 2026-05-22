@@ -25,6 +25,7 @@ import {
 import {
   makeScratchEnvironment,
   useRequestStore,
+  type RequestBodyFieldType,
   type EnvironmentRecord,
   type KeyValueRow,
   type RequestBodyRow,
@@ -191,6 +192,95 @@ function sanitizeBodyRows(rows: RequestBodyRow[]) {
       enabled: row.enabled,
       fieldType: row.fieldType,
     }));
+}
+
+function isStructuredBodyMode(mode: RequestRecord["bodyMode"]) {
+  return mode === "urlencoded" || mode === "multipart";
+}
+
+function defaultBodyContentType(mode: RequestRecord["bodyMode"]) {
+  switch (mode) {
+    case "json":
+      return "application/json";
+    case "urlencoded":
+      return "application/x-www-form-urlencoded";
+    case "multipart":
+      return "multipart/form-data";
+    default:
+      return "";
+  }
+}
+
+function bodyModeHeading(request: Pick<RequestRecord, "bodyMode" | "bodyContentType">) {
+  if (request.bodyMode === "raw") {
+    return request.bodyContentType.trim() || "Raw body";
+  }
+
+  return defaultBodyContentType(request.bodyMode);
+}
+
+function bodyModeLabel(mode: RequestRecord["bodyMode"]) {
+  switch (mode) {
+    case "json":
+      return "JSON";
+    case "raw":
+      return "Raw";
+    case "urlencoded":
+      return "Form URL Encoded";
+    case "multipart":
+      return "Multipart Form";
+  }
+}
+
+function findBlankBodyRow(rows: RequestBodyRow[]) {
+  return rows.find((row) => row.key.trim() === "" && row.value.trim() === "");
+}
+
+function makeRequestBodyRow(
+  requestId: string,
+  fieldType: RequestBodyFieldType = "text",
+): RequestBodyRow {
+  return {
+    id: `${requestId}-body-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    key: "",
+    value: "",
+    enabled: true,
+    fieldType,
+  };
+}
+
+function appendRequestBodyRow(
+  requestId: string,
+  rows: RequestBodyRow[],
+  fieldType: RequestBodyFieldType = "text",
+) {
+  const nextRow = makeRequestBodyRow(requestId, fieldType);
+
+  return {
+    rows: [...rows, nextRow],
+    focusRowId: nextRow.id,
+  };
+}
+
+function removeRequestBodyRow(requestId: string, rows: RequestBodyRow[], id: string) {
+  const removedIndex = rows.findIndex((row) => row.id === id);
+  const remainingRows = rows.filter((row) => row.id !== id);
+
+  if (remainingRows.length === 0) {
+    const fallbackRow = makeRequestBodyRow(requestId);
+    return {
+      rows: [fallbackRow],
+      focusRowId: fallbackRow.id,
+    };
+  }
+
+  const nextFocusIndex =
+    removedIndex < 0 ? 0 : Math.min(removedIndex, remainingRows.length - 1);
+
+  return {
+    rows: remainingRows,
+    focusRowId: remainingRows[nextFocusIndex]?.id ?? "",
+  };
 }
 
 function serializeEditableRequest(request: RequestRecord) {
@@ -547,7 +637,7 @@ export default function App() {
     signature: string;
   } | null>(null);
   const [pendingEditorFocus, setPendingEditorFocus] = useState<{
-    tab: "params" | "headers";
+    tab: "params" | "headers" | "body";
     rowId: string;
   } | null>(null);
   const rowInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -754,6 +844,8 @@ export default function App() {
   const requestDirty = activeRequestSignature !== requestBaselineSignature;
   const visibleParamRows = sanitizeEditableRows(activeRequest.params).length;
   const visibleHeaderRows = sanitizeEditableRows(activeRequest.headers).length;
+  const visibleBodyRows = sanitizeBodyRows(activeRequest.bodyRows).length;
+  const isStructuredBody = isStructuredBodyMode(activeRequest.bodyMode);
   const requestStatus =
     isSavingRequest
       ? { tone: "pending" as const, message: "Saving changes" }
@@ -941,7 +1033,14 @@ export default function App() {
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [activeRequest.id, activeRequest.headers, activeRequest.params, pendingEditorFocus, requestTab]);
+  }, [
+    activeRequest.bodyRows,
+    activeRequest.headers,
+    activeRequest.id,
+    activeRequest.params,
+    pendingEditorFocus,
+    requestTab,
+  ]);
 
   useEffect(() => {
     if (requestTab === "params" && activeRequest.params.length === 0) {
@@ -951,13 +1050,30 @@ export default function App() {
 
     if (requestTab === "headers" && activeRequest.headers.length === 0) {
       focusEditorRow("headers", addHeaderRow());
+      return;
+    }
+
+    if (
+      requestTab === "body" &&
+      isStructuredBodyMode(activeRequest.bodyMode) &&
+      activeRequest.bodyRows.length === 0
+    ) {
+      const next = appendRequestBodyRow(activeRequest.id, []);
+      replaceRequest({
+        ...activeRequest,
+        bodyRows: next.rows,
+      });
+      focusEditorRow("body", next.focusRowId);
     }
   }, [
+    activeRequest.bodyMode,
+    activeRequest.bodyRows.length,
     activeRequest.headers.length,
     activeRequest.id,
     activeRequest.params.length,
     addHeaderRow,
     addParamRow,
+    replaceRequest,
     requestTab,
   ]);
 
@@ -1390,12 +1506,120 @@ export default function App() {
     }
   };
 
-  const focusEditorRow = (tab: "params" | "headers", rowId: string) => {
+  const focusEditorRow = (tab: "params" | "headers" | "body", rowId: string) => {
     if (!rowId) {
       return;
     }
 
     setPendingEditorFocus({ tab, rowId });
+  };
+
+  const handleUpdateBodyContentType = (value: string) => {
+    if (!hasCollections) {
+      return;
+    }
+
+    replaceRequest({
+      ...activeRequest,
+      bodyContentType: value,
+    });
+  };
+
+  const handleRequestBodyModeChange = (bodyMode: RequestRecord["bodyMode"]) => {
+    if (!hasCollections || activeRequest.bodyMode === bodyMode) {
+      return;
+    }
+
+    const shouldSeedRows = isStructuredBodyMode(bodyMode) && activeRequest.bodyRows.length === 0;
+    const seededRows = shouldSeedRows ? [makeRequestBodyRow(activeRequest.id)] : activeRequest.bodyRows;
+
+    replaceRequest({
+      ...activeRequest,
+      bodyMode,
+      bodyRows: seededRows,
+    });
+
+    if (shouldSeedRows) {
+      focusEditorRow("body", seededRows[0]?.id ?? "");
+    }
+  };
+
+  const handleUpdateBodyRow = (
+    rowId: string,
+    field: "key" | "value",
+    value: string,
+  ) => {
+    if (!hasCollections) {
+      return;
+    }
+
+    replaceRequest({
+      ...activeRequest,
+      bodyRows: activeRequest.bodyRows.map((row) =>
+        row.id === rowId ? { ...row, [field]: value } : row,
+      ),
+    });
+  };
+
+  const handleUpdateBodyRowFieldType = (
+    rowId: string,
+    fieldType: RequestBodyFieldType,
+  ) => {
+    if (!hasCollections) {
+      return;
+    }
+
+    replaceRequest({
+      ...activeRequest,
+      bodyRows: activeRequest.bodyRows.map((row) =>
+        row.id === rowId ? { ...row, fieldType } : row,
+      ),
+    });
+  };
+
+  const handleToggleBodyRow = (rowId: string) => {
+    if (!hasCollections) {
+      return;
+    }
+
+    replaceRequest({
+      ...activeRequest,
+      bodyRows: activeRequest.bodyRows.map((row) =>
+        row.id === rowId ? { ...row, enabled: !row.enabled } : row,
+      ),
+    });
+  };
+
+  const handleAddBodyRow = () => {
+    if (!hasCollections) {
+      return;
+    }
+
+    const existingBlankRow = findBlankBodyRow(activeRequest.bodyRows);
+    if (existingBlankRow) {
+      focusEditorRow("body", existingBlankRow.id);
+      return;
+    }
+
+    const next = appendRequestBodyRow(activeRequest.id, activeRequest.bodyRows);
+    replaceRequest({
+      ...activeRequest,
+      bodyRows: next.rows,
+    });
+    focusEditorRow("body", next.focusRowId);
+  };
+
+  const handleRemoveBodyRow = (rowId: string) => {
+    if (!hasCollections) {
+      return;
+    }
+
+    const next = removeRequestBodyRow(activeRequest.id, activeRequest.bodyRows, rowId);
+    replaceRequest({
+      ...activeRequest,
+      bodyRows: next.rows,
+    });
+    focusEditorRow("body", next.focusRowId);
   };
 
   const handleAddParamRow = () => {
@@ -2929,7 +3153,7 @@ export default function App() {
                     auth {activeRequest.authType === "none" ? "off" : "on"}
                   </span>
                   <span className={`utility-pill ${requestTab === "body" ? "utility-pill--active" : ""}`}>
-                    body {activeRequest.body.length}
+                    body {isStructuredBody ? `${visibleBodyRows} rows` : activeRequest.body.length}
                   </span>
                 </div>
                 <div className="request-utility-bar__group">
@@ -3076,23 +3300,147 @@ export default function App() {
                   <div className="editor-panel__header editor-panel__header--body">
                     <div>
                       <span>Body</span>
-                      <h2>application/json</h2>
+                      <h2>{bodyModeHeading(activeRequest)}</h2>
                     </div>
-                    <div className="chip-row">
-                      <span>Pretty</span>
-                      <span>Raw</span>
-                      <span>Schema</span>
+                    <div className="body-mode-switcher" aria-label="Request body modes">
+                      {([
+                        ["json", "JSON"],
+                        ["raw", "Raw"],
+                        ["urlencoded", "Form URL"],
+                        ["multipart", "Multipart"],
+                      ] as const).map(([mode, label]) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          className={`body-mode-button ${activeRequest.bodyMode === mode ? "is-active" : ""}`}
+                          onClick={() => handleRequestBodyModeChange(mode)}
+                        >
+                          {label}
+                        </button>
+                      ))}
                     </div>
                   </div>
-                  <div className="editor-toolbar">
-                    <span>UTF-8</span>
-                    <span>{activeRequest.body.length} chars</span>
+                  <div className="editor-toolbar editor-toolbar--body">
+                    <span>{bodyModeLabel(activeRequest.bodyMode)}</span>
+                    {activeRequest.bodyMode === "json" || activeRequest.bodyMode === "raw" ? (
+                      <label className="body-inline-field">
+                        <span>Content-Type</span>
+                        <input
+                          value={activeRequest.bodyContentType}
+                          placeholder={
+                            activeRequest.bodyMode === "json"
+                              ? "application/json"
+                              : "Optional, e.g. text/plain"
+                          }
+                          onChange={(event) => handleUpdateBodyContentType(event.target.value)}
+                        />
+                      </label>
+                    ) : (
+                      <span>{defaultBodyContentType(activeRequest.bodyMode)} auto</span>
+                    )}
+                    <span>
+                      {isStructuredBody
+                        ? `${visibleBodyRows} rows`
+                        : `${activeRequest.body.length} chars`}
+                    </span>
+                    {isStructuredBody ? (
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={handleAddBodyRow}
+                      >
+                        Add row
+                      </button>
+                    ) : null}
                   </div>
-                  <textarea
-                    className="editor-textarea"
-                    value={activeRequest.body}
-                    onChange={(event) => updateRequestBody(event.target.value)}
-                  />
+                  {activeRequest.bodyMode === "json" || activeRequest.bodyMode === "raw" ? (
+                    <textarea
+                      className="editor-textarea"
+                      value={activeRequest.body}
+                      onChange={(event) => updateRequestBody(event.target.value)}
+                    />
+                  ) : (
+                    <div className={`form-table form-table--body ${activeRequest.bodyMode === "multipart" ? "form-table--multipart" : "form-table--urlencoded"}`}>
+                      <div
+                        className={`form-table__head ${activeRequest.bodyMode === "multipart" ? "form-table__head--multipart" : "form-table__head--body"}`}
+                      >
+                        <span>On</span>
+                        {activeRequest.bodyMode === "multipart" ? <span>Type</span> : null}
+                        <span>Key</span>
+                        <span>
+                          {activeRequest.bodyMode === "multipart" ? "Value / Path" : "Value"}
+                        </span>
+                        <span>Act</span>
+                      </div>
+                      <div className="form-grid">
+                        {activeRequest.bodyRows.map((row) => (
+                          <div
+                            key={row.id}
+                            className={`form-row ${activeRequest.bodyMode === "multipart" ? "form-row--multipart" : "form-row--body"}`}
+                          >
+                            <label className="toggle-cell">
+                              <input
+                                type="checkbox"
+                                checked={row.enabled}
+                                onChange={() => handleToggleBodyRow(row.id)}
+                              />
+                            </label>
+                            {activeRequest.bodyMode === "multipart" ? (
+                              <select
+                                className={`body-row-select ${!row.enabled ? "is-disabled" : ""}`}
+                                value={row.fieldType}
+                                onChange={(event) =>
+                                  handleUpdateBodyRowFieldType(
+                                    row.id,
+                                    event.target.value as RequestBodyFieldType,
+                                  )
+                                }
+                              >
+                                <option value="text">Text</option>
+                                <option value="file">File</option>
+                              </select>
+                            ) : null}
+                            <input
+                              ref={(element) => {
+                                rowInputRefs.current[`body:${row.id}`] = element;
+                              }}
+                              className={!row.enabled ? "is-disabled" : ""}
+                              value={row.key}
+                              placeholder="key"
+                              onChange={(event) =>
+                                handleUpdateBodyRow(row.id, "key", event.target.value)
+                              }
+                            />
+                            <input
+                              className={!row.enabled ? "is-disabled" : ""}
+                              value={row.value}
+                              placeholder={
+                                activeRequest.bodyMode === "multipart" && row.fieldType === "file"
+                                  ? "/absolute/path/to/file"
+                                  : "value"
+                              }
+                              onChange={(event) =>
+                                handleUpdateBodyRow(row.id, "value", event.target.value)
+                              }
+                            />
+                            <button
+                              type="button"
+                              className="row-action-button"
+                              aria-label={`Remove body row ${row.key || row.value || row.id}`}
+                              onClick={() => handleRemoveBodyRow(row.id)}
+                            >
+                              x
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="body-table-note">
+                        {activeRequest.bodyMode === "multipart"
+                          ? "Use absolute file paths for file rows. Multipart boundaries are generated automatically."
+                          : "Keys and values are encoded automatically when the request is sent."}
+                      </div>
+                    </div>
+                  )}
                 </section>
               ) : null}
 

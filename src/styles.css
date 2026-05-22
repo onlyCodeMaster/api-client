@@ -1446,6 +1446,32 @@ button:disabled {
   align-items: flex-end;
 }
 
+.body-mode-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid #353534;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.body-mode-button {
+  min-height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #8c909f;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.body-mode-button.is-active {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e5e2e1;
+}
+
 .chip-row span {
   display: inline-flex;
   align-items: center;
@@ -1488,6 +1514,16 @@ button:disabled {
   display: grid;
   grid-template-columns: 52px minmax(140px, 0.75fr) minmax(0, 1.25fr) 42px;
   gap: 0;
+}
+
+.form-table__head--body,
+.form-row--body {
+  grid-template-columns: 52px minmax(140px, 0.75fr) minmax(0, 1.25fr) 42px;
+}
+
+.form-table__head--multipart,
+.form-row--multipart {
+  grid-template-columns: 52px 92px minmax(140px, 0.65fr) minmax(0, 1.15fr) 42px;
 }
 
 .form-table__head span,
@@ -1544,6 +1580,22 @@ button:disabled {
   font-size: 11px;
 }
 
+.body-row-select {
+  min-height: 30px;
+  border: 0;
+  border-left: 1px solid #353534;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 8px;
+  color: #e5e2e1;
+  font-size: 11px;
+}
+
+.body-row-select.is-disabled {
+  background: #2a2a2a;
+  color: #8c909f;
+}
+
 .row-action-button {
   display: grid;
   place-items: center;
@@ -1561,6 +1613,13 @@ button:disabled {
 .row-action-button:hover {
   background: rgba(255, 255, 255, 0.04);
   color: #e5e2e1;
+}
+
+.body-table-note {
+  padding: 8px 10px 0;
+  color: #8c909f;
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .editor-textarea {
@@ -1597,6 +1656,39 @@ button:disabled {
   color: #8c909f;
   font-size: 9px;
   font-weight: 700;
+}
+
+.editor-toolbar--body {
+  gap: 8px;
+}
+
+.body-inline-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 20px;
+  padding: 0 8px;
+  border: 1px solid #353534;
+  border-radius: 999px;
+  background: #1a1a1a;
+}
+
+.body-inline-field span {
+  color: #8c909f;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.body-inline-field input {
+  min-width: 180px;
+  min-height: 22px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: #e5e2e1;
+  font-size: 11px;
 }
 
 .auth-grid {

@@ -439,6 +439,234 @@ mod tests {
     }
 
     #[test]
+    fn execute_request_sends_urlencoded_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("read local addr");
+        let paths = make_test_paths("request-urlencoded");
+        storage::initialize_database(&paths.database_path).expect("initialize database");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+
+            let mut request_line = String::new();
+            reader
+                .read_line(&mut request_line)
+                .expect("read request line");
+
+            let mut headers = HashMap::new();
+            let mut content_length = 0usize;
+
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read header line");
+                if line == "\r\n" {
+                    break;
+                }
+
+                let trimmed = line.trim_end();
+                if let Some((name, value)) = trimmed.split_once(':') {
+                    let normalized_name = name.trim().to_ascii_lowercase();
+                    let normalized_value = value.trim().to_string();
+                    if normalized_name == "content-length" {
+                        content_length = normalized_value
+                            .parse::<usize>()
+                            .expect("parse content-length");
+                    }
+                    headers.insert(normalized_name, normalized_value);
+                }
+            }
+
+            let mut body = vec![0; content_length];
+            reader.read_exact(&mut body).expect("read request body");
+
+            assert_eq!(request_line.trim_end(), "POST /submit HTTP/1.1");
+            assert_eq!(
+                headers.get("content-type"),
+                Some(&"application/x-www-form-urlencoded".to_string())
+            );
+            assert_eq!(
+                String::from_utf8(body).expect("decode request body"),
+                "q=workspace+search&limit=20"
+            );
+
+            let response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            stream.flush().expect("flush response");
+        });
+
+        let result = execute_request(
+            &paths,
+            SendRequestInput {
+                request_id: "req-urlencoded".to_string(),
+                request_name: "POST /submit".to_string(),
+                collection: "Core API".to_string(),
+                method: "POST".to_string(),
+                url: format!("http://{address}/submit"),
+                params: Vec::new(),
+                headers: Vec::new(),
+                body: String::new(),
+                body_mode: "urlencoded".to_string(),
+                body_content_type: String::new(),
+                body_rows: vec![
+                    RequestBodyRow {
+                        key: "q".to_string(),
+                        value: "{{query}}".to_string(),
+                        enabled: true,
+                        field_type: "text".to_string(),
+                    },
+                    RequestBodyRow {
+                        key: "limit".to_string(),
+                        value: "20".to_string(),
+                        enabled: true,
+                        field_type: "text".to_string(),
+                    },
+                ],
+                auth_type: "none".to_string(),
+                auth_token: String::new(),
+                environment: EnvironmentSummary {
+                    name: "Local Test".to_string(),
+                    file_path: "environments/local-test.json".to_string(),
+                    vars: vec![EnvironmentVariable {
+                        key: "query".to_string(),
+                        value: "workspace search".to_string(),
+                    }],
+                },
+            },
+        )
+        .expect("execute urlencoded request");
+
+        server.join().expect("join server");
+        assert_eq!(result.status, "200 OK");
+        assert_eq!(result.body, "ok");
+    }
+
+    #[test]
+    fn execute_request_sends_multipart_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("read local addr");
+        let paths = make_test_paths("request-multipart");
+        storage::initialize_database(&paths.database_path).expect("initialize database");
+        let upload_root = std::env::temp_dir().join(format!(
+            "api-client-http-upload-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time before unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&upload_root).expect("create upload root");
+        let upload_path = upload_root.join("sample.txt");
+        fs::write(&upload_path, "hello multipart").expect("write upload file");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+
+            let mut request_line = String::new();
+            reader
+                .read_line(&mut request_line)
+                .expect("read request line");
+
+            let mut headers = HashMap::new();
+            let mut content_length = 0usize;
+
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read header line");
+                if line == "\r\n" {
+                    break;
+                }
+
+                let trimmed = line.trim_end();
+                if let Some((name, value)) = trimmed.split_once(':') {
+                    let normalized_name = name.trim().to_ascii_lowercase();
+                    let normalized_value = value.trim().to_string();
+                    if normalized_name == "content-length" {
+                        content_length = normalized_value
+                            .parse::<usize>()
+                            .expect("parse content-length");
+                    }
+                    headers.insert(normalized_name, normalized_value);
+                }
+            }
+
+            let mut body = vec![0; content_length];
+            reader.read_exact(&mut body).expect("read request body");
+            let decoded_body = String::from_utf8(body).expect("decode multipart body");
+
+            assert_eq!(request_line.trim_end(), "POST /upload HTTP/1.1");
+            let content_type = headers
+                .get("content-type")
+                .expect("multipart content-type header");
+            assert!(content_type.starts_with("multipart/form-data; boundary="));
+            assert!(decoded_body.contains("name=\"note\""));
+            assert!(decoded_body.contains("workspace upload"));
+            assert!(decoded_body.contains("name=\"asset\""));
+            assert!(decoded_body.contains("filename=\"sample.txt\""));
+            assert!(decoded_body.contains("hello multipart"));
+
+            let response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            stream.flush().expect("flush response");
+        });
+
+        let result = execute_request(
+            &paths,
+            SendRequestInput {
+                request_id: "req-multipart".to_string(),
+                request_name: "POST /upload".to_string(),
+                collection: "Core API".to_string(),
+                method: "POST".to_string(),
+                url: format!("http://{address}/upload"),
+                params: Vec::new(),
+                headers: Vec::new(),
+                body: String::new(),
+                body_mode: "multipart".to_string(),
+                body_content_type: String::new(),
+                body_rows: vec![
+                    RequestBodyRow {
+                        key: "note".to_string(),
+                        value: "{{note}}".to_string(),
+                        enabled: true,
+                        field_type: "text".to_string(),
+                    },
+                    RequestBodyRow {
+                        key: "asset".to_string(),
+                        value: "{{asset_path}}".to_string(),
+                        enabled: true,
+                        field_type: "file".to_string(),
+                    },
+                ],
+                auth_type: "none".to_string(),
+                auth_token: String::new(),
+                environment: EnvironmentSummary {
+                    name: "Local Test".to_string(),
+                    file_path: "environments/local-test.json".to_string(),
+                    vars: vec![
+                        EnvironmentVariable {
+                            key: "note".to_string(),
+                            value: "workspace upload".to_string(),
+                        },
+                        EnvironmentVariable {
+                            key: "asset_path".to_string(),
+                            value: upload_path.to_string_lossy().into_owned(),
+                        },
+                    ],
+                },
+            },
+        )
+        .expect("execute multipart request");
+
+        server.join().expect("join server");
+        assert_eq!(result.status, "200 OK");
+        assert_eq!(result.body, "ok");
+    }
+
+    #[test]
     fn execute_request_sends_real_http_request_and_maps_response() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
         let address = listener.local_addr().expect("read local addr");

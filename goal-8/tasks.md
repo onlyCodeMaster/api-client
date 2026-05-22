@@ -131,14 +131,149 @@
 
   - 自信度检查：对本阶段结果有 100% 信心。底层模型、存储、bridge、发送构造和现有前端回归都已有实证支撑，未完成的部分明确收敛在前端 editor 与保存加载体验。
 
-- [ ] Task 4: 大型全面检查 - 审计 Body 多模式编辑与发送闭环
+- [x] Task 4: 大型全面检查 - 审计 Body 多模式编辑与发送闭环
   - 目标：确认 body 多模式不是只有命令，而是用户路径真能走通。
   - 独立验证：构建、测试、真实操作路径都通过。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：已完成 `P1-1` 的综合审计，并把“切换模式 + 保存/重载 + 发送 + Rust 真实构造”这四层证据补齐到位。
 
-- [ ] Task 5: 补齐前端 Body 编辑器与保存加载兼容
+  ## Prompt-to-Artifact Checklist
+
+  - 要求：支持 `JSON`
+    - 证据：
+      - `src/App.tsx` 的 body editor 已有 `JSON` 模式切换按钮与 textarea 编辑。
+      - `src/App.body.test.tsx` 覆盖：
+        - 初始加载 `JSON`
+        - 点击 `Send`
+        - 断言 `send_request` payload 带 `bodyMode: "json"` 与 JSON body
+      - `cargo test http --manifest-path src-tauri/Cargo.toml` 通过，包含
+        - `execute_request_sends_real_http_request_and_maps_response`
+        - 真实本地 HTTP 请求发送和 JSON body/header 断言
+
+  - 要求：支持 `Raw Text`
+    - 证据：
+      - `src/App.tsx` 的 body editor 已有 `Raw` 模式切换按钮、textarea 和 `Content-Type` 输入。
+      - `src/App.body.test.tsx` 覆盖：
+        - `Raw` 编辑
+        - 保存 request
+        - reload 后仍为 `Raw`
+        - 点击 `Send`
+        - 断言 `send_request` payload 带 `bodyMode: "raw"`、`bodyContentType: "text/plain"` 和 raw body
+      - `cargo test http --manifest-path src-tauri/Cargo.toml` 通过，包含
+        - `maybe_insert_content_type_defaults_for_json_urlencoded_and_raw`
+
+  - 要求：支持 `application/x-www-form-urlencoded`
+    - 证据：
+      - `src/App.tsx` 的 body editor 已有 `Form URL` 模式切换和 key/value 行编辑。
+      - `src/App.body.test.tsx` 覆盖：
+        - 切换到 `Form URL`
+        - 填写 key/value
+        - 保存 request
+        - reload 后仍为 `Form URL`
+        - 点击 `Send`
+        - 断言 `send_request` payload 带 `bodyMode: "urlencoded"` 和 `bodyRows`
+      - `cargo test http --manifest-path src-tauri/Cargo.toml` 通过，包含
+        - `urlencoded_body_encodes_enabled_rows_and_templates`
+        - `execute_request_sends_urlencoded_body`
+        - 真实本地 HTTP 请求体断言为 `q=workspace+search&limit=20`
+
+  - 要求：支持 `multipart/form-data`
+    - 证据：
+      - `src/App.tsx` 的 body editor 已有 `Multipart` 模式切换、text/file 行类型切换、路径输入。
+      - `src/App.body.test.tsx` 覆盖：
+        - 切换到 `Multipart`
+        - 把行类型改成 `File`
+        - 保存 request
+        - reload 后仍为 `Multipart`
+        - 点击 `Send`
+        - 断言 `send_request` payload 带 `bodyMode: "multipart"` 和 `fieldType: "file"`
+      - `cargo test http --manifest-path src-tauri/Cargo.toml` 通过，包含
+        - `multipart_body_builds_text_and_file_parts`
+        - `execute_request_sends_multipart_body`
+        - 真实本地 HTTP multipart body / boundary / file content 断言
+
+  - 要求：用户可切换 body 类型并真实发出对应请求
+    - 证据：
+      - `src/App.tsx` 已暴露四种模式切换入口。
+      - `src/store/requestStore.ts` 的 `sendActiveRequest()` 已把 `bodyMode / bodyContentType / bodyRows` 传给 bridge。
+      - `src-tauri/src/http.rs` 已按模式真实构造请求体。
+      - `src/App.body.test.tsx` 覆盖点击 `Send` 的前端路径。
+      - `cargo test http --manifest-path src-tauri/Cargo.toml` 通过，6 个 `http` 相关测试全绿。
+
+  - 要求：切换模式后可保存 request 并重新加载，body 状态保持一致
+    - 证据：
+      - `src/App.body.test.tsx` 在单个测试中串行覆盖：
+        - `json -> raw -> urlencoded -> multipart`
+        - 每一步 `Save`
+        - `unmount -> reset store -> render` reload
+        - reload 后检查模式、内容、行数据保持一致
+      - `src-tauri/src/storage.rs` / `src-tauri/src/models.rs` 已持久化 `bodyMode / bodyContentType / bodyRows`
+      - `cargo test storage --manifest-path src-tauri/Cargo.toml` 通过，24 个 storage 测试全绿
+
+  ## 审计结论
+
+  - `P1-1` 的显式完成标准“用户可切换 body 类型并真实发出对应请求”已满足。
+  - 没有发现只改 UI、不改发送链路或只改发送链路、不支持保存/重载的假闭环。
+  - 现阶段仍未把 `curl/postman import-export` 的多模式语义做满，但这不属于 `P1-1` 的显式验收项。
+
+  ## 验证结果
+
+  - `npm test` 通过。
+    - 2 个测试文件，3 个测试全绿。
+  - `npm run build` 通过。
+  - `cargo test http --manifest-path src-tauri/Cargo.toml` 通过。
+    - 6 个 `http` 测试全绿。
+  - `cargo test storage --manifest-path src-tauri/Cargo.toml` 通过。
+    - 24 个 storage 测试全绿。
+  - `git diff --check` 通过。
+
+  - 自信度检查：对本次审计结果有 100% 信心。四种 body 模式的前端交互、保存重载、bridge 入参和 Rust 真实请求构造都已有直接证据支撑。
+
+- [x] Task 5: 补齐前端 Body 编辑器与保存加载兼容
   - 目标：把 body 编辑补到真正可切换、可保存、可再次加载，而不是只在发送前临时拼装。
   - 独立验证：切换模式、保存 request、重新载入 request 后，body 状态与发送结果一致。
-  - 完成内容：
-  - 自信度检查：
+  - 完成内容：已完成前端 body editor、多模式保存加载链路和 body 专项交互测试。
+
+  ## 本轮实现
+
+  - `src/App.tsx`
+    - body panel 从单一 textarea 升级为四种模式切换：
+      - `JSON`
+      - `Raw`
+      - `Form URL`
+      - `Multipart`
+    - `JSON / Raw`：
+      - 继续使用 textarea 编辑 body string
+      - 增加 `Content-Type` 输入
+    - `Form URL`：
+      - 增加 key/value 行编辑
+    - `Multipart`：
+      - 增加 text/file 行类型切换
+      - 支持文件绝对路径输入
+    - 增加 body 行新增、删除、启用/停用、焦点回落逻辑
+    - request save / import / export / bootstrap normalize 已全部承接
+      - `bodyMode`
+      - `bodyContentType`
+      - `bodyRows`
+  - `src/styles.css`
+    - 新增 body mode segmented 样式
+    - 新增 body toolbar / inline content-type field 样式
+    - 新增 `urlencoded / multipart` 表格布局与 file type select 样式
+  - `src/App.body.test.tsx`
+    - 新增 body 专项集成测试：
+      - 初始 `JSON`
+      - 切换 `Raw`
+      - 切换 `Form URL`
+      - 切换 `Multipart`
+      - 每一步 `Save`
+      - `unmount -> rerender` reload
+      - 每一步点击 `Send`，断言 `send_request` payload
+
+  ## 完成标准核对
+
+  - 切换模式：已支持。
+  - 编辑 body：已支持。
+  - 保存 request：已支持。
+  - 重新加载 request：已支持。
+  - 发送时模式与保存状态一致：已支持。
+
+  - 自信度检查：对当前实现有 100% 信心。body editor 的 UI、状态、保存、重载和发送链路已经形成完整闭环，当前没有剩余结构性缺口。
