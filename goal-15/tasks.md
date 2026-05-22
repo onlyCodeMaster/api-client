@@ -576,11 +576,52 @@
       - 本轮修复的是一个会直接伤害用户信任感的状态基线问题，而不是只补测试不修行为。
   - 自信度检查：当前对 `Task 9` 达到 100% 结束信心。原因是这轮先确认了 history replay 主链路已经存在，再针对 restore 后立即 dirty 的真实缺陷做了最小修复，并用新增专门测试、相关回归集合、生产构建和 diff 健全性检查共同证明 replay 恢复与 resend 体验已经闭环，没有留下新的已知漏洞。
 
-- [ ] Task 10: 实现或修复 `P0-6 首次启动与空状态`
+- [x] Task 10: 实现或修复 `P0-6 首次启动与空状态`
   - 目标：在无 collection、无 environment、无 history 的情况下，仍能顺利进入可操作状态并得到明确引导。
   - 独立验证：项目不依赖 seed 数据也能完成首次上手流程，且不影响已有数据 workspace。
   - 完成内容：
-  - 自信度检查：
+    - 已按 goal 要求重新全量阅读 `goal-15/input.md`、`goal-15/plan.md`、`goal-15/tasks.md` 后，围绕 `P0-6 首次启动与空状态` 做了专门审计与验证。
+    - 本轮先确认了当前实现中的已有基础：
+      - `src-tauri/src/storage.rs`
+        - `ensure_seed_files(...)` 只创建空的 `default-workspace.json`，不会灌入 sample collections / environments
+        - Rust 测试 `seed_files_create_empty_default_workspace_without_sample_data` 已证明数据层不依赖 seed 数据
+      - `src/store/requestStore.ts`
+        - `applyBootstrap(...)` 在无 collections 时回退到 `scratchRequest`
+        - `applyBootstrap(...)` 在无 environments 时回退到 `scratchEnvironment`
+      - `src/App.tsx`
+        - collections / history / environments / request editor 都已有专门空状态 UI 和引导按钮
+    - 本轮没有止步于“代码里有空状态文案”，而是补了真正的前端级空 bootstrap 回归，并在过程中抓到一个真实首启缺陷：
+      - 空 workspace 下创建首个 request 时，名称此前会变成 `Untitled Request 2`
+      - 原因是 `makeUniqueRequestName(...)` 把 `scratch-request` 也算进了重名集合，导致 placeholder 抢占了 `Untitled Request`
+      - 这会直接影响用户首次进入项目时看到的第一条请求名，属于真实 `P0-6` UX 问题
+    - 已完成前端修复：
+      - `src/App.tsx`
+        - `makeUniqueRequestName(...)` 现在会忽略 `scratch-request`
+        - 修复后空 workspace 的首个真实请求会正确命名为 `Untitled Request`，不再出现凭空加后缀的首启瑕疵
+    - 已新增专门前端回归：
+      - `src/App.empty-state.test.tsx`
+        - `shows empty workspace guidance and lets the first request create a real local collection`
+          - 直接证明全空 bootstrap 下会出现 `No collections yet`、`Create your first request`、`No history yet`
+          - 直接证明用户无需 seed 数据即可通过 `New Request` 创建首个真实本地 request / collection
+          - 也直接证明首个 request 的持久化集合是 `Unfiled`，并且名称已经恢复为 `Untitled Request`
+        - `shows empty environment guidance and creates the first local environment from the empty state`
+          - 直接证明全空 bootstrap 下会出现 `No environments yet`
+          - 直接证明用户可以通过空状态引导创建首个 local environment
+          - 直接证明首次 environment 会带上默认 `base_url / proxy / tls / cookie_jar` 变量，而不是空壳环境
+    - 已完成本轮验证：
+      - `npm test -- --run src/App.empty-state.test.tsx` 通过
+        - `1` test file, `2` tests passed
+      - `npm test -- --run src/App.crud.test.tsx src/App.environment-autosave.test.tsx src/App.history-replay.test.tsx src/App.empty-state.test.tsx` 通过
+        - `4` test files, `11` tests passed
+      - `npm run build` 通过
+      - `git diff --check` 通过
+    - 结论：
+      - 当前项目已经不仅仅是“无 seed 数据也能启动”，而是前端级别证明了：
+        - 无 collection 时有明确引导，并能创建首个真实 request / collection
+        - 无 environment 时有明确引导，并能创建首个真实 environment
+        - 无 history 时有明确空状态反馈
+      - 本轮还顺手修掉了首个 request 命名被 scratch placeholder 污染的真实 P0-6 边界问题。
+  - 自信度检查：当前对 `Task 10` 达到 100% 结束信心。原因是这轮不是只依赖已有空状态文案，而是通过专门的空 bootstrap 前端测试证明首次进入流程真实可操作，并且在验证中抓到并修复了首个 request 命名异常这一真实首启缺陷，再用相关 CRUD / environment / history 回归、生产构建和 diff 健全性检查共同证明 `P0-6` 已经闭环，没有留下新的已知漏洞。
 
 - [ ] Task 11: 最终最大的 review - P0 全量验收与修缮
   - 目标：从 C 端体验、代码质量、数据安全、异常路径和回归风险角度做最终审计，直到 P0 达到可交付状态。

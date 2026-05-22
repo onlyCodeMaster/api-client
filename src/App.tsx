@@ -475,7 +475,11 @@ function mergeCollectionDescriptors(
 }
 
 function makeUniqueRequestName(baseName: string, requests: RequestRecord[]) {
-  const existingNames = new Set(requests.map((request) => request.name));
+  const existingNames = new Set(
+    requests
+      .filter((request) => request.id !== "scratch-request")
+      .map((request) => request.name),
+  );
   if (!existingNames.has(baseName)) {
     return baseName;
   }
