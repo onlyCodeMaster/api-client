@@ -6,11 +6,184 @@
   - 完成内容：已创建 `goal-15/` 三件套，并把本轮 P0 范围、执行顺序、风险与验证框架写入文档。
   - 自信度检查：当前 task 只涉及 goal 文档创建与结构化规划，具备 100% 结束信心。
 
-- [ ] Task 2: 审计当前 `P0-1` 到 `P0-6` 的真实实现状态
+- [x] Task 2: 审计当前 `P0-1` 到 `P0-6` 的真实实现状态
   - 目标：基于当前代码和测试，而不是历史印象，确认每个 P0 子项的现状、缺口和优先级。
   - 独立验证：形成逐项审计结果，明确哪些能力已闭环、哪些存在回归或未完成，并给出后续实施边界。
   - 完成内容：
-  - 自信度检查：
+    - 已按 goal 要求重新通读 `goal-15/input.md`、`goal-15/plan.md`、`goal-15/tasks.md`，并以当前仓库代码为准完成一次全量 P0 审计。
+    - 已确认 `P0-1 Collection / Request CRUD` 当前在前端、bridge、Rust command、数据层都已有落地：
+      - 前端交互：
+        - `src/App.tsx`
+          - `handleCreateCollection`
+          - `handleRenameCollection`
+          - `handleDeleteCollection`
+          - `handleCreateRequest`
+          - `handleDuplicateRequest`
+          - `handleRenameRequest`
+          - `handleDeleteRequest`
+          - `handleMoveCollection`
+          - `handleReorderRequest`
+          - `handleMoveRequest`
+      - Bridge：
+        - `src/lib/tauri.ts`
+          - `createCollection / renameCollection / deleteCollection`
+          - `saveRequest / deleteRequest`
+          - `moveCollection / reorderRequest / moveRequest`
+      - Rust command：
+        - `src-tauri/src/commands.rs`
+          - `save_request / create_collection / rename_collection / delete_collection`
+          - `delete_request / move_collection / reorder_request / move_request`
+      - 数据层持久化：
+        - `src-tauri/src/storage.rs`
+          - `save_request / create_collection / rename_collection / delete_collection`
+          - `delete_request / move_collection / reorder_request / move_request`
+          - workspace 文件引用维护与 collection 文件更新
+      - 已有验证证据：
+        - 前端：`src/App.crud.test.tsx`
+          - `sends create, move, reorder and delete collection/request commands with persisted state updates`
+        - Rust：
+          - `create_collection_persists_empty_collection_and_updates_workspace`
+          - `rename_collection_updates_file_requests_and_workspace_reference`
+          - `delete_collection_removes_file_and_workspace_reference`
+          - `delete_request_removes_request_from_collection_file`
+          - `move_collection_updates_workspace_order`
+          - `reorder_request_updates_request_order_in_collection_file`
+          - `move_request_transfers_request_between_collections`
+          - `save_request_creates_collection_file_and_updates_default_workspace`
+      - 审计结论：
+        - collection CRUD、request rename/delete、排序和移动已形成真实持久化闭环。
+        - request 的 “新建 / 复制” 当前先创建本地 draft，再通过显式保存或自动保存进入本地文件；这更像 editor-driven persistence，而不是像 collection 创建那样立即落盘。它大概率已满足 P0 可用性，但仍是 `P0-1` 里最值得继续收紧和补证的边界。
+    - 已确认 `P0-2 Environment CRUD` 当前已落地：
+      - 前端：
+        - `src/App.tsx`
+          - `handleCreateEnvironment`
+          - `handleRenameEnvironment`
+          - `handleDeleteEnvironment`
+          - `handleAddEnvironmentVar`
+          - `handleRemoveEnvironmentVar`
+          - `handleSaveEnvironment`
+      - Store：
+        - `src/store/requestStore.ts`
+          - `updateEnvironmentVar / addEnvironmentVar / removeEnvironmentVar`
+      - Bridge / Rust / 数据层：
+        - `src/lib/tauri.ts`
+          - `saveEnvironment / renameEnvironment / deleteEnvironment`
+        - `src-tauri/src/commands.rs`
+          - `save_environment / rename_environment / delete_environment`
+        - `src-tauri/src/storage.rs`
+          - `list_environments / save_environment / rename_environment / delete_environment`
+      - 已有验证证据：
+        - 前端：`src/App.crud.test.tsx`
+          - `supports environment create, rename, variable edits, save and delete flows`
+        - Rust：
+          - `list_environments_reads_json_yaml_and_yml_files`
+          - `save_environment_writes_json_yaml_and_yml_by_extension`
+          - `rename_environment_updates_name_and_file_path`
+          - `delete_environment_removes_file`
+      - 审计结论：
+        - environment CRUD 已不再局限于切换和保存现有项，且真实写入本地环境文件。
+    - 已确认 `P0-3 Explorer 搜索过滤` 的实现存在且交互逻辑完整：
+      - `src/App.tsx`
+        - `filteredCollectionSections`
+        - `filteredHistory`
+        - `filteredEnvironments`
+        - `explorerListEmpty`
+        - `explorerEmptyMessage`
+      - 行为表现：
+        - Collections、History、Environments 都会按 `explorerSearch` 实时过滤。
+        - 空结果时会显示 `No results` 和对应反馈文案。
+      - 审计结论：
+        - 功能看起来已经完成。
+        - 当前缺口主要在验证：仓库里还没有专门覆盖三类 explorer 搜索/空结果的 UI 自动化测试。
+    - 已确认 `P0-4 请求编辑器基础闭环` 大部分已经落地：
+      - `src/App.tsx`
+        - Params/Headers 删除：
+          - `handleRemoveParamRow`
+          - `handleRemoveHeaderRow`
+        - 空行聚焦：
+          - `pendingEditorFocus`
+          - `focusEditorRow`
+          - 针对 `params / headers / body` 的 `useEffect` 聚焦逻辑
+        - dirty / save 状态：
+          - `requestDirty`
+          - `requestStatus`
+          - `handleSaveRequest`
+          - `scheduleRequestAutosave`
+        - 成功 / 失败反馈：
+          - `requestSaveFeedback`
+          - `commandErrorMessage(error, "Save request")`
+      - Store：
+        - `src/store/requestStore.ts`
+          - `removeRow(...)` 会在删空后补回一行空白 row，并返回新的 focus row
+      - 已有验证证据：
+        - 前端：
+          - `src/App.crud.test.tsx`
+            - `autosaves request edits when the setting is enabled`
+          - `src/App.params-headers.test.tsx`
+            - `supports descriptions, disabled visibility, bulk edit, sorting, save and send`
+      - 审计结论：
+        - dirty 状态、保存反馈、删除入口、空白行聚焦机制都已在代码里存在。
+        - 当前验证缺口是：没有直接覆盖 “删除后焦点落位” 和 “save 失败反馈” 的专门测试。
+    - 已确认 `P0-5 History 基础回放` 已具备主链路：
+      - 前端：
+        - `src/App.tsx`
+          - `handleRestoreHistory`
+          - `handleResendHistory`
+          - history sidebar / workspace inspector 的 `Restore` / `Resend` 入口
+      - Store：
+        - `src/store/requestStore.ts`
+          - `upsertRequestFromHistory`
+          - `sendActiveRequest`
+      - Bridge / Rust / 数据层：
+        - `src-tauri/src/commands.rs`
+          - `send_request` 成功后会调用 `storage::record_history(...)`
+          - `load_bootstrap_state` 会读取 `list_history(...)`
+        - `src-tauri/src/storage.rs`
+          - `record_history / list_history`
+          - SQLite schema migration for history columns
+      - 已有验证证据：
+        - Rust：
+          - `record_history_persists_request_id`
+          - `initialize_database_migrates_history_table_with_request_id`
+      - 审计结论：
+        - history 不再只是展示列表，代码层已经能恢复请求、resend、并展示真实状态 / 时间字段。
+        - 当前缺口主要在 UI 自动化验证：还没有专门测试断言“点击 history 后 editor 被恢复 / resend 触发请求”。
+    - 已确认 `P0-6 首次启动与空状态` 当前也已有基础实现：
+      - 数据层：
+        - `src-tauri/src/storage.rs`
+          - `ensure_seed_files(...)` 只创建空的 `default-workspace.json`
+          - 不写入 sample collections / environments
+        - Rust 测试：
+          - `seed_files_create_empty_default_workspace_without_sample_data`
+      - 前端状态兜底：
+        - `src/store/requestStore.ts`
+          - `makeScratchEnvironment`
+          - `applyBootstrap(...)` 在无 environment 时回退到 scratch env，在无 request 时回退到 scratch request
+      - UI 空状态：
+        - `src/App.tsx`
+          - collections sidebar `No collections yet`
+          - environments sidebar / panel `No environments yet`
+          - history panel `No history yet`
+          - request editor `Create your first request`
+          - empty collection panel `This collection is ready, but it does not contain any requests yet`
+      - 审计结论：
+        - 项目当前已经不依赖 seed 数据才能启动。
+        - 当前缺口仍是验证强度：还没有用全空 bootstrap 做一次前端级自动化证明。
+    - 已补充运行时验证结果：
+      - `npm test -- --run src/App.crud.test.tsx src/App.params-headers.test.tsx` 通过
+        - `2` test files, `5` tests passed
+      - `cargo test --manifest-path src-tauri/Cargo.toml storage::tests::` 通过
+        - `29` tests passed
+      - `npm run build` 通过
+      - `cargo fmt --manifest-path src-tauri/Cargo.toml --check` 通过
+      - `git diff --check` 通过
+    - 本轮审计后的执行结论：
+      - 当前仓库里的 P0 并不是“几乎没做”，而是“绝大多数主功能已经落地”。
+      - 后续 task 不应重复重写已完成能力，重点应放在：
+        - 收紧 `P0-1` 里 request create / duplicate 的持久化语义和边界验证。
+        - 为 `P0-3 / P0-4 / P0-5 / P0-6` 增补更直接的前端级回归测试。
+        - 发现真实缺口时再做最小修复，而不是重新实现整块功能。
+  - 自信度检查：当前对 `Task 2` 达到 100% 结束信心。审计结论来自代码阅读、bridge / Rust / storage 链路核对，以及已实际执行并通过的前端测试、Rust storage 测试、构建、格式和 diff 健全性检查，而不是历史印象或未验证推断。
 
 - [ ] Task 3: 实现或修复 `P0-1 Collection / Request CRUD`
   - 目标：让 collection 与 request 的新建、重命名、删除、复制、排序与移动形成完整闭环并持久化到本地文件。
