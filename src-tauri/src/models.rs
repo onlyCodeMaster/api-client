@@ -30,6 +30,16 @@ pub struct HistoryEntry {
     pub status: String,
     pub duration_ms: i64,
     pub created_at: String,
+    pub request_name: String,
+    pub collection: String,
+    pub body: String,
+    pub auth_type: String,
+    pub auth_token: String,
+    pub environment_name: String,
+    pub environment_source: String,
+    pub params: Vec<RequestKeyValue>,
+    pub headers: Vec<RequestKeyValue>,
+    pub environment_vars: Vec<EnvironmentVariable>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +130,14 @@ pub struct RecordHistoryInput {
     pub url: String,
     pub status: String,
     pub duration_ms: i64,
+    pub request_name: String,
+    pub collection: String,
+    pub params: Vec<RequestKeyValue>,
+    pub headers: Vec<RequestKeyValue>,
+    pub body: String,
+    pub auth_type: String,
+    pub auth_token: String,
+    pub environment: EnvironmentSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +157,20 @@ pub struct SaveEnvironmentInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RenameEnvironmentInput {
+    pub current_file_path: String,
+    pub new_name: String,
+    pub new_file_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteEnvironmentInput {
+    pub file_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SaveRequestInput {
     pub id: String,
     pub name: String,
@@ -151,6 +183,66 @@ pub struct SaveRequestInput {
     pub body: String,
     pub auth_type: String,
     pub auth_token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateCollectionInput {
+    pub name: String,
+    pub file_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameCollectionInput {
+    pub current_file_path: String,
+    pub new_name: String,
+    pub new_file_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteCollectionInput {
+    pub file_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteRequestInput {
+    pub request_id: String,
+    pub collection_file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveCollectionInput {
+    pub file_path: String,
+    pub target_index: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderRequestInput {
+    pub collection_file: String,
+    pub request_id: String,
+    pub target_index: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveRequestInput {
+    pub request_id: String,
+    pub source_collection_file: String,
+    pub target_collection_file: String,
+    pub target_index: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveRequestResult {
+    pub source_collection: CollectionSummary,
+    pub target_collection: CollectionSummary,
+    pub moved_request: StoredRequest,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

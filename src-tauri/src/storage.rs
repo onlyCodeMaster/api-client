@@ -10,9 +10,11 @@ use tauri::{AppHandle, Manager};
 
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    AppPaths, AppSettings, CacheSummary, CollectionSummary, EnvironmentSummary,
-    EnvironmentVariable, HistoryEntry, LogSummary, RecordHistoryInput, RuntimeSummary,
-    SaveEnvironmentInput, SaveRequestInput, StoredRequest,
+    AppPaths, AppSettings, CacheSummary, CollectionSummary, CreateCollectionInput,
+    DeleteCollectionInput, DeleteEnvironmentInput, DeleteRequestInput, EnvironmentSummary,
+    EnvironmentVariable, HistoryEntry, LogSummary, MoveCollectionInput, MoveRequestInput,
+    MoveRequestResult, RecordHistoryInput, RenameCollectionInput, RenameEnvironmentInput,
+    ReorderRequestInput, RuntimeSummary, SaveEnvironmentInput, SaveRequestInput, StoredRequest,
 };
 
 const DEFAULT_SETTINGS_THEME: &str = "clay-light";
@@ -102,113 +104,14 @@ fn initialize_runtime_files(paths: &StoragePaths) -> AppResult<()> {
 
 fn ensure_seed_files(paths: &StoragePaths) -> AppResult<()> {
     let workspace_file = paths.workspaces_dir.join("default-workspace.json");
-    let collection_file = paths.collections_dir.join("core-api.json");
-    let environment_file = paths.environments_dir.join("production.json");
-    let local_environment_file = paths.environments_dir.join("local.yaml");
 
     write_if_missing(
         &workspace_file,
         r#"{
   "name": "Default Workspace",
-  "collections": ["core-api.json"],
-  "environments": ["production.json", "local.yaml"]
+  "collections": [],
+  "environments": []
 }
-"#,
-    )?;
-    write_if_missing(
-        &collection_file,
-        r#"{
-  "name": "Core API",
-  "requests": [
-    {
-      "id": "req-workspaces",
-      "name": "GET /workspaces",
-      "method": "GET",
-      "url": "https://api.example.com/v1/workspaces",
-      "params": [
-        { "key": "page", "value": "1", "enabled": true },
-        { "key": "limit", "value": "20", "enabled": true },
-        { "key": "include", "value": "details,owner", "enabled": true }
-      ],
-      "headers": [
-        { "key": "Accept", "value": "application/json", "enabled": true },
-        { "key": "Authorization", "value": "Bearer {{secret.prod_token}}", "enabled": true },
-        { "key": "X-Workspace-Trace", "value": "req_live_4021", "enabled": true }
-      ],
-      "body": "",
-      "authType": "bearer",
-      "authToken": "{{secret.prod_token}}"
-    },
-    {
-      "id": "req-search",
-      "name": "POST /workspaces/search",
-      "method": "POST",
-      "url": "https://api.example.com/v1/workspaces/search",
-      "params": [
-        { "key": "query", "value": "workspace", "enabled": true },
-        { "key": "limit", "value": "20", "enabled": true }
-      ],
-      "headers": [
-        { "key": "Accept", "value": "application/json", "enabled": true },
-        { "key": "Authorization", "value": "Bearer {{secret.prod_token}}", "enabled": true },
-        { "key": "Content-Type", "value": "application/json", "enabled": true },
-        { "key": "Cookie", "value": "workspace_session=auto", "enabled": true }
-      ],
-      "body": "{\n  \"query\": \"workspace\",\n  \"limit\": 20,\n  \"include\": [\"details\", \"owner\"],\n  \"filters\": {\n    \"region\": \"apac\",\n    \"status\": \"active\"\n  },\n  \"preview\": true\n}",
-      "authType": "bearer",
-      "authToken": "{{secret.prod_token}}"
-    }
-  ]
-}
-"#,
-    )?;
-    let auth_collection_file = paths.collections_dir.join("auth.json");
-    write_if_missing(
-        &auth_collection_file,
-        r#"{
-  "name": "Auth",
-  "requests": [
-    {
-      "id": "req-login",
-      "name": "POST /login",
-      "method": "POST",
-      "url": "https://api.example.com/v1/login",
-      "params": [],
-      "headers": [
-        { "key": "Accept", "value": "application/json", "enabled": true },
-        { "key": "Content-Type", "value": "application/json", "enabled": true }
-      ],
-      "body": "{\n  \"email\": \"dev@example.com\",\n  \"password\": \"••••••••\"\n}",
-      "authType": "none",
-      "authToken": ""
-    }
-  ]
-}
-"#,
-    )?;
-    write_if_missing(
-        &environment_file,
-        r#"{
-  "name": "Production",
-  "base_url": "https://api.example.com",
-  "auth_token": "{{secret.prod_token}}",
-  "proxy": "system",
-  "tls_verify": "true",
-  "tls_hostname_verify": "true",
-  "https_only": "false"
-}
-"#,
-    )?;
-    write_if_missing(
-        &local_environment_file,
-        r#"name: "Local Mock"
-base_url: "http://127.0.0.1:8787"
-auth_token: "dev-token"
-proxy: "disabled"
-tls_verify: "false"
-tls_hostname_verify: "false"
-https_only: "false"
-cookie_jar: "workspace_local"
 "#,
     )?;
 
@@ -487,7 +390,17 @@ pub(crate) fn initialize_database(database_path: &Path) -> AppResult<()> {
             url TEXT NOT NULL,
             status TEXT NOT NULL,
             duration_ms INTEGER NOT NULL,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            request_name TEXT NOT NULL DEFAULT '',
+            collection TEXT NOT NULL DEFAULT '',
+            params_json TEXT NOT NULL DEFAULT '[]',
+            headers_json TEXT NOT NULL DEFAULT '[]',
+            body TEXT NOT NULL DEFAULT '',
+            auth_type TEXT NOT NULL DEFAULT 'none',
+            auth_token TEXT NOT NULL DEFAULT '',
+            environment_name TEXT NOT NULL DEFAULT '',
+            environment_source TEXT NOT NULL DEFAULT '',
+            environment_vars_json TEXT NOT NULL DEFAULT '[]'
         );
 
         CREATE TABLE IF NOT EXISTS cookie_jars (
@@ -529,6 +442,28 @@ fn ensure_history_schema(connection: &Connection) -> AppResult<()> {
             "ALTER TABLE request_history ADD COLUMN request_id TEXT NOT NULL DEFAULT ''",
             [],
         )?;
+    }
+
+    let history_columns = [
+        ("request_name", "TEXT NOT NULL DEFAULT ''"),
+        ("collection", "TEXT NOT NULL DEFAULT ''"),
+        ("params_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("headers_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("body", "TEXT NOT NULL DEFAULT ''"),
+        ("auth_type", "TEXT NOT NULL DEFAULT 'none'"),
+        ("auth_token", "TEXT NOT NULL DEFAULT ''"),
+        ("environment_name", "TEXT NOT NULL DEFAULT ''"),
+        ("environment_source", "TEXT NOT NULL DEFAULT ''"),
+        ("environment_vars_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ];
+
+    for (column, definition) in history_columns {
+        if !columns.iter().any(|existing| existing == column) {
+            connection.execute(
+                &format!("ALTER TABLE request_history ADD COLUMN {column} {definition}"),
+                [],
+            )?;
+        }
     }
 
     Ok(())
@@ -858,7 +793,24 @@ pub fn list_history(paths: &StoragePaths) -> AppResult<Vec<HistoryEntry>> {
     let connection = open_connection(&paths.database_path)?;
     let mut statement = connection.prepare(
         r#"
-        SELECT id, request_id, method, url, status, duration_ms, created_at
+        SELECT
+            id,
+            request_id,
+            method,
+            url,
+            status,
+            duration_ms,
+            created_at,
+            request_name,
+            collection,
+            params_json,
+            headers_json,
+            body,
+            auth_type,
+            auth_token,
+            environment_name,
+            environment_source,
+            environment_vars_json
         FROM request_history
         ORDER BY id DESC
         LIMIT 20
@@ -866,6 +818,9 @@ pub fn list_history(paths: &StoragePaths) -> AppResult<Vec<HistoryEntry>> {
     )?;
 
     let rows = statement.query_map([], |row| {
+        let params_json = row.get::<_, String>(9)?;
+        let headers_json = row.get::<_, String>(10)?;
+        let environment_vars_json = row.get::<_, String>(16)?;
         Ok(HistoryEntry {
             id: row.get(0)?,
             request_id: row.get(1)?,
@@ -874,6 +829,16 @@ pub fn list_history(paths: &StoragePaths) -> AppResult<Vec<HistoryEntry>> {
             status: row.get(4)?,
             duration_ms: row.get(5)?,
             created_at: row.get(6)?,
+            request_name: row.get(7)?,
+            collection: row.get(8)?,
+            params: serde_json::from_str(&params_json).unwrap_or_default(),
+            headers: serde_json::from_str(&headers_json).unwrap_or_default(),
+            body: row.get(11)?,
+            auth_type: row.get(12)?,
+            auth_token: row.get(13)?,
+            environment_name: row.get(14)?,
+            environment_source: row.get(15)?,
+            environment_vars: serde_json::from_str(&environment_vars_json).unwrap_or_default(),
         })
     })?;
 
@@ -886,17 +851,49 @@ pub fn record_history(
     input: RecordHistoryInput,
 ) -> AppResult<Vec<HistoryEntry>> {
     let connection = open_connection(&paths.database_path)?;
+    let params_json = serde_json::to_string(&input.params)
+        .map_err(|error| AppError::InvalidData(error.to_string()))?;
+    let headers_json = serde_json::to_string(&input.headers)
+        .map_err(|error| AppError::InvalidData(error.to_string()))?;
+    let environment_vars_json = serde_json::to_string(&input.environment.vars)
+        .map_err(|error| AppError::InvalidData(error.to_string()))?;
     connection.execute(
         r#"
-        INSERT INTO request_history (request_id, method, url, status, duration_ms)
-        VALUES (?1, ?2, ?3, ?4, ?5)
+        INSERT INTO request_history (
+            request_id,
+            method,
+            url,
+            status,
+            duration_ms,
+            request_name,
+            collection,
+            params_json,
+            headers_json,
+            body,
+            auth_type,
+            auth_token,
+            environment_name,
+            environment_source,
+            environment_vars_json
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
         "#,
         params![
             input.request_id,
             input.method,
             input.url,
             input.status,
-            input.duration_ms
+            input.duration_ms,
+            input.request_name,
+            input.collection,
+            params_json,
+            headers_json,
+            input.body,
+            input.auth_type,
+            input.auth_token,
+            input.environment.name,
+            input.environment.file_path,
+            environment_vars_json
         ],
     )?;
 
@@ -928,7 +925,6 @@ pub fn list_collections(
         collections.push(read_collection_file(&path)?);
     }
 
-    collections.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(collections)
 }
 
@@ -954,10 +950,75 @@ pub fn save_environment(
     read_environment_file(&file_path)
 }
 
+pub fn rename_environment(
+    paths: &StoragePaths,
+    input: RenameEnvironmentInput,
+) -> AppResult<EnvironmentSummary> {
+    let current_file_path = resolve_storage_path(&paths.environments_dir, &input.current_file_path);
+    if !current_file_path.exists() {
+        return Err(AppError::NotFound(format!(
+            "environment file does not exist: {}",
+            current_file_path.display()
+        )));
+    }
+
+    let new_file_path = resolve_storage_path(&paths.environments_dir, &input.new_file_path);
+    if current_file_path != new_file_path && new_file_path.exists() {
+        return Err(AppError::InvalidData(format!(
+            "target environment file already exists: {}",
+            new_file_path.display()
+        )));
+    }
+    if let Some(parent) = new_file_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut environment = read_environment_file(&current_file_path)?;
+    environment.name = input.new_name;
+    environment.file_path = new_file_path.to_string_lossy().into_owned();
+
+    let save_input = SaveEnvironmentInput {
+        name: environment.name.clone(),
+        file_path: environment.file_path.clone(),
+        vars: environment.vars.clone(),
+    };
+    let renamed = save_environment(paths, save_input)?;
+
+    if current_file_path != new_file_path && current_file_path.exists() {
+        fs::remove_file(&current_file_path)?;
+    }
+
+    Ok(renamed)
+}
+
+pub fn delete_environment(paths: &StoragePaths, input: DeleteEnvironmentInput) -> AppResult<()> {
+    let file_path = resolve_storage_path(&paths.environments_dir, &input.file_path);
+    if !file_path.exists() {
+        return Err(AppError::NotFound(format!(
+            "environment file does not exist: {}",
+            file_path.display()
+        )));
+    }
+
+    fs::remove_file(&file_path)?;
+    Ok(())
+}
+
 pub fn save_request(paths: &StoragePaths, input: SaveRequestInput) -> AppResult<CollectionSummary> {
     let file_path = resolve_storage_path(&paths.collections_dir, &input.collection_file);
+    if let Some(parent) = file_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
 
-    let mut collection = read_collection_file(&file_path)?;
+    let mut collection = if file_path.exists() {
+        read_collection_file(&file_path)?
+    } else {
+        CollectionSummary {
+            name: input.collection.clone(),
+            file_path: file_path.to_string_lossy().into_owned(),
+            requests: Vec::new(),
+        }
+    };
     let stored_request = StoredRequest {
         id: input.id,
         name: input.name,
@@ -988,8 +1049,266 @@ pub fn save_request(paths: &StoragePaths, input: SaveRequestInput) -> AppResult<
     }))
     .map_err(|error| AppError::InvalidData(error.to_string()))?;
     fs::write(&file_path, format!("{payload}\n"))?;
+    ensure_workspace_collection_reference(paths, DEFAULT_SETTINGS_WORKSPACE, &file_path)?;
 
     read_collection_file(&file_path)
+}
+
+pub fn create_collection(
+    paths: &StoragePaths,
+    input: CreateCollectionInput,
+) -> AppResult<CollectionSummary> {
+    let file_path = resolve_storage_path(&paths.collections_dir, &input.file_path);
+    if file_path.exists() {
+        return Err(AppError::InvalidData(format!(
+            "collection file already exists: {}",
+            file_path.display()
+        )));
+    }
+    if let Some(parent) = file_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let collection = CollectionSummary {
+        name: input.name,
+        file_path: file_path.to_string_lossy().into_owned(),
+        requests: Vec::new(),
+    };
+
+    write_collection_file(&file_path, &collection)?;
+    ensure_workspace_collection_reference(paths, DEFAULT_SETTINGS_WORKSPACE, &file_path)?;
+    read_collection_file(&file_path)
+}
+
+pub fn rename_collection(
+    paths: &StoragePaths,
+    input: RenameCollectionInput,
+) -> AppResult<CollectionSummary> {
+    let current_file_path = resolve_storage_path(&paths.collections_dir, &input.current_file_path);
+    if !current_file_path.exists() {
+        return Err(AppError::NotFound(format!(
+            "collection file does not exist: {}",
+            current_file_path.display()
+        )));
+    }
+
+    let new_file_path = resolve_storage_path(&paths.collections_dir, &input.new_file_path);
+    if current_file_path != new_file_path && new_file_path.exists() {
+        return Err(AppError::InvalidData(format!(
+            "target collection file already exists: {}",
+            new_file_path.display()
+        )));
+    }
+    if let Some(parent) = new_file_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut collection = read_collection_file(&current_file_path)?;
+    collection.name = input.new_name;
+    collection.file_path = new_file_path.to_string_lossy().into_owned();
+    for request in &mut collection.requests {
+        request.collection = collection.name.clone();
+        request.collection_file = collection.file_path.clone();
+    }
+
+    write_collection_file(&new_file_path, &collection)?;
+    if current_file_path != new_file_path && current_file_path.exists() {
+        fs::remove_file(&current_file_path)?;
+    }
+
+    remove_workspace_collection_reference(paths, DEFAULT_SETTINGS_WORKSPACE, &current_file_path)?;
+    ensure_workspace_collection_reference(paths, DEFAULT_SETTINGS_WORKSPACE, &new_file_path)?;
+
+    read_collection_file(&new_file_path)
+}
+
+pub fn delete_collection(
+    paths: &StoragePaths,
+    input: DeleteCollectionInput,
+) -> AppResult<()> {
+    let file_path = resolve_storage_path(&paths.collections_dir, &input.file_path);
+    if !file_path.exists() {
+        return Err(AppError::NotFound(format!(
+            "collection file does not exist: {}",
+            file_path.display()
+        )));
+    }
+
+    fs::remove_file(&file_path)?;
+    remove_workspace_collection_reference(paths, DEFAULT_SETTINGS_WORKSPACE, &file_path)?;
+    Ok(())
+}
+
+pub fn delete_request(paths: &StoragePaths, input: DeleteRequestInput) -> AppResult<CollectionSummary> {
+    let file_path = resolve_storage_path(&paths.collections_dir, &input.collection_file);
+    if !file_path.exists() {
+        return Err(AppError::NotFound(format!(
+            "collection file does not exist: {}",
+            file_path.display()
+        )));
+    }
+
+    let mut collection = read_collection_file(&file_path)?;
+    let original_len = collection.requests.len();
+    collection
+        .requests
+        .retain(|request| request.id != input.request_id);
+
+    if collection.requests.len() == original_len {
+        return Err(AppError::NotFound(format!(
+            "request {} not found in collection {}",
+            input.request_id, collection.name
+        )));
+    }
+
+    write_collection_file(&file_path, &collection)?;
+    read_collection_file(&file_path)
+}
+
+pub fn move_collection(
+    paths: &StoragePaths,
+    input: MoveCollectionInput,
+) -> AppResult<Vec<CollectionSummary>> {
+    let file_path = resolve_storage_path(&paths.collections_dir, &input.file_path);
+    if !file_path.exists() {
+        return Err(AppError::NotFound(format!(
+            "collection file does not exist: {}",
+            file_path.display()
+        )));
+    }
+
+    let mut workspace = read_workspace_file(paths, DEFAULT_SETTINGS_WORKSPACE)?;
+    let relative_collection = file_path
+        .strip_prefix(&paths.collections_dir)
+        .unwrap_or(&file_path)
+        .to_string_lossy()
+        .into_owned();
+    let current_index = workspace
+        .collections
+        .iter()
+        .position(|item| item == &relative_collection)
+        .ok_or_else(|| {
+            AppError::NotFound(format!(
+                "collection {} is not referenced by workspace {}",
+                relative_collection, DEFAULT_SETTINGS_WORKSPACE
+            ))
+        })?;
+
+    let entry = workspace.collections.remove(current_index);
+    let target_index = input.target_index.min(workspace.collections.len());
+    workspace.collections.insert(target_index, entry);
+    write_workspace_file(paths, DEFAULT_SETTINGS_WORKSPACE, &workspace)?;
+
+    list_collections(paths, DEFAULT_SETTINGS_WORKSPACE)
+}
+
+pub fn reorder_request(
+    paths: &StoragePaths,
+    input: ReorderRequestInput,
+) -> AppResult<CollectionSummary> {
+    let file_path = resolve_storage_path(&paths.collections_dir, &input.collection_file);
+    if !file_path.exists() {
+        return Err(AppError::NotFound(format!(
+            "collection file does not exist: {}",
+            file_path.display()
+        )));
+    }
+
+    let mut collection = read_collection_file(&file_path)?;
+    let current_index = collection
+        .requests
+        .iter()
+        .position(|request| request.id == input.request_id)
+        .ok_or_else(|| {
+            AppError::NotFound(format!(
+                "request {} not found in collection {}",
+                input.request_id, collection.name
+            ))
+        })?;
+
+    let request = collection.requests.remove(current_index);
+    let target_index = input.target_index.min(collection.requests.len());
+    collection.requests.insert(target_index, request);
+    write_collection_file(&file_path, &collection)?;
+
+    read_collection_file(&file_path)
+}
+
+pub fn move_request(
+    paths: &StoragePaths,
+    input: MoveRequestInput,
+) -> AppResult<MoveRequestResult> {
+    let source_file_path = resolve_storage_path(&paths.collections_dir, &input.source_collection_file);
+    if !source_file_path.exists() {
+        return Err(AppError::NotFound(format!(
+            "source collection file does not exist: {}",
+            source_file_path.display()
+        )));
+    }
+
+    let target_file_path = resolve_storage_path(&paths.collections_dir, &input.target_collection_file);
+    if !target_file_path.exists() {
+        return Err(AppError::NotFound(format!(
+            "target collection file does not exist: {}",
+            target_file_path.display()
+        )));
+    }
+
+    if source_file_path == target_file_path {
+        let request_id = input.request_id.clone();
+        let reordered = reorder_request(
+            paths,
+            ReorderRequestInput {
+                collection_file: input.source_collection_file,
+                request_id,
+                target_index: input.target_index,
+            },
+        )?;
+        let moved_request = reordered
+            .requests
+            .iter()
+            .find(|request| request.id == input.request_id)
+            .cloned()
+            .ok_or_else(|| {
+                AppError::NotFound(format!(
+                    "request {} not found after reordering collection {}",
+                    input.request_id, reordered.name
+                ))
+            })?;
+        return Ok(MoveRequestResult {
+            source_collection: reordered.clone(),
+            target_collection: reordered,
+            moved_request,
+        });
+    }
+
+    let mut source_collection = read_collection_file(&source_file_path)?;
+    let request_index = source_collection
+        .requests
+        .iter()
+        .position(|request| request.id == input.request_id)
+        .ok_or_else(|| {
+            AppError::NotFound(format!(
+                "request {} not found in collection {}",
+                input.request_id, source_collection.name
+            ))
+        })?;
+    let mut moved_request = source_collection.requests.remove(request_index);
+
+    let mut target_collection = read_collection_file(&target_file_path)?;
+    moved_request.collection = target_collection.name.clone();
+    moved_request.collection_file = target_file_path.to_string_lossy().into_owned();
+    let target_index = input.target_index.min(target_collection.requests.len());
+    target_collection.requests.insert(target_index, moved_request.clone());
+
+    write_collection_file(&source_file_path, &source_collection)?;
+    write_collection_file(&target_file_path, &target_collection)?;
+
+    Ok(MoveRequestResult {
+        source_collection: read_collection_file(&source_file_path)?,
+        target_collection: read_collection_file(&target_file_path)?,
+        moved_request,
+    })
 }
 
 fn resolve_storage_path(root: &Path, raw_path: &str) -> PathBuf {
@@ -1016,6 +1335,113 @@ fn read_workspace_file(paths: &StoragePaths, workspace_name: &str) -> AppResult<
     let path = paths.workspaces_dir.join(file_name);
     let contents = fs::read_to_string(path)?;
     serde_json::from_str(&contents).map_err(|error| AppError::InvalidData(error.to_string()))
+}
+
+fn ensure_workspace_collection_reference(
+    paths: &StoragePaths,
+    workspace_name: &str,
+    collection_file: &Path,
+) -> AppResult<()> {
+    let file_name = if workspace_name.ends_with(".json") {
+        workspace_name.to_string()
+    } else {
+        format!("{workspace_name}.json")
+    };
+    let path = paths.workspaces_dir.join(file_name);
+    let mut workspace = if path.exists() {
+        let contents = fs::read_to_string(&path)?;
+        serde_json::from_str::<WorkspaceFile>(&contents)
+            .map_err(|error| AppError::InvalidData(error.to_string()))?
+    } else {
+        WorkspaceFile {
+            collections: Vec::new(),
+        }
+    };
+
+    let relative_collection = collection_file
+        .strip_prefix(&paths.collections_dir)
+        .unwrap_or(collection_file)
+        .to_string_lossy()
+        .into_owned();
+
+    if !workspace.collections.iter().any(|item| item == &relative_collection) {
+        workspace.collections.push(relative_collection);
+        let payload = serde_json::to_string_pretty(&serde_json::json!({
+            "name": "Default Workspace",
+            "collections": workspace.collections,
+        }))
+        .map_err(|error| AppError::InvalidData(error.to_string()))?;
+        fs::write(path, format!("{payload}\n"))?;
+    }
+
+    Ok(())
+}
+
+fn remove_workspace_collection_reference(
+    paths: &StoragePaths,
+    workspace_name: &str,
+    collection_file: &Path,
+) -> AppResult<()> {
+    let file_name = if workspace_name.ends_with(".json") {
+        workspace_name.to_string()
+    } else {
+        format!("{workspace_name}.json")
+    };
+    let path = paths.workspaces_dir.join(file_name);
+    let mut workspace = if path.exists() {
+        let contents = fs::read_to_string(&path)?;
+        serde_json::from_str::<WorkspaceFile>(&contents)
+            .map_err(|error| AppError::InvalidData(error.to_string()))?
+    } else {
+        WorkspaceFile {
+            collections: Vec::new(),
+        }
+    };
+
+    let relative_collection = collection_file
+        .strip_prefix(&paths.collections_dir)
+        .unwrap_or(collection_file)
+        .to_string_lossy()
+        .into_owned();
+
+    workspace.collections.retain(|item| item != &relative_collection);
+    let payload = serde_json::to_string_pretty(&serde_json::json!({
+        "name": "Default Workspace",
+        "collections": workspace.collections,
+    }))
+    .map_err(|error| AppError::InvalidData(error.to_string()))?;
+    fs::write(path, format!("{payload}\n"))?;
+    Ok(())
+}
+
+fn write_workspace_file(
+    paths: &StoragePaths,
+    workspace_name: &str,
+    workspace: &WorkspaceFile,
+) -> AppResult<()> {
+    let file_name = if workspace_name.ends_with(".json") {
+        workspace_name.to_string()
+    } else {
+        format!("{workspace_name}.json")
+    };
+    let path = paths.workspaces_dir.join(file_name);
+    let payload = serde_json::to_string_pretty(&serde_json::json!({
+        "name": "Default Workspace",
+        "collections": workspace.collections,
+    }))
+    .map_err(|error| AppError::InvalidData(error.to_string()))?;
+    fs::write(path, format!("{payload}\n"))?;
+    Ok(())
+}
+
+fn write_collection_file(path: &Path, collection: &CollectionSummary) -> AppResult<()> {
+    let payload = serde_json::to_string_pretty(&serde_json::json!({
+        "name": collection.name,
+        "requests": collection.requests,
+    }))
+    .map_err(|error| AppError::InvalidData(error.to_string()))?;
+    fs::write(path, format!("{payload}\n"))?;
+    Ok(())
 }
 
 fn read_collection_file(path: &Path) -> AppResult<CollectionSummary> {
@@ -1356,7 +1782,7 @@ fn yaml_scalar_from_value(value: &Value) -> String {
     serde_json::to_string(&scalar).unwrap_or_else(|_| "\"\"".to_string())
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 struct WorkspaceFile {
     collections: Vec<String>,
 }
@@ -1429,6 +1855,29 @@ mod tests {
                 url: "https://api.example.com/v1/workspaces/search".to_string(),
                 status: "200 OK".to_string(),
                 duration_ms: 182,
+                request_name: "POST /workspaces/search".to_string(),
+                collection: "Core API".to_string(),
+                params: vec![crate::models::RequestKeyValue {
+                    key: "query".to_string(),
+                    value: "workspace".to_string(),
+                    enabled: true,
+                }],
+                headers: vec![crate::models::RequestKeyValue {
+                    key: "Accept".to_string(),
+                    value: "application/json".to_string(),
+                    enabled: true,
+                }],
+                body: "{\"query\":\"workspace\"}".to_string(),
+                auth_type: "bearer".to_string(),
+                auth_token: "{{secret.prod_token}}".to_string(),
+                environment: EnvironmentSummary {
+                    name: "Production".to_string(),
+                    file_path: "environments/production.json".to_string(),
+                    vars: vec![EnvironmentVariable {
+                        key: "base_url".to_string(),
+                        value: "https://api.example.com".to_string(),
+                    }],
+                },
             },
         )
         .expect("record history");
@@ -1437,6 +1886,12 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].request_id, "req-search");
         assert_eq!(history[0].method, "POST");
+        assert_eq!(history[0].request_name, "POST /workspaces/search");
+        assert_eq!(history[0].collection, "Core API");
+        assert_eq!(history[0].params.len(), 1);
+        assert_eq!(history[0].headers.len(), 1);
+        assert_eq!(history[0].auth_type, "bearer");
+        assert_eq!(history[0].environment_name, "Production");
     }
 
     #[test]
@@ -1474,6 +1929,9 @@ mod tests {
             .expect("collect pragma");
 
         assert!(columns.iter().any(|column| column == "request_id"));
+        assert!(columns.iter().any(|column| column == "request_name"));
+        assert!(columns.iter().any(|column| column == "params_json"));
+        assert!(columns.iter().any(|column| column == "environment_vars_json"));
     }
 
     #[test]
@@ -1566,6 +2024,405 @@ mod tests {
     }
 
     #[test]
+    fn create_collection_persists_empty_collection_and_updates_workspace() {
+        let paths = make_test_paths("create-collection");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
+
+        let created = create_collection(
+            &paths,
+            CreateCollectionInput {
+                name: "Payments".to_string(),
+                file_path: "collections/payments.json".to_string(),
+            },
+        )
+        .expect("create collection");
+
+        assert_eq!(created.name, "Payments");
+        assert!(created.requests.is_empty());
+        assert!(paths.collections_dir.join("payments.json").exists());
+
+        let workspace_contents =
+            fs::read_to_string(paths.workspaces_dir.join("default-workspace.json"))
+                .expect("read workspace");
+        assert!(workspace_contents.contains("payments.json"));
+    }
+
+    #[test]
+    fn create_collection_rejects_existing_file() {
+        let paths = make_test_paths("create-collection-duplicate");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
+
+        create_collection(
+            &paths,
+            CreateCollectionInput {
+                name: "Payments".to_string(),
+                file_path: "collections/payments.json".to_string(),
+            },
+        )
+        .expect("create first collection");
+
+        let error = create_collection(
+            &paths,
+            CreateCollectionInput {
+                name: "Payments Again".to_string(),
+                file_path: "collections/payments.json".to_string(),
+            },
+        )
+        .expect_err("reject duplicate collection file");
+
+        assert!(error
+            .to_string()
+            .contains("collection file already exists"));
+    }
+
+    #[test]
+    fn rename_collection_updates_file_requests_and_workspace_reference() {
+        let paths = make_test_paths("rename-collection");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
+
+        save_request(
+            &paths,
+            SaveRequestInput {
+                id: "req-payments".to_string(),
+                name: "POST /payments".to_string(),
+                collection: "Payments".to_string(),
+                collection_file: "collections/payments.json".to_string(),
+                method: "POST".to_string(),
+                url: "http://localhost:3000/payments".to_string(),
+                params: vec![],
+                headers: vec![],
+                body: "{}".to_string(),
+                auth_type: "none".to_string(),
+                auth_token: "".to_string(),
+            },
+        )
+        .expect("seed payments collection");
+
+        let renamed = rename_collection(
+            &paths,
+            RenameCollectionInput {
+                current_file_path: "collections/payments.json".to_string(),
+                new_name: "Billing".to_string(),
+                new_file_path: "collections/billing.json".to_string(),
+            },
+        )
+        .expect("rename collection");
+
+        assert_eq!(renamed.name, "Billing");
+        assert_eq!(renamed.requests.len(), 1);
+        assert_eq!(renamed.requests[0].collection, "Billing");
+        assert!(paths.collections_dir.join("billing.json").exists());
+        assert!(!paths.collections_dir.join("payments.json").exists());
+
+        let workspace_contents =
+            fs::read_to_string(paths.workspaces_dir.join("default-workspace.json"))
+                .expect("read workspace");
+        assert!(workspace_contents.contains("billing.json"));
+        assert!(!workspace_contents.contains("payments.json"));
+    }
+
+    #[test]
+    fn rename_collection_rejects_existing_target_file() {
+        let paths = make_test_paths("rename-collection-duplicate");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
+
+        create_collection(
+            &paths,
+            CreateCollectionInput {
+                name: "Payments".to_string(),
+                file_path: "collections/payments.json".to_string(),
+            },
+        )
+        .expect("create payments");
+        create_collection(
+            &paths,
+            CreateCollectionInput {
+                name: "Billing".to_string(),
+                file_path: "collections/billing.json".to_string(),
+            },
+        )
+        .expect("create billing");
+
+        let error = rename_collection(
+            &paths,
+            RenameCollectionInput {
+                current_file_path: "collections/payments.json".to_string(),
+                new_name: "Billing".to_string(),
+                new_file_path: "collections/billing.json".to_string(),
+            },
+        )
+        .expect_err("reject duplicate target file");
+
+        assert!(error
+            .to_string()
+            .contains("target collection file already exists"));
+    }
+
+    #[test]
+    fn delete_collection_removes_file_and_workspace_reference() {
+        let paths = make_test_paths("delete-collection");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
+
+        create_collection(
+            &paths,
+            CreateCollectionInput {
+                name: "Archive".to_string(),
+                file_path: "collections/archive.json".to_string(),
+            },
+        )
+        .expect("create collection");
+
+        delete_collection(
+            &paths,
+            DeleteCollectionInput {
+                file_path: "collections/archive.json".to_string(),
+            },
+        )
+        .expect("delete collection");
+
+        assert!(!paths.collections_dir.join("archive.json").exists());
+        let workspace_contents =
+            fs::read_to_string(paths.workspaces_dir.join("default-workspace.json"))
+                .expect("read workspace");
+        assert!(!workspace_contents.contains("archive.json"));
+    }
+
+    #[test]
+    fn delete_request_removes_request_from_collection_file() {
+        let paths = make_test_paths("delete-request");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
+
+        save_request(
+            &paths,
+            SaveRequestInput {
+                id: "req-1".to_string(),
+                name: "GET /one".to_string(),
+                collection: "Core API".to_string(),
+                collection_file: "collections/core-api.json".to_string(),
+                method: "GET".to_string(),
+                url: "http://localhost:3000/one".to_string(),
+                params: vec![],
+                headers: vec![],
+                body: "".to_string(),
+                auth_type: "none".to_string(),
+                auth_token: "".to_string(),
+            },
+        )
+        .expect("save first request");
+
+        save_request(
+            &paths,
+            SaveRequestInput {
+                id: "req-2".to_string(),
+                name: "GET /two".to_string(),
+                collection: "Core API".to_string(),
+                collection_file: "collections/core-api.json".to_string(),
+                method: "GET".to_string(),
+                url: "http://localhost:3000/two".to_string(),
+                params: vec![],
+                headers: vec![],
+                body: "".to_string(),
+                auth_type: "none".to_string(),
+                auth_token: "".to_string(),
+            },
+        )
+        .expect("save second request");
+
+        let collection = delete_request(
+            &paths,
+            DeleteRequestInput {
+                request_id: "req-1".to_string(),
+                collection_file: "collections/core-api.json".to_string(),
+            },
+        )
+        .expect("delete request");
+
+        assert_eq!(collection.requests.len(), 1);
+        assert_eq!(collection.requests[0].id, "req-2");
+
+        let reloaded =
+            read_collection_file(&paths.collections_dir.join("core-api.json"))
+                .expect("reload collection");
+        assert_eq!(reloaded.requests.len(), 1);
+        assert_eq!(reloaded.requests[0].id, "req-2");
+    }
+
+    #[test]
+    fn move_collection_updates_workspace_order() {
+        let paths = make_test_paths("move-collection-order");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
+
+        create_collection(
+            &paths,
+            CreateCollectionInput {
+                name: "Alpha".to_string(),
+                file_path: "collections/alpha.json".to_string(),
+            },
+        )
+        .expect("create alpha");
+        create_collection(
+            &paths,
+            CreateCollectionInput {
+                name: "Bravo".to_string(),
+                file_path: "collections/bravo.json".to_string(),
+            },
+        )
+        .expect("create bravo");
+        create_collection(
+            &paths,
+            CreateCollectionInput {
+                name: "Charlie".to_string(),
+                file_path: "collections/charlie.json".to_string(),
+            },
+        )
+        .expect("create charlie");
+
+        let collections = move_collection(
+            &paths,
+            MoveCollectionInput {
+                file_path: "collections/charlie.json".to_string(),
+                target_index: 0,
+            },
+        )
+        .expect("move collection");
+
+        assert_eq!(collections[0].name, "Charlie");
+        let workspace = read_workspace_file(&paths, DEFAULT_SETTINGS_WORKSPACE).expect("read workspace");
+        assert_eq!(
+            workspace.collections,
+            vec![
+                "charlie.json".to_string(),
+                "alpha.json".to_string(),
+                "bravo.json".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn reorder_request_updates_request_order_in_collection_file() {
+        let paths = make_test_paths("reorder-request");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
+
+        for (id, name) in [
+            ("req-1", "GET /one"),
+            ("req-2", "GET /two"),
+            ("req-3", "GET /three"),
+        ] {
+            save_request(
+                &paths,
+                SaveRequestInput {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    collection: "Core API".to_string(),
+                    collection_file: "collections/core-api.json".to_string(),
+                    method: "GET".to_string(),
+                    url: format!("http://localhost:3000/{id}"),
+                    params: vec![],
+                    headers: vec![],
+                    body: "".to_string(),
+                    auth_type: "none".to_string(),
+                    auth_token: "".to_string(),
+                },
+            )
+            .expect("seed request");
+        }
+
+        let reordered = reorder_request(
+            &paths,
+            ReorderRequestInput {
+                collection_file: "collections/core-api.json".to_string(),
+                request_id: "req-3".to_string(),
+                target_index: 0,
+            },
+        )
+        .expect("reorder request");
+
+        assert_eq!(reordered.requests[0].id, "req-3");
+        let reloaded =
+            read_collection_file(&paths.collections_dir.join("core-api.json"))
+                .expect("reload collection");
+        assert_eq!(reloaded.requests[0].id, "req-3");
+        assert_eq!(reloaded.requests[1].id, "req-1");
+        assert_eq!(reloaded.requests[2].id, "req-2");
+    }
+
+    #[test]
+    fn move_request_transfers_request_between_collections() {
+        let paths = make_test_paths("move-request-between-collections");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
+
+        save_request(
+            &paths,
+            SaveRequestInput {
+                id: "req-source".to_string(),
+                name: "GET /source".to_string(),
+                collection: "Source".to_string(),
+                collection_file: "collections/source.json".to_string(),
+                method: "GET".to_string(),
+                url: "http://localhost:3000/source".to_string(),
+                params: vec![],
+                headers: vec![],
+                body: "".to_string(),
+                auth_type: "none".to_string(),
+                auth_token: "".to_string(),
+            },
+        )
+        .expect("seed source request");
+        save_request(
+            &paths,
+            SaveRequestInput {
+                id: "req-target".to_string(),
+                name: "GET /target".to_string(),
+                collection: "Target".to_string(),
+                collection_file: "collections/target.json".to_string(),
+                method: "GET".to_string(),
+                url: "http://localhost:3000/target".to_string(),
+                params: vec![],
+                headers: vec![],
+                body: "".to_string(),
+                auth_type: "none".to_string(),
+                auth_token: "".to_string(),
+            },
+        )
+        .expect("seed target request");
+
+        let moved = move_request(
+            &paths,
+            MoveRequestInput {
+                request_id: "req-source".to_string(),
+                source_collection_file: "collections/source.json".to_string(),
+                target_collection_file: "collections/target.json".to_string(),
+                target_index: 0,
+            },
+        )
+        .expect("move request");
+
+        assert_eq!(moved.moved_request.collection, "Target");
+        assert_eq!(moved.source_collection.requests.len(), 0);
+        assert_eq!(moved.target_collection.requests[0].id, "req-source");
+        assert_eq!(moved.target_collection.requests[0].collection, "Target");
+
+        let source_reloaded =
+            read_collection_file(&paths.collections_dir.join("source.json"))
+                .expect("reload source collection");
+        let target_reloaded =
+            read_collection_file(&paths.collections_dir.join("target.json"))
+                .expect("reload target collection");
+        assert!(source_reloaded.requests.is_empty());
+        assert_eq!(target_reloaded.requests[0].id, "req-source");
+        assert_eq!(target_reloaded.requests[1].id, "req-target");
+    }
+
+    #[test]
     fn save_request_and_environment_normalize_prefixed_relative_paths() {
         let paths = make_test_paths("path-normalization");
 
@@ -1623,6 +2480,56 @@ mod tests {
             .join("environments")
             .join("production.json")
             .exists());
+    }
+
+    #[test]
+    fn seed_files_create_empty_default_workspace_without_sample_data() {
+        let paths = make_test_paths("empty-workspace-seed");
+        ensure_seed_files(&paths).expect("seed files");
+
+        let workspace_contents =
+            fs::read_to_string(paths.workspaces_dir.join("default-workspace.json"))
+                .expect("read workspace seed");
+        assert!(workspace_contents.contains("\"collections\": []"));
+        assert!(workspace_contents.contains("\"environments\": []"));
+        assert!(!paths.collections_dir.join("core-api.json").exists());
+        assert!(!paths.collections_dir.join("auth.json").exists());
+        assert!(!paths.environments_dir.join("production.json").exists());
+        assert!(!paths.environments_dir.join("local.yaml").exists());
+    }
+
+    #[test]
+    fn save_request_creates_collection_file_and_updates_default_workspace() {
+        let paths = make_test_paths("save-request-bootstrap");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
+
+        let saved = save_request(
+            &paths,
+            SaveRequestInput {
+                id: "req-first".to_string(),
+                name: "GET /first".to_string(),
+                collection: "First Collection".to_string(),
+                collection_file: "collections/first-collection.json".to_string(),
+                method: "GET".to_string(),
+                url: "http://localhost:3000/first".to_string(),
+                params: vec![],
+                headers: vec![],
+                body: "".to_string(),
+                auth_type: "none".to_string(),
+                auth_token: "".to_string(),
+            },
+        )
+        .expect("save first request");
+
+        assert_eq!(saved.name, "First Collection");
+        assert_eq!(saved.requests.len(), 1);
+        assert!(paths.collections_dir.join("first-collection.json").exists());
+
+        let workspace_contents =
+            fs::read_to_string(paths.workspaces_dir.join("default-workspace.json"))
+                .expect("read updated workspace");
+        assert!(workspace_contents.contains("first-collection.json"));
     }
 
     #[test]
@@ -1760,28 +2667,106 @@ cookie_jar: workspace_local
     }
 
     #[test]
-    fn seed_files_include_real_local_yaml_environment() {
-        let paths = make_test_paths("environment-seed-yaml");
-        ensure_seed_files(&paths).expect("seed files");
+    fn rename_environment_updates_name_and_file_path() {
+        let paths = make_test_paths("rename-environment");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
 
-        let local_yaml = paths.environments_dir.join("local.yaml");
-        assert!(local_yaml.exists());
+        save_environment(
+            &paths,
+            SaveEnvironmentInput {
+                name: "Production".to_string(),
+                file_path: "environments/production.json".to_string(),
+                vars: vec![EnvironmentVariable {
+                    key: "base_url".to_string(),
+                    value: "https://api.example.com".to_string(),
+                }],
+            },
+        )
+        .expect("seed environment");
 
-        let workspace_contents =
-            fs::read_to_string(paths.workspaces_dir.join("default-workspace.json"))
-                .expect("read workspace seed");
-        assert!(workspace_contents.contains("local.yaml"));
+        let renamed = rename_environment(
+            &paths,
+            RenameEnvironmentInput {
+                current_file_path: "environments/production.json".to_string(),
+                new_name: "Staging".to_string(),
+                new_file_path: "environments/staging.yaml".to_string(),
+            },
+        )
+        .expect("rename environment");
 
-        let environments = list_environments(&paths).expect("list seeded environments");
-        let local = environments
-            .iter()
-            .find(|environment| environment.name == "Local Mock")
-            .expect("local yaml environment");
-        assert!(local.file_path.ends_with("local.yaml"));
-        assert!(local
-            .vars
-            .iter()
-            .any(|row| row.key == "cookie_jar" && row.value == "workspace_local"));
+        assert_eq!(renamed.name, "Staging");
+        assert_eq!(renamed.file_path, paths.environments_dir.join("staging.yaml").to_string_lossy());
+        assert_eq!(renamed.vars.len(), 1);
+        assert!(paths.environments_dir.join("staging.yaml").exists());
+        assert!(!paths.environments_dir.join("production.json").exists());
+    }
+
+    #[test]
+    fn rename_environment_rejects_existing_target_file() {
+        let paths = make_test_paths("rename-environment-duplicate");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
+
+        save_environment(
+            &paths,
+            SaveEnvironmentInput {
+                name: "Production".to_string(),
+                file_path: "environments/production.json".to_string(),
+                vars: vec![],
+            },
+        )
+        .expect("seed production");
+        save_environment(
+            &paths,
+            SaveEnvironmentInput {
+                name: "Staging".to_string(),
+                file_path: "environments/staging.json".to_string(),
+                vars: vec![],
+            },
+        )
+        .expect("seed staging");
+
+        let error = rename_environment(
+            &paths,
+            RenameEnvironmentInput {
+                current_file_path: "environments/production.json".to_string(),
+                new_name: "Staging".to_string(),
+                new_file_path: "environments/staging.json".to_string(),
+            },
+        )
+        .expect_err("reject duplicate environment target");
+
+        assert!(error
+            .to_string()
+            .contains("target environment file already exists"));
+    }
+
+    #[test]
+    fn delete_environment_removes_file() {
+        let paths = make_test_paths("delete-environment");
+        ensure_directories(&paths).expect("create directories");
+        ensure_seed_files(&paths).expect("seed workspace");
+
+        save_environment(
+            &paths,
+            SaveEnvironmentInput {
+                name: "Archive".to_string(),
+                file_path: "environments/archive.json".to_string(),
+                vars: vec![],
+            },
+        )
+        .expect("seed archive environment");
+
+        delete_environment(
+            &paths,
+            DeleteEnvironmentInput {
+                file_path: "environments/archive.json".to_string(),
+            },
+        )
+        .expect("delete environment");
+
+        assert!(!paths.environments_dir.join("archive.json").exists());
     }
 
     #[test]

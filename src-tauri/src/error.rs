@@ -6,6 +6,7 @@ pub enum AppError {
     Sql(rusqlite::Error),
     Keyring(keyring_core::Error),
     MissingPath(&'static str),
+    NotFound(String),
     InvalidData(String),
 }
 
@@ -16,6 +17,7 @@ impl Display for AppError {
             Self::Sql(error) => write!(f, "sqlite error: {error}"),
             Self::Keyring(error) => write!(f, "keyring error: {error}"),
             Self::MissingPath(path_name) => write!(f, "missing required path: {path_name}"),
+            Self::NotFound(message) => write!(f, "not found: {message}"),
             Self::InvalidData(message) => write!(f, "invalid data: {message}"),
         }
     }

@@ -7,10 +7,13 @@ use crate::error::AppError;
 use crate::file_transfer;
 use crate::http;
 use crate::models::{
-    BootstrapState, BridgeEvent, CollectionSummary, CurlExportInput, CurlImportInput,
+    BootstrapState, BridgeEvent, CollectionSummary, CreateCollectionInput, CurlExportInput,
+    CurlImportInput, DeleteCollectionInput, DeleteEnvironmentInput, DeleteRequestInput,
     EnvironmentSummary, FileDownloadInput, FileDownloadResult, FileUploadInput, FileUploadResult,
-    PostmanImportInput, RecordHistoryInput, SaveEnvironmentInput, SaveRequestInput,
-    SaveSecretInput, SecretStatus, SendRequestInput, SendRequestResult, StoredRequest,
+    MoveCollectionInput, MoveRequestInput, MoveRequestResult, PostmanImportInput,
+    RecordHistoryInput, RenameCollectionInput, RenameEnvironmentInput, ReorderRequestInput,
+    SaveEnvironmentInput, SaveRequestInput, SaveSecretInput, SecretStatus, SendRequestInput,
+    SendRequestResult, StoredRequest,
 };
 use crate::postman;
 use crate::secrets;
@@ -307,6 +310,72 @@ pub fn save_environment(
 }
 
 #[tauri::command]
+pub fn rename_environment(
+    app: AppHandle,
+    input: RenameEnvironmentInput,
+    state: State<'_, AppState>,
+) -> Result<EnvironmentSummary, String> {
+    match storage::rename_environment(&state.paths, input) {
+        Ok(environment) => {
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "rename_environment",
+                "completed",
+                "Environment renamed",
+                Some(environment.file_path.clone()),
+            );
+            Ok(environment)
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "rename_environment",
+                "failed",
+                "Failed to rename environment",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn delete_environment(
+    app: AppHandle,
+    input: DeleteEnvironmentInput,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    match storage::delete_environment(&state.paths, input) {
+        Ok(()) => {
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "delete_environment",
+                "completed",
+                "Environment deleted",
+                None,
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "delete_environment",
+                "failed",
+                "Failed to delete environment",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
 pub fn save_request(
     app: AppHandle,
     input: SaveRequestInput,
@@ -332,6 +401,237 @@ pub fn save_request(
                 "save_request",
                 "failed",
                 "Failed to save request",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn create_collection(
+    app: AppHandle,
+    input: CreateCollectionInput,
+    state: State<'_, AppState>,
+) -> Result<CollectionSummary, String> {
+    match storage::create_collection(&state.paths, input) {
+        Ok(collection) => {
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "create_collection",
+                "completed",
+                "Collection created",
+                Some(collection.file_path.clone()),
+            );
+            Ok(collection)
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "create_collection",
+                "failed",
+                "Failed to create collection",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn rename_collection(
+    app: AppHandle,
+    input: RenameCollectionInput,
+    state: State<'_, AppState>,
+) -> Result<CollectionSummary, String> {
+    match storage::rename_collection(&state.paths, input) {
+        Ok(collection) => {
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "rename_collection",
+                "completed",
+                "Collection renamed",
+                Some(collection.file_path.clone()),
+            );
+            Ok(collection)
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "rename_collection",
+                "failed",
+                "Failed to rename collection",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn delete_collection(
+    app: AppHandle,
+    input: DeleteCollectionInput,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    match storage::delete_collection(&state.paths, input) {
+        Ok(()) => {
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "delete_collection",
+                "completed",
+                "Collection deleted",
+                None,
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "delete_collection",
+                "failed",
+                "Failed to delete collection",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn delete_request(
+    app: AppHandle,
+    input: DeleteRequestInput,
+    state: State<'_, AppState>,
+) -> Result<CollectionSummary, String> {
+    match storage::delete_request(&state.paths, input) {
+        Ok(collection) => {
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "delete_request",
+                "completed",
+                "Request deleted from collection",
+                Some(collection.file_path.clone()),
+            );
+            Ok(collection)
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "delete_request",
+                "failed",
+                "Failed to delete request",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn move_collection(
+    app: AppHandle,
+    input: MoveCollectionInput,
+    state: State<'_, AppState>,
+) -> Result<Vec<CollectionSummary>, String> {
+    match storage::move_collection(&state.paths, input) {
+        Ok(collections) => {
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "move_collection",
+                "completed",
+                "Collection order updated",
+                Some(format!("{} collections", collections.len())),
+            );
+            Ok(collections)
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "move_collection",
+                "failed",
+                "Failed to move collection",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn reorder_request(
+    app: AppHandle,
+    input: ReorderRequestInput,
+    state: State<'_, AppState>,
+) -> Result<CollectionSummary, String> {
+    match storage::reorder_request(&state.paths, input) {
+        Ok(collection) => {
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "reorder_request",
+                "completed",
+                "Request order updated",
+                Some(collection.file_path.clone()),
+            );
+            Ok(collection)
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "reorder_request",
+                "failed",
+                "Failed to reorder request",
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn move_request(
+    app: AppHandle,
+    input: MoveRequestInput,
+    state: State<'_, AppState>,
+) -> Result<MoveRequestResult, String> {
+    match storage::move_request(&state.paths, input) {
+        Ok(result) => {
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "move_request",
+                "completed",
+                "Request moved between collections",
+                Some(result.moved_request.collection_file.clone()),
+            );
+            Ok(result)
+        }
+        Err(error) => {
+            let message = to_command_error(error);
+            emit_bridge_event(
+                &app,
+                &state.paths,
+                "move_request",
+                "failed",
+                "Failed to move request",
                 Some(message.clone()),
             );
             Err(message)
@@ -549,6 +849,14 @@ pub fn send_request(
             url: input.url,
             status: result.status.clone(),
             duration_ms: result.duration_ms,
+            request_name: input.request_name,
+            collection: input.collection,
+            params: input.params,
+            headers: input.headers,
+            body: input.body,
+            auth_type: input.auth_type,
+            auth_token: input.auth_token,
+            environment: input.environment,
         },
     ) {
         let message = to_command_error(error);

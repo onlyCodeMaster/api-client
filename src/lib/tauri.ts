@@ -40,6 +40,19 @@ export type BootstrapState = {
     status: string;
     durationMs: number;
     createdAt: string;
+    requestName: string;
+    collection: string;
+    params: Array<{ key: string; value: string; enabled: boolean }>;
+    headers: Array<{ key: string; value: string; enabled: boolean }>;
+    body: string;
+    authType: string;
+    authToken: string;
+    environmentName: string;
+    environmentSource: string;
+    environmentVars: Array<{
+      key: string;
+      value: string;
+    }>;
   }>;
   collections: Array<{
     name: string;
@@ -78,6 +91,14 @@ export type RecordHistoryInput = {
   url: string;
   status: string;
   durationMs: number;
+  requestName: string;
+  collection: string;
+  params: Array<{ key: string; value: string; enabled: boolean }>;
+  headers: Array<{ key: string; value: string; enabled: boolean }>;
+  body: string;
+  authType: string;
+  authToken: string;
+  environment: BootstrapState["environments"][number];
 };
 
 export type SendRequestInput = {
@@ -161,10 +182,80 @@ export async function saveEnvironment(input: {
   return invoke<BootstrapState["environments"][number]>("save_environment", { input });
 }
 
+export async function renameEnvironment(input: {
+  currentFilePath: string;
+  newName: string;
+  newFilePath: string;
+}) {
+  return invoke<BootstrapState["environments"][number]>("rename_environment", { input });
+}
+
+export async function deleteEnvironment(input: {
+  filePath: string;
+}) {
+  return invoke<void>("delete_environment", { input });
+}
+
 export async function saveRequest(
   input: StoredRequest,
 ) {
   return invoke<BootstrapState["collections"][number]>("save_request", { input });
+}
+
+export async function createCollection(input: {
+  name: string;
+  filePath: string;
+}) {
+  return invoke<BootstrapState["collections"][number]>("create_collection", { input });
+}
+
+export async function renameCollection(input: {
+  currentFilePath: string;
+  newName: string;
+  newFilePath: string;
+}) {
+  return invoke<BootstrapState["collections"][number]>("rename_collection", { input });
+}
+
+export async function deleteCollection(input: {
+  filePath: string;
+}) {
+  return invoke<void>("delete_collection", { input });
+}
+
+export async function deleteRequest(input: {
+  requestId: string;
+  collectionFile: string;
+}) {
+  return invoke<BootstrapState["collections"][number]>("delete_request", { input });
+}
+
+export async function moveCollection(input: {
+  filePath: string;
+  targetIndex: number;
+}) {
+  return invoke<BootstrapState["collections"]>("move_collection", { input });
+}
+
+export async function reorderRequest(input: {
+  collectionFile: string;
+  requestId: string;
+  targetIndex: number;
+}) {
+  return invoke<BootstrapState["collections"][number]>("reorder_request", { input });
+}
+
+export async function moveRequest(input: {
+  requestId: string;
+  sourceCollectionFile: string;
+  targetCollectionFile: string;
+  targetIndex: number;
+}) {
+  return invoke<{
+    sourceCollection: BootstrapState["collections"][number];
+    targetCollection: BootstrapState["collections"][number];
+    movedRequest: StoredRequest;
+  }>("move_request", { input });
 }
 
 export async function importCurl(input: {

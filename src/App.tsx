@@ -1,19 +1,32 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  createCollection,
+  deleteCollection,
+  deleteEnvironment,
+  deleteRequest,
   downloadFile,
   exportCurl,
   importCurl,
   importPostmanCollection,
   listenBridgeEvents,
   loadBootstrapState,
+  moveCollection,
+  moveRequest,
+  renameCollection,
+  renameEnvironment,
+  reorderRequest,
   saveEnvironment,
   saveRequest,
   saveSecret,
   uploadFile,
   type BridgeEvent,
+  type StoredRequest as PersistedRequest,
 } from "./lib/tauri";
 import {
+  makeScratchEnvironment,
   useRequestStore,
+  type EnvironmentRecord,
+  type KeyValueRow,
   type RequestMethod,
   type RequestRecord,
 } from "./store/requestStore";
@@ -48,6 +61,26 @@ const requestMethods: RequestMethod[] = [
   "HEAD",
   "OPTIONS",
 ];
+
+type CollectionDescriptor = {
+  name: string;
+  filePath: string;
+};
+
+type CollectionActionMode =
+  | null
+  | "create-collection"
+  | "rename-collection"
+  | "delete-collection"
+  | "rename-request"
+  | "delete-request"
+  | "move-request";
+
+type EnvironmentActionMode =
+  | null
+  | "create-environment"
+  | "rename-environment"
+  | "delete-environment";
 
 function commandErrorMessage(error: unknown, action: string) {
   if (error instanceof Error) {
@@ -131,6 +164,228 @@ function normalizeRows(
   }));
 }
 
+function sanitizeEditableRows(rows: KeyValueRow[]) {
+  return rows.filter((row) => row.key.trim() !== "" || row.value.trim() !== "");
+}
+
+function serializeEditableRequest(request: RequestRecord) {
+  return JSON.stringify({
+    name: request.name,
+    collection: request.collection,
+    collectionFile: request.collectionFile,
+    method: request.method,
+    url: request.url,
+    params: sanitizeEditableRows(request.params),
+    headers: sanitizeEditableRows(request.headers),
+    body: request.body,
+    authType: request.authType,
+    authToken: request.authToken,
+  });
+}
+
+function findBlankRow(rows: KeyValueRow[]) {
+  return rows.find((row) => row.key.trim() === "" && row.value.trim() === "");
+}
+
+function slugifyCollectionName(name: string) {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return slug || "collection";
+}
+
+function slugifyEnvironmentName(name: string) {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return slug || "environment";
+}
+
+function normalizeStoredRequest(request: PersistedRequest): RequestRecord {
+  return {
+    id: request.id,
+    name: request.name,
+    collection: request.collection,
+    collectionFile: request.collectionFile,
+    method: request.method as RequestMethod,
+    url: request.url,
+    params: normalizeRows(request.params, `${request.id}-param`),
+    headers: normalizeRows(request.headers, `${request.id}-header`),
+    body: request.body,
+    authType: request.authType as "none" | "bearer",
+    authToken: request.authToken,
+  };
+}
+
+function makeScratchRequest(): RequestRecord {
+  return {
+    id: "scratch-request",
+    name: "Untitled Request",
+    collection: "Unfiled",
+    collectionFile: "collections/unfiled.json",
+    method: "GET",
+    url: "",
+    params: [],
+    headers: [],
+    body: "",
+    authType: "none",
+    authToken: "",
+  };
+}
+
+function makeUniqueEnvironmentName(baseName: string, environments: Array<{ name: string }>) {
+  const existingNames = new Set(environments.map((environment) => environment.name));
+  if (!existingNames.has(baseName)) {
+    return baseName;
+  }
+
+  let index = 2;
+  let nextName = `${baseName} ${index}`;
+  while (existingNames.has(nextName)) {
+    index += 1;
+    nextName = `${baseName} ${index}`;
+  }
+
+  return nextName;
+}
+
+function serializeEnvironment(environment: {
+  name: string;
+  source: string;
+  vars: Array<{ key: string; value: string }>;
+}) {
+  return JSON.stringify({
+    name: environment.name,
+    source: environment.source,
+    vars: environment.vars
+      .filter((row) => row.key.trim() !== "" || row.value.trim() !== "")
+      .map((row) => ({
+        key: row.key,
+        value: row.value,
+      })),
+  });
+}
+
+function normalizeEnvironmentVars(
+  rows: Array<{ key: string; value: string }>,
+  prefix: string,
+) {
+  return rows.map((row, index) => ({
+    id: `${prefix}-env-${index + 1}-${row.key || "var"}`,
+    key: row.key,
+    value: row.value,
+  }));
+}
+
+function normalizeEnvironmentRecord(
+  environment: {
+    name: string;
+    source: string;
+    vars: Array<{ key: string; value: string }>;
+  },
+  environmentId: string,
+): EnvironmentRecord {
+  return {
+    id: environmentId,
+    name: environment.name,
+    source: environment.source,
+    vars: normalizeEnvironmentVars(environment.vars, environmentId),
+  };
+}
+
+function mergeCollectionDescriptors(
+  persistedCollections: CollectionDescriptor[],
+  requests: RequestRecord[],
+) {
+  const merged = new Map<string, CollectionDescriptor>();
+
+  for (const collection of persistedCollections) {
+    merged.set(collection.filePath, collection);
+  }
+
+  for (const request of requests) {
+    if (request.id === "scratch-request") {
+      continue;
+    }
+
+    if (!merged.has(request.collectionFile)) {
+      merged.set(request.collectionFile, {
+        name: request.collection,
+        filePath: request.collectionFile,
+      });
+    }
+  }
+
+  return Array.from(merged.values());
+}
+
+function makeUniqueRequestName(baseName: string, requests: RequestRecord[]) {
+  const existingNames = new Set(requests.map((request) => request.name));
+  if (!existingNames.has(baseName)) {
+    return baseName;
+  }
+
+  let index = 2;
+  let nextName = `${baseName} ${index}`;
+  while (existingNames.has(nextName)) {
+    index += 1;
+    nextName = `${baseName} ${index}`;
+  }
+
+  return nextName;
+}
+
+function buildDraftRequest(
+  requests: RequestRecord[],
+  input: {
+    collection: string;
+    collectionFile: string;
+    name?: string;
+    source?: RequestRecord;
+  },
+): RequestRecord {
+  const nextId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const defaultName = input.name?.trim() || "Untitled Request";
+  const source = input.source;
+
+  return {
+    id: nextId,
+    name: makeUniqueRequestName(defaultName, requests),
+    collection: input.collection,
+    collectionFile: input.collectionFile,
+    method: source?.method ?? "GET",
+    url: source?.url ?? "",
+    params: (source?.params ?? []).map((row, index) => ({
+      ...row,
+      id: `${nextId}-param-${index + 1}`,
+    })),
+    headers: (source?.headers ?? []).map((row, index) => ({
+      ...row,
+      id: `${nextId}-header-${index + 1}`,
+    })),
+    body: source?.body ?? "",
+    authType: source?.authType ?? "none",
+    authToken: source?.authToken ?? "",
+  };
+}
+
+function replaceCollectionRequests(
+  allRequests: RequestRecord[],
+  collectionFile: string,
+  nextCollectionRequests: RequestRecord[],
+) {
+  return [
+    ...allRequests.filter((request) => request.collectionFile !== collectionFile),
+    ...nextCollectionRequests,
+  ];
+}
+
 export default function App() {
   const {
     activeSidebarPanel,
@@ -146,15 +401,21 @@ export default function App() {
     history,
     activeRequestId,
     activeEnvironmentId,
+    activeHistoryId,
     response,
     bootstrap,
     isSending,
     lastError,
     setActiveRequest,
     setActiveEnvironment,
+    setActiveHistory,
     updateEnvironmentVar,
+    addEnvironmentVar,
+    removeEnvironmentVar,
+    upsertEnvironment,
     replaceEnvironment,
     replaceRequest,
+    upsertRequestFromHistory,
     upsertRequests,
     upsertSecretStatus,
     applyBootstrap,
@@ -169,11 +430,28 @@ export default function App() {
     toggleHeaderRow,
     addParamRow,
     addHeaderRow,
+    removeParamRow,
+    removeHeaderRow,
     sendActiveRequest,
   } = useRequestStore();
   const [isSavingRequest, setIsSavingRequest] = useState(false);
   const [isSavingEnvironment, setIsSavingEnvironment] = useState(false);
   const [isSavingSecret, setIsSavingSecret] = useState<string | null>(null);
+  const [environmentSaveFeedback, setEnvironmentSaveFeedback] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
+  const [savedEnvironmentSignatures, setSavedEnvironmentSignatures] = useState<
+    Record<string, string>
+  >(() =>
+    Object.fromEntries(
+      environments.map((environment) => [environment.id, serializeEnvironment(environment)]),
+    ),
+  );
+  const [environmentActionMode, setEnvironmentActionMode] = useState<EnvironmentActionMode>(null);
+  const [environmentActionValue, setEnvironmentActionValue] = useState("");
+  const [environmentActionMessage, setEnvironmentActionMessage] = useState("");
+  const [pendingEnvironmentFocus, setPendingEnvironmentFocus] = useState("");
   const [secretDrafts, setSecretDrafts] = useState<Record<string, string>>({});
   const [expandedCollections, setExpandedCollections] = useState<Record<string, boolean>>({});
   const [bridgeEvents, setBridgeEvents] = useState<BridgeEvent[]>([]);
@@ -208,9 +486,55 @@ export default function App() {
   const [downloadPath, setDownloadPath] = useState("/tmp/api-client-download.json");
   const [allowDownloadOverwrite, setAllowDownloadOverwrite] = useState(false);
   const [transferMessage, setTransferMessage] = useState("");
+  const [explorerSearch, setExplorerSearch] = useState("");
+  const [collectionsCatalog, setCollectionsCatalog] = useState<CollectionDescriptor[]>(() =>
+    mergeCollectionDescriptors([], requests),
+  );
+  const [activeCollectionFile, setActiveCollectionFile] = useState<string>("");
+  const [collectionActionMode, setCollectionActionMode] = useState<CollectionActionMode>(null);
+  const [collectionActionValue, setCollectionActionValue] = useState("");
+  const [collectionActionMessage, setCollectionActionMessage] = useState("");
+  const [isMutatingCollections, setIsMutatingCollections] = useState(false);
+  const [savedRequestSignatures, setSavedRequestSignatures] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      requests.map((request) => [request.id, serializeEditableRequest(request)]),
+    ),
+  );
+  const [requestSaveFeedback, setRequestSaveFeedback] = useState<{
+    tone: "success" | "error";
+    message: string;
+    requestId: string;
+    signature: string;
+  } | null>(null);
+  const [pendingEditorFocus, setPendingEditorFocus] = useState<{
+    tab: "params" | "headers";
+    rowId: string;
+  } | null>(null);
+  const rowInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const environmentInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const displayRequests = requests.filter((request) => request.id !== "scratch-request");
+  const displayEnvironments = environments.filter(
+    (environment) => environment.id !== "scratch-environment",
+  );
+  const hasCollections = collectionsCatalog.length > 0;
+  const hasEnvironments = displayEnvironments.length > 0;
+  const hasHistory = history.length > 0;
 
   const activeRequest =
-    requests.find((request) => request.id === activeRequestId) ?? requests[0];
+    requests.find((request) => request.id === activeRequestId) ?? requests[0] ?? makeScratchRequest();
+  const activeCollection =
+    collectionsCatalog.find((collection) => collection.filePath === activeCollectionFile) ??
+    collectionsCatalog.find((collection) => collection.filePath === activeRequest.collectionFile) ??
+    collectionsCatalog[0] ??
+    null;
+  const activeCollectionRequests = activeCollection
+    ? displayRequests.filter((request) => request.collectionFile === activeCollection.filePath)
+    : [];
+  const hasActiveCollectionRequests = activeCollectionRequests.length > 0;
+  const activeCollectionRequest =
+    activeCollectionRequests.find((request) => request.id === activeRequestId) ??
+    activeCollectionRequests[0] ??
+    null;
   const activeEnvironment =
     environments.find((environment) => environment.id === activeEnvironmentId) ??
     environments[0];
@@ -222,50 +546,380 @@ export default function App() {
     activeEnvironment.vars.find((item) => item.key === "cookie_jar")?.value ?? "default";
   const activeProxy =
     activeEnvironment.vars.find((item) => item.key === "proxy")?.value ?? "system";
+  const activeEnvironmentSignature = serializeEnvironment(activeEnvironment);
+  const environmentBaselineSignature = savedEnvironmentSignatures[activeEnvironment.id] ?? "";
+  const environmentDirty = hasEnvironments
+    ? activeEnvironmentSignature !== environmentBaselineSignature
+    : false;
   const collectionSections = Array.from(
-    requests.reduce<Map<string, { title: string; subtitle: string; requests: RequestRecord[] }>>(
-      (state, request) => {
-        const existing = state.get(request.collection);
-        const pathParts = request.collectionFile.split("/");
-        const subtitle = pathParts[pathParts.length - 1] ?? request.collectionFile;
+    collectionsCatalog
+      .map((collection) => {
+        const pathParts = collection.filePath.split("/");
+        const subtitle = pathParts[pathParts.length - 1] ?? collection.filePath;
 
-        if (existing) {
-          existing.requests.push(request);
-          return state;
-        }
-
-        state.set(request.collection, {
-          title: request.collection,
+        return {
+          title: collection.name,
           subtitle,
-          requests: [request],
-        });
-        return state;
-      },
-      new Map(),
-    ).values(),
+          filePath: collection.filePath,
+          requests: displayRequests.filter((request) => request.collectionFile === collection.filePath),
+        };
+      })
+      .values(),
+  );
+  const explorerContext =
+    activeSidebarPanel === "collections"
+        ? {
+            eyebrow: "Workspace",
+          title: bootstrap.recentWorkspace || "default-workspace",
+          subtitle: activeCollection?.name ?? "No collections yet",
+          metrics: [
+            { label: "Groups", value: String(collectionSections.length) },
+            { label: "Method", value: activeCollectionRequest?.method ?? "n/a" },
+          ],
+        }
+      : activeSidebarPanel === "history"
+        ? {
+            eyebrow: "Recent",
+            title: history[0]?.title || "No recent requests",
+            subtitle: history[0]?.meta || "No recent sessions captured yet.",
+            metrics: [
+              {
+                label: "Selected",
+                value: hasActiveCollectionRequests ? activeCollectionRequest?.method ?? "n/a" : "n/a",
+              },
+              { label: "Sessions", value: String(history.length) },
+            ],
+          }
+        : activeSidebarPanel === "environments"
+          ? {
+              eyebrow: "Environment",
+              title: hasEnvironments ? activeEnvironment.name : "No environments yet",
+              subtitle: hasEnvironments
+                ? activeEnvironment.source
+                : "Create your first local environment to start templating requests.",
+              metrics: [
+                { label: "Vars", value: String(hasEnvironments ? activeEnvironment.vars.length : 0) },
+                { label: "Proxy", value: activeProxy },
+              ],
+            }
+          : {
+              eyebrow: "Runtime",
+              title: bootstrap.loaded ? "Desktop runtime connected" : "Browser preview runtime",
+              subtitle:
+                bootstrap.appDataDir ||
+                "Runtime-specific directories and bridge activity appear here once Tauri is active.",
+              metrics: [
+                { label: "Bridge", value: isBridgeListenerReady ? "Ready" : "Booting" },
+                { label: "Secrets", value: String(bootstrap.secrets.length) },
+              ],
+            };
+  const normalizedExplorerSearch = explorerSearch.trim().toLowerCase();
+  const filteredCollectionSections =
+    normalizedExplorerSearch.length === 0
+      ? collectionSections
+      : collectionSections
+          .map((section) => {
+            const collectionSearchTarget = [section.title, section.subtitle].join(" ").toLowerCase();
+            if (collectionSearchTarget.includes(normalizedExplorerSearch)) {
+              return section;
+            }
+
+            return {
+              ...section,
+              requests: section.requests.filter((request) => {
+                const searchTarget = [
+                  section.title,
+                  section.subtitle,
+                  request.name,
+                  request.method,
+                  request.url,
+                  safePathname(request.url),
+                ]
+                  .join(" ")
+                  .toLowerCase();
+                return searchTarget.includes(normalizedExplorerSearch);
+              }),
+            };
+          })
+          .filter(
+            (section) =>
+              section.requests.length > 0 ||
+              [section.title, section.subtitle].join(" ").toLowerCase().includes(normalizedExplorerSearch),
+          );
+  const filteredHistory =
+    normalizedExplorerSearch.length === 0
+      ? history
+      : history.filter((item) =>
+          [item.title, item.meta].join(" ").toLowerCase().includes(normalizedExplorerSearch),
+        );
+  const filteredEnvironments =
+    normalizedExplorerSearch.length === 0
+      ? displayEnvironments
+      : displayEnvironments.filter((environment) =>
+          [
+            environment.name,
+            environment.source,
+            ...environment.vars.flatMap((row) => [row.key, row.value]),
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes(normalizedExplorerSearch),
+        );
+  const explorerListEmpty =
+    activeSidebarPanel === "collections"
+      ? filteredCollectionSections.length === 0
+      : activeSidebarPanel === "history"
+        ? filteredHistory.length === 0
+        : activeSidebarPanel === "environments"
+          ? filteredEnvironments.length === 0
+          : false;
+  const explorerEmptyMessage =
+    activeSidebarPanel === "collections"
+      ? "No matching requests or collections."
+      : activeSidebarPanel === "history"
+        ? "No matching history entries."
+        : "No matching environments or variables.";
+  const visibleCollectionItemCount = filteredCollectionSections.reduce(
+    (count, section) => count + section.requests.length,
+    0,
   );
   const sidebarItemCount =
     activeSidebarPanel === "collections"
-      ? requests.length
+      ? visibleCollectionItemCount
       : activeSidebarPanel === "history"
-        ? history.length
+        ? filteredHistory.length
         : activeSidebarPanel === "environments"
-          ? environments.length
+          ? filteredEnvironments.length
           : 3;
+  const explorerSummaryLabel =
+    activeSidebarPanel === "collections"
+      ? "requests"
+      : activeSidebarPanel === "history"
+        ? "sessions"
+        : activeSidebarPanel === "environments"
+          ? "environments"
+          : "runtime";
+  const explorerSummaryValue =
+    activeSidebarPanel === "collections"
+      ? String(visibleCollectionItemCount)
+      : activeSidebarPanel === "history"
+        ? String(filteredHistory.length)
+        : activeSidebarPanel === "environments"
+          ? String(filteredEnvironments.length)
+          : bootstrap.loaded
+            ? "Live"
+            : "Seed";
+  const activeRequestSignature = serializeEditableRequest(activeRequest);
+  const requestBaselineSignature = savedRequestSignatures[activeRequest.id] ?? "";
+  const requestDirty = activeRequestSignature !== requestBaselineSignature;
+  const visibleParamRows = sanitizeEditableRows(activeRequest.params).length;
+  const visibleHeaderRows = sanitizeEditableRows(activeRequest.headers).length;
+  const requestStatus =
+    isSavingRequest
+      ? { tone: "pending" as const, message: "Saving changes" }
+      : requestSaveFeedback
+        ? { tone: requestSaveFeedback.tone, message: requestSaveFeedback.message }
+        : requestDirty
+          ? { tone: "dirty" as const, message: "Unsaved changes" }
+          : { tone: "saved" as const, message: "All changes saved" };
+  const environmentStatus =
+    isSavingEnvironment
+      ? { tone: "pending" as const, message: "Saving environment" }
+      : environmentSaveFeedback
+        ? { tone: environmentSaveFeedback.tone, message: environmentSaveFeedback.message }
+        : environmentDirty
+          ? { tone: "dirty" as const, message: "Unsaved environment changes" }
+          : { tone: "saved" as const, message: "Environment saved" };
+
+  const collectionActionTitle =
+    collectionActionMode === "create-collection"
+      ? "Create Collection"
+      : collectionActionMode === "rename-collection"
+        ? "Rename Collection"
+        : collectionActionMode === "delete-collection"
+          ? "Delete Collection"
+          : collectionActionMode === "rename-request"
+            ? "Rename Request"
+            : collectionActionMode === "delete-request"
+              ? "Delete Request"
+              : collectionActionMode === "move-request"
+                ? "Move Request"
+              : "";
+  const environmentActionTitle =
+    environmentActionMode === "create-environment"
+      ? "Create Environment"
+      : environmentActionMode === "rename-environment"
+        ? "Rename Environment"
+        : environmentActionMode === "delete-environment"
+          ? "Delete Environment"
+          : "";
 
   useEffect(() => {
+    const missingTitles = collectionsCatalog
+      .map((collection) => collection.name)
+      .filter((title) => !(title in expandedCollections));
+
+    if (missingTitles.length === 0) {
+      return;
+    }
+
     setExpandedCollections((current) => {
-      let hasChanges = false;
       const next = { ...current };
-      for (const section of collectionSections) {
-        if (!(section.title in next)) {
-          next[section.title] = true;
-          hasChanges = true;
-        }
+      for (const title of missingTitles) {
+        next[title] = true;
       }
-      return hasChanges ? next : current;
+      return next;
     });
-  }, [collectionSections]);
+  }, [collectionsCatalog, expandedCollections]);
+
+  useEffect(() => {
+    if (!bootstrap.loaded) {
+      return;
+    }
+
+    setSavedRequestSignatures(
+      Object.fromEntries(
+        requests.map((request) => [request.id, serializeEditableRequest(request)]),
+      ),
+    );
+    setSavedEnvironmentSignatures(
+      Object.fromEntries(
+        environments.map((environment) => [environment.id, serializeEnvironment(environment)]),
+      ),
+    );
+  }, [bootstrap.loaded]);
+
+  useEffect(() => {
+    setCollectionsCatalog((current) => mergeCollectionDescriptors(current, requests));
+  }, [requests]);
+
+  useEffect(() => {
+    if (!activeCollectionFile && collectionsCatalog[0]) {
+      const preferredCollectionFile = collectionsCatalog.some(
+        (collection) => collection.filePath === activeRequest.collectionFile,
+      )
+        ? activeRequest.collectionFile
+        : collectionsCatalog[0].filePath;
+      setActiveCollectionFile(preferredCollectionFile);
+      return;
+    }
+
+    if (
+      activeCollectionFile &&
+      !collectionsCatalog.some((collection) => collection.filePath === activeCollectionFile)
+    ) {
+      setActiveCollectionFile(collectionsCatalog[0]?.filePath ?? "");
+    }
+  }, [activeCollectionFile, collectionsCatalog]);
+
+  useEffect(() => {
+    if (activeSidebarPanel === "collections") {
+      return;
+    }
+
+    if (
+      activeRequest.collectionFile &&
+      activeRequest.id !== "scratch-request" &&
+      collectionsCatalog.some((collection) => collection.filePath === activeRequest.collectionFile) &&
+      activeCollectionFile !== activeRequest.collectionFile
+    ) {
+      setActiveCollectionFile(activeRequest.collectionFile);
+    }
+  }, [
+    activeSidebarPanel,
+    activeCollectionFile,
+    activeRequest.collectionFile,
+    activeRequest.id,
+    collectionsCatalog,
+  ]);
+
+  useEffect(() => {
+    if (activeSidebarPanel !== "collections") {
+      return;
+    }
+
+    if (activeCollectionRequest && activeCollectionRequest.id !== activeRequestId) {
+      setActiveRequest(activeCollectionRequest.id);
+    }
+  }, [activeCollectionRequest, activeRequestId, activeSidebarPanel, setActiveRequest]);
+
+  useEffect(() => {
+    if (
+      requestSaveFeedback &&
+      (requestSaveFeedback.requestId !== activeRequest.id ||
+        requestSaveFeedback.signature !== activeRequestSignature)
+    ) {
+      setRequestSaveFeedback(null);
+    }
+  }, [activeRequest.id, activeRequestSignature, requestSaveFeedback]);
+
+  useEffect(() => {
+    if (
+      environmentSaveFeedback &&
+      activeEnvironment.id &&
+      savedEnvironmentSignatures[activeEnvironment.id] !== activeEnvironmentSignature
+    ) {
+      setEnvironmentSaveFeedback(null);
+    }
+  }, [
+    activeEnvironment.id,
+    activeEnvironmentSignature,
+    environmentSaveFeedback,
+    savedEnvironmentSignatures,
+  ]);
+
+  useEffect(() => {
+    if (!pendingEnvironmentFocus) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const input = environmentInputRefs.current[pendingEnvironmentFocus];
+      input?.focus();
+      input?.select();
+      setPendingEnvironmentFocus("");
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [pendingEnvironmentFocus, activeEnvironment.vars]);
+
+  useEffect(() => {
+    if (!pendingEditorFocus || requestTab !== pendingEditorFocus.tab) {
+      return;
+    }
+
+    const focusKey = `${pendingEditorFocus.tab}:${pendingEditorFocus.rowId}`;
+    const frame = window.requestAnimationFrame(() => {
+      const input = rowInputRefs.current[focusKey];
+      input?.focus();
+      input?.select();
+      setPendingEditorFocus(null);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [activeRequest.id, activeRequest.headers, activeRequest.params, pendingEditorFocus, requestTab]);
+
+  useEffect(() => {
+    if (requestTab === "params" && activeRequest.params.length === 0) {
+      focusEditorRow("params", addParamRow());
+      return;
+    }
+
+    if (requestTab === "headers" && activeRequest.headers.length === 0) {
+      focusEditorRow("headers", addHeaderRow());
+    }
+  }, [
+    activeRequest.headers.length,
+    activeRequest.id,
+    activeRequest.params.length,
+    addHeaderRow,
+    addParamRow,
+    requestTab,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -314,6 +968,7 @@ export default function App() {
         }
 
         const requestCatalog = useRequestStore.getState().requests;
+        const environmentCatalog = useRequestStore.getState().environments;
 
         applyBootstrap({
           appDataDir: state.paths.appDataDir,
@@ -328,6 +983,43 @@ export default function App() {
             title: `${item.method} ${safePathname(item.url)}`,
             meta: `${item.status} / ${item.durationMs}ms / ${item.createdAt}`,
             requestId: resolveHistoryRequestId(item, requestCatalog),
+            method: item.method.toUpperCase() as RequestMethod,
+            url: item.url,
+            status: item.status,
+            durationMs: item.durationMs,
+            createdAt: item.createdAt,
+            requestName: item.requestName || `${item.method} ${safePathname(item.url)}`,
+            collection: item.collection || "History",
+            params: normalizeRows(item.params, `history-${item.id}-param`),
+            headers: normalizeRows(item.headers, `history-${item.id}-header`),
+            body: item.body,
+            authType: (item.authType === "bearer" ? "bearer" : "none") as "none" | "bearer",
+            authToken: item.authToken,
+            environment: (() => {
+              const fallbackEnvironment = environmentCatalog.find(
+                (environment) =>
+                  environment.name === item.environmentName ||
+                  environment.source === item.environmentSource,
+              );
+
+              return {
+                id: `history-env-${item.id}`,
+                name: item.environmentName || fallbackEnvironment?.name || "Recovered Environment",
+                source:
+                  item.environmentSource ||
+                  fallbackEnvironment?.source ||
+                  "history/environment.json",
+                vars: normalizeEnvironmentVars(
+                  item.environmentVars.length > 0
+                    ? item.environmentVars
+                    : (fallbackEnvironment?.vars ?? []).map((row) => ({
+                        key: row.key,
+                        value: row.value,
+                      })),
+                  `history-env-${item.id}`,
+                ),
+              };
+            })(),
           })),
           collections: state.collections.flatMap((collection) =>
             collection.requests.map((request) => ({
@@ -348,10 +1040,16 @@ export default function App() {
             id: `env-db-${index}`,
             name: item.name,
             source: item.filePath,
-            vars: item.vars,
+            vars: normalizeEnvironmentVars(item.vars, `env-db-${index}`),
           })),
           secrets: state.secrets,
         });
+        setCollectionsCatalog(
+          state.collections.map((collection) => ({
+            name: collection.name,
+            filePath: collection.filePath,
+          })),
+        );
       })
       .catch(() => {
         // Seeded frontend state remains available outside Tauri runtime.
@@ -371,36 +1069,355 @@ export default function App() {
   const workspaceMode = activeSidebarPanel;
   const handleSidebarPanelChange = (panel: (typeof sidebarPanels)[number]["key"]) => {
     setActiveSidebarPanel(panel);
+    setExplorerSearch("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const handleSaveEnvironment = async () => {
+    if (!hasEnvironments) {
+      return;
+    }
+
     setIsSavingEnvironment(true);
+    setEnvironmentSaveFeedback(null);
     try {
       const saved = await saveEnvironment({
         name: activeEnvironment.name,
         filePath: activeEnvironment.source,
-        vars: activeEnvironment.vars,
+        vars: activeEnvironment.vars
+          .filter((row) => row.key.trim() !== "" || row.value.trim() !== "")
+          .map((row) => ({
+            key: row.key,
+            value: row.value,
+          })),
       });
 
-      replaceEnvironment({
-        id: activeEnvironment.id,
-        name: saved.name,
-        source: saved.filePath,
-        vars: saved.vars,
+      const normalizedEnvironment = normalizeEnvironmentRecord(
+        {
+          name: saved.name,
+          source: saved.filePath,
+          vars: saved.vars,
+        },
+        activeEnvironment.id,
+      );
+      replaceEnvironment(normalizedEnvironment);
+      setSavedEnvironmentSignatures((current) => ({
+        ...current,
+        [normalizedEnvironment.id]: serializeEnvironment(normalizedEnvironment),
+      }));
+      setEnvironmentSaveFeedback({
+        tone: "success",
+        message: "Environment saved to local storage",
+      });
+    } catch (error) {
+      setEnvironmentSaveFeedback({
+        tone: "error",
+        message: commandErrorMessage(error, "Save environment"),
       });
     } finally {
       setIsSavingEnvironment(false);
     }
   };
 
+  const handleCreateFirstEnvironment = async () => {
+    openEnvironmentAction("create-environment");
+  };
+
+  const buildEnvironmentDraft = (nameOverride?: string) => {
+    const existingNames = new Set(displayEnvironments.map((environment) => environment.name));
+    const existingSources = new Set(displayEnvironments.map((environment) => environment.source));
+    const requestedName = nameOverride?.trim() || "Local Environment";
+    const environmentName = makeUniqueEnvironmentName(requestedName, displayEnvironments);
+
+    let fileIndex = 1;
+    let fileName = `${slugifyEnvironmentName(environmentName)}.json`;
+    let filePath = `environments/${fileName}`;
+    while (existingSources.has(filePath)) {
+      fileIndex += 1;
+      fileName = `${slugifyEnvironmentName(environmentName)}-${fileIndex}.json`;
+      filePath = `environments/${fileName}`;
+    }
+
+    const draftId = `env-draft-${Date.now()}`;
+
+    return {
+      id: draftId,
+      name: environmentName,
+      source: filePath,
+      vars: [
+        { id: `${draftId}-env-1-base_url`, key: "base_url", value: "http://localhost:3000" },
+        { id: `${draftId}-env-2-proxy`, key: "proxy", value: "system" },
+        { id: `${draftId}-env-3-cookie_jar`, key: "cookie_jar", value: "default" },
+      ],
+    };
+  };
+
+  const openEnvironmentAction = (mode: EnvironmentActionMode) => {
+    setEnvironmentActionMode(mode);
+    setEnvironmentActionMessage("");
+    setEnvironmentActionValue(
+      mode === "create-environment"
+        ? makeUniqueEnvironmentName("Local Environment", displayEnvironments)
+        : mode === "rename-environment"
+          ? activeEnvironment.name
+          : "",
+    );
+  };
+
+  const handleCreateEnvironment = async () => {
+    const draftEnvironment = buildEnvironmentDraft(environmentActionValue);
+
+    setIsSavingEnvironment(true);
+    setEnvironmentSaveFeedback(null);
+    try {
+      const saved = await saveEnvironment({
+        name: draftEnvironment.name,
+        filePath: draftEnvironment.source,
+        vars: draftEnvironment.vars.map((row) => ({
+          key: row.key,
+          value: row.value,
+        })),
+      });
+
+      const normalizedEnvironment = normalizeEnvironmentRecord(
+        {
+          name: saved.name,
+          source: saved.filePath,
+          vars: saved.vars,
+        },
+        draftEnvironment.id,
+      );
+
+      upsertEnvironment(normalizedEnvironment);
+      setSavedEnvironmentSignatures((current) => ({
+        ...current,
+        [normalizedEnvironment.id]: serializeEnvironment(normalizedEnvironment),
+      }));
+      setActiveEnvironment(draftEnvironment.id);
+      setActiveSidebarPanel("environments");
+      setExplorerSearch("");
+      setEnvironmentActionMode(null);
+      setEnvironmentActionValue("");
+      setEnvironmentActionMessage("");
+      setEnvironmentSaveFeedback({
+        tone: "success",
+        message: hasEnvironments ? "Environment created" : "Created your first local environment",
+      });
+    } catch (error) {
+      setEnvironmentActionMessage(commandErrorMessage(error, "Create environment"));
+    } finally {
+      setIsSavingEnvironment(false);
+    }
+  };
+
+  const handleRenameEnvironment = async () => {
+    if (!hasEnvironments) {
+      return;
+    }
+
+    setIsSavingEnvironment(true);
+    setEnvironmentSaveFeedback(null);
+    try {
+      const saved = await renameEnvironment({
+        currentFilePath: activeEnvironment.source,
+        newName: environmentActionValue.trim(),
+        newFilePath: `environments/${slugifyEnvironmentName(environmentActionValue)}.json`,
+      });
+
+      const normalizedEnvironment = normalizeEnvironmentRecord(
+        {
+          name: saved.name,
+          source: saved.filePath,
+          vars: saved.vars,
+        },
+        activeEnvironment.id,
+      );
+
+      replaceEnvironment(normalizedEnvironment);
+      setSavedEnvironmentSignatures((current) => ({
+        ...current,
+        [normalizedEnvironment.id]: serializeEnvironment(normalizedEnvironment),
+      }));
+      setEnvironmentActionMode(null);
+      setEnvironmentActionValue("");
+      setEnvironmentActionMessage("");
+      setEnvironmentSaveFeedback({
+        tone: "success",
+        message: "Environment renamed",
+      });
+    } catch (error) {
+      setEnvironmentActionMessage(commandErrorMessage(error, "Rename environment"));
+    } finally {
+      setIsSavingEnvironment(false);
+    }
+  };
+
+  const handleDeleteEnvironment = async () => {
+    if (!hasEnvironments) {
+      return;
+    }
+
+    const targetEnvironmentId = activeEnvironment.id;
+    const targetSource = activeEnvironment.source;
+
+    setIsSavingEnvironment(true);
+    setEnvironmentSaveFeedback(null);
+    try {
+      await deleteEnvironment({
+        filePath: targetSource,
+      });
+
+      useRequestStore.setState((state) => {
+        const nextEnvironments = state.environments.filter(
+          (environment) => environment.id !== targetEnvironmentId,
+        );
+        const fallbackEnvironment = makeScratchEnvironment();
+
+        return {
+          environments: nextEnvironments.length > 0 ? nextEnvironments : [fallbackEnvironment],
+          activeEnvironmentId: nextEnvironments[0]?.id ?? fallbackEnvironment.id,
+        };
+      });
+      setSavedEnvironmentSignatures((current) => {
+        const next = { ...current };
+        delete next[targetEnvironmentId];
+        return next;
+      });
+
+      setEnvironmentActionMode(null);
+      setEnvironmentActionValue("");
+      setEnvironmentActionMessage("");
+      setEnvironmentSaveFeedback({
+        tone: "success",
+        message: "Environment deleted",
+      });
+    } catch (error) {
+      setEnvironmentActionMessage(commandErrorMessage(error, "Delete environment"));
+    } finally {
+      setIsSavingEnvironment(false);
+    }
+  };
+
+  const handleEnvironmentActionSubmit = async () => {
+    if (environmentActionMode === "create-environment") {
+      if (!environmentActionValue.trim()) {
+        setEnvironmentActionMessage("Environment name is required.");
+        return;
+      }
+      await handleCreateEnvironment();
+      return;
+    }
+
+    if (environmentActionMode === "rename-environment") {
+      if (!environmentActionValue.trim()) {
+        setEnvironmentActionMessage("Environment name is required.");
+        return;
+      }
+      await handleRenameEnvironment();
+      return;
+    }
+
+    if (environmentActionMode === "delete-environment") {
+      await handleDeleteEnvironment();
+    }
+  };
+
+  const handleAddEnvironmentVar = () => {
+    if (!hasEnvironments) {
+      return;
+    }
+
+    const nextRowId = addEnvironmentVar(activeEnvironment.id);
+    if (nextRowId) {
+      setPendingEnvironmentFocus(`${activeEnvironment.id}:${nextRowId}:key`);
+    }
+  };
+
+  const handleRemoveEnvironmentVar = (rowId: string) => {
+    if (!hasEnvironments) {
+      return;
+    }
+
+    const nextRowId = removeEnvironmentVar(activeEnvironment.id, rowId);
+    if (nextRowId) {
+      setPendingEnvironmentFocus(`${activeEnvironment.id}:${nextRowId}:key`);
+    }
+  };
+
+  const focusEditorRow = (tab: "params" | "headers", rowId: string) => {
+    if (!rowId) {
+      return;
+    }
+
+    setPendingEditorFocus({ tab, rowId });
+  };
+
+  const handleAddParamRow = () => {
+    if (!hasCollections) {
+      return;
+    }
+
+    const existingBlankRow = findBlankRow(activeRequest.params);
+    if (existingBlankRow) {
+      focusEditorRow("params", existingBlankRow.id);
+      return;
+    }
+
+    focusEditorRow("params", addParamRow());
+  };
+
+  const handleAddHeaderRow = () => {
+    if (!hasCollections) {
+      return;
+    }
+
+    const existingBlankRow = findBlankRow(activeRequest.headers);
+    if (existingBlankRow) {
+      focusEditorRow("headers", existingBlankRow.id);
+      return;
+    }
+
+    focusEditorRow("headers", addHeaderRow());
+  };
+
+  const handleRemoveParamRow = (rowId: string) => {
+    if (!hasCollections) {
+      return;
+    }
+
+    focusEditorRow("params", removeParamRow(rowId));
+  };
+
+  const handleRemoveHeaderRow = (rowId: string) => {
+    if (!hasCollections) {
+      return;
+    }
+
+    focusEditorRow("headers", removeHeaderRow(rowId));
+  };
+
+  const handleRestoreHistory = (historyItem: (typeof history)[number]) => {
+    setActiveHistory(historyItem.id);
+    const replayRequestId = upsertRequestFromHistory(historyItem);
+    setRequestTab("params");
+    return replayRequestId;
+  };
+
+  const handleResendHistory = async (historyItem: (typeof history)[number]) => {
+    handleRestoreHistory(historyItem);
+    await Promise.resolve();
+    await useRequestStore.getState().sendActiveRequest();
+  };
+
   const handleSaveRequest = async () => {
-    if (!activeRequest) {
+    if (!hasActiveCollectionRequests) {
       return;
     }
 
     setIsSavingRequest(true);
     try {
+      const params = sanitizeEditableRows(activeRequest.params);
+      const headers = sanitizeEditableRows(activeRequest.headers);
       const saved = await saveRequest({
         id: activeRequest.id,
         name: activeRequest.name,
@@ -408,8 +1425,8 @@ export default function App() {
         collectionFile: activeRequest.collectionFile,
         method: activeRequest.method,
         url: activeRequest.url,
-        params: activeRequest.params,
-        headers: activeRequest.headers,
+        params,
+        headers,
         body: activeRequest.body,
         authType: activeRequest.authType,
         authToken: activeRequest.authToken,
@@ -417,7 +1434,7 @@ export default function App() {
 
       const savedRequest = saved.requests.find((request) => request.id === activeRequest.id);
       if (savedRequest) {
-        replaceRequest({
+        const normalizedSavedRequest = {
           id: savedRequest.id,
           name: savedRequest.name,
           collection: savedRequest.collection,
@@ -429,10 +1446,490 @@ export default function App() {
           body: savedRequest.body,
           authType: savedRequest.authType as "none" | "bearer",
           authToken: savedRequest.authToken,
+        };
+
+        replaceRequest(normalizedSavedRequest);
+        const savedSignature = serializeEditableRequest(normalizedSavedRequest);
+        setSavedRequestSignatures((current) => ({
+          ...current,
+          [normalizedSavedRequest.id]: savedSignature,
+        }));
+        setRequestSaveFeedback({
+          tone: "success",
+          message: "Request saved to collection",
+          requestId: normalizedSavedRequest.id,
+          signature: savedSignature,
         });
       }
+    } catch (error) {
+      setRequestSaveFeedback({
+        tone: "error",
+        message: commandErrorMessage(error, "Save request"),
+        requestId: activeRequest.id,
+        signature: activeRequestSignature,
+      });
     } finally {
       setIsSavingRequest(false);
+    }
+  };
+
+  const handleCreateRequest = () => {
+    const draft = buildDraftRequest(requests, {
+      collection: activeCollection?.name ?? "Unfiled",
+      collectionFile: activeCollection?.filePath ?? "collections/unfiled.json",
+    });
+
+    upsertRequests([draft]);
+    setSavedRequestSignatures((current) => ({
+      ...current,
+      [draft.id]: "",
+    }));
+    setRequestSaveFeedback(null);
+    setRequestTab("body");
+  };
+
+  const handleCreateCollection = async () => {
+    try {
+      const collection = await createCollection({
+        name: collectionActionValue.trim(),
+        filePath: `collections/${slugifyCollectionName(collectionActionValue)}.json`,
+      });
+
+      setCollectionsCatalog((current) =>
+        mergeCollectionDescriptors(
+          [...current, { name: collection.name, filePath: collection.filePath }],
+          [
+          ...requests,
+          ...collection.requests.map((request) => normalizeStoredRequest(request)),
+          ],
+        ),
+      );
+      setActiveCollectionFile(collection.filePath);
+      setExpandedCollections((current) => ({
+        ...current,
+        [collection.name]: true,
+      }));
+      setCollectionActionMessage("Collection created");
+      setCollectionActionMode(null);
+      setCollectionActionValue("");
+    } catch (error) {
+      setCollectionActionMessage(commandErrorMessage(error, "Create collection"));
+    }
+  };
+
+  const handleDuplicateRequest = () => {
+    if (!hasActiveCollectionRequests) {
+      return;
+    }
+
+    const duplicate = buildDraftRequest(requests, {
+      collection: activeRequest.collection,
+      collectionFile: activeRequest.collectionFile,
+      name: `${activeRequest.name} copy`,
+      source: activeRequest,
+    });
+
+    upsertRequests([duplicate]);
+    setSavedRequestSignatures((current) => ({
+      ...current,
+      [duplicate.id]: "",
+    }));
+    setRequestSaveFeedback(null);
+  };
+
+  const handleRenameRequest = async () => {
+    if (!hasActiveCollectionRequests) {
+      return;
+    }
+
+    const renamedRequest = {
+      ...activeRequest,
+      name: collectionActionValue.trim(),
+    };
+    replaceRequest(renamedRequest);
+    setRequestSaveFeedback(null);
+
+    try {
+      const saved = await saveRequest({
+        id: renamedRequest.id,
+        name: renamedRequest.name,
+        collection: renamedRequest.collection,
+        collectionFile: renamedRequest.collectionFile,
+        method: renamedRequest.method,
+        url: renamedRequest.url,
+        params: sanitizeEditableRows(renamedRequest.params),
+        headers: sanitizeEditableRows(renamedRequest.headers),
+        body: renamedRequest.body,
+        authType: renamedRequest.authType,
+        authToken: renamedRequest.authToken,
+      });
+
+      const persisted = saved.requests.find((request) => request.id === renamedRequest.id);
+      if (!persisted) {
+        return;
+      }
+
+      const normalized = normalizeStoredRequest(persisted);
+      replaceRequest(normalized);
+      const savedSignature = serializeEditableRequest(normalized);
+      setSavedRequestSignatures((current) => ({
+        ...current,
+        [normalized.id]: savedSignature,
+      }));
+      setRequestSaveFeedback({
+        tone: "success",
+        message: "Request renamed",
+        requestId: normalized.id,
+        signature: savedSignature,
+      });
+      setCollectionActionMode(null);
+      setCollectionActionValue("");
+      setCollectionActionMessage("");
+    } catch (error) {
+      setCollectionActionMessage(commandErrorMessage(error, "Rename request"));
+    }
+  };
+
+  const handleDeleteRequest = async () => {
+    if (!hasActiveCollectionRequests) {
+      return;
+    }
+
+    const targetRequestId = activeRequest.id;
+    const targetCollectionFile = activeRequest.collectionFile;
+
+    try {
+      const collection = await deleteRequest({
+        requestId: targetRequestId,
+        collectionFile: targetCollectionFile,
+      });
+
+      const remainingRequests = collection.requests.map((request) => normalizeStoredRequest(request));
+      useRequestStore.setState((state) => {
+        const nextRequests = [
+          ...state.requests.filter((request) => request.collectionFile !== targetCollectionFile),
+          ...remainingRequests,
+        ];
+        const fallbackRequest = makeScratchRequest();
+
+        return {
+          requests: nextRequests.length > 0 ? nextRequests : [fallbackRequest],
+          activeRequestId: nextRequests[0]?.id ?? fallbackRequest.id,
+        };
+      });
+
+      setSavedRequestSignatures((current) => {
+        const next = { ...current };
+        delete next[targetRequestId];
+        for (const request of remainingRequests) {
+          next[request.id] = serializeEditableRequest(request);
+        }
+        return next;
+      });
+      setActiveCollectionFile(targetCollectionFile);
+      setRequestSaveFeedback(null);
+      setCollectionActionMode(null);
+      setCollectionActionValue("");
+      setCollectionActionMessage("");
+    } catch (error) {
+      setCollectionActionMessage(commandErrorMessage(error, "Delete request"));
+    }
+  };
+
+  const handleRenameCollection = async () => {
+    if (!activeCollection) {
+      return;
+    }
+
+    try {
+      const collection = await renameCollection({
+        currentFilePath: activeCollection.filePath,
+        newName: collectionActionValue.trim(),
+        newFilePath: `collections/${slugifyCollectionName(collectionActionValue)}.json`,
+      });
+
+      const normalizedRequests = collection.requests.map((request) => normalizeStoredRequest(request));
+      useRequestStore.setState((state) => ({
+        requests: [
+          ...state.requests.filter((request) => request.collectionFile !== activeCollection.filePath),
+          ...normalizedRequests,
+        ],
+      }));
+      setCollectionsCatalog((current) =>
+        current.map((item) =>
+          item.filePath === activeCollection.filePath
+            ? { name: collection.name, filePath: collection.filePath }
+            : item,
+        ),
+      );
+      setActiveCollectionFile(collection.filePath);
+      setSavedRequestSignatures((current) => {
+        const next = { ...current };
+        for (const request of normalizedRequests) {
+          next[request.id] = serializeEditableRequest(request);
+        }
+        return next;
+      });
+      setRequestSaveFeedback(null);
+      setCollectionActionMode(null);
+      setCollectionActionValue("");
+      setCollectionActionMessage("");
+    } catch (error) {
+      setCollectionActionMessage(commandErrorMessage(error, "Rename collection"));
+    }
+  };
+
+  const handleDeleteCollection = async () => {
+    if (!activeCollection) {
+      return;
+    }
+
+    const targetCollectionFile = activeCollection.filePath;
+
+    try {
+      await deleteCollection({
+        filePath: targetCollectionFile,
+      });
+
+      setCollectionsCatalog((current) =>
+        current.filter((collection) => collection.filePath !== targetCollectionFile),
+      );
+      useRequestStore.setState((state) => {
+        const nextRequests = state.requests.filter(
+          (request) => request.collectionFile !== targetCollectionFile,
+        );
+        const fallbackRequest = makeScratchRequest();
+
+        return {
+          requests: nextRequests.length > 0 ? nextRequests : [fallbackRequest],
+          activeRequestId: nextRequests[0]?.id ?? fallbackRequest.id,
+        };
+      });
+
+      setSavedRequestSignatures((current) => {
+        const next = { ...current };
+        for (const request of requests) {
+          if (request.collectionFile === targetCollectionFile) {
+            delete next[request.id];
+          }
+        }
+        return next;
+      });
+      setRequestSaveFeedback(null);
+      setCollectionActionMode(null);
+      setCollectionActionValue("");
+      setCollectionActionMessage("");
+    } catch (error) {
+      setCollectionActionMessage(commandErrorMessage(error, "Delete collection"));
+    }
+  };
+
+  const handleMoveCollection = async (direction: "up" | "down") => {
+    if (!activeCollection) {
+      return;
+    }
+
+    const currentIndex = collectionsCatalog.findIndex(
+      (collection) => collection.filePath === activeCollection.filePath,
+    );
+    if (currentIndex < 0) {
+      return;
+    }
+
+    const offset = direction === "up" ? -1 : 1;
+    const targetIndex = currentIndex + offset;
+    if (targetIndex < 0 || targetIndex >= collectionsCatalog.length) {
+      return;
+    }
+
+    setIsMutatingCollections(true);
+    try {
+      const movedCollections = await moveCollection({
+        filePath: activeCollection.filePath,
+        targetIndex,
+      });
+      setCollectionsCatalog(
+        movedCollections.map((collection) => ({
+          name: collection.name,
+          filePath: collection.filePath,
+        })),
+      );
+      setActiveCollectionFile(activeCollection.filePath);
+    } catch (error) {
+      setCollectionActionMessage(commandErrorMessage(error, "Move collection"));
+    } finally {
+      setIsMutatingCollections(false);
+    }
+  };
+
+  const handleReorderRequest = async (direction: "up" | "down") => {
+    if (!activeCollection || !activeCollectionRequest) {
+      return;
+    }
+
+    const currentIndex = activeCollectionRequests.findIndex(
+      (request) => request.id === activeCollectionRequest.id,
+    );
+    if (currentIndex < 0) {
+      return;
+    }
+
+    const offset = direction === "up" ? -1 : 1;
+    const targetIndex = currentIndex + offset;
+    if (targetIndex < 0 || targetIndex >= activeCollectionRequests.length) {
+      return;
+    }
+
+    setIsMutatingCollections(true);
+    try {
+      const reordered = await reorderRequest({
+        collectionFile: activeCollection.filePath,
+        requestId: activeCollectionRequest.id,
+        targetIndex,
+      });
+      const normalizedRequests = reordered.requests.map((request) => normalizeStoredRequest(request));
+      useRequestStore.setState((state) => ({
+        requests: replaceCollectionRequests(state.requests, activeCollection.filePath, normalizedRequests),
+        activeRequestId: activeCollectionRequest.id,
+      }));
+      setSavedRequestSignatures((current) => {
+        const next = { ...current };
+        for (const request of normalizedRequests) {
+          next[request.id] = serializeEditableRequest(request);
+        }
+        return next;
+      });
+    } catch (error) {
+      setCollectionActionMessage(commandErrorMessage(error, "Reorder request"));
+    } finally {
+      setIsMutatingCollections(false);
+    }
+  };
+
+  const handleMoveRequest = async () => {
+    if (!activeCollection || !activeCollectionRequest) {
+      return;
+    }
+
+    const targetCollection = collectionsCatalog.find(
+      (collection) => collection.filePath === collectionActionValue,
+    );
+    if (!targetCollection) {
+      setCollectionActionMessage("Choose a target collection.");
+      return;
+    }
+
+    setIsMutatingCollections(true);
+    try {
+      const moved = await moveRequest({
+        requestId: activeCollectionRequest.id,
+        sourceCollectionFile: activeCollection.filePath,
+        targetCollectionFile: targetCollection.filePath,
+        targetIndex: displayRequests.filter(
+          (request) => request.collectionFile === targetCollection.filePath,
+        ).length,
+      });
+
+      const normalizedSource = moved.sourceCollection.requests.map((request) =>
+        normalizeStoredRequest(request),
+      );
+      const normalizedTarget = moved.targetCollection.requests.map((request) =>
+        normalizeStoredRequest(request),
+      );
+
+      useRequestStore.setState((state) => {
+        const withoutSource = replaceCollectionRequests(
+          state.requests,
+          moved.sourceCollection.filePath,
+          normalizedSource,
+        );
+        const withTarget = replaceCollectionRequests(
+          withoutSource,
+          moved.targetCollection.filePath,
+          normalizedTarget,
+        );
+
+        return {
+          requests: withTarget.length > 0 ? withTarget : [makeScratchRequest()],
+          activeRequestId: moved.movedRequest.id,
+        };
+      });
+
+      setSavedRequestSignatures((current) => {
+        const next = { ...current };
+        for (const request of [...normalizedSource, ...normalizedTarget]) {
+          next[request.id] = serializeEditableRequest(request);
+        }
+        return next;
+      });
+      setActiveCollectionFile(targetCollection.filePath);
+      setCollectionActionMode(null);
+      setCollectionActionValue("");
+      setCollectionActionMessage("");
+    } catch (error) {
+      setCollectionActionMessage(commandErrorMessage(error, "Move request"));
+    } finally {
+      setIsMutatingCollections(false);
+    }
+  };
+
+  const openCollectionAction = (mode: CollectionActionMode) => {
+    setCollectionActionMode(mode);
+    setCollectionActionMessage("");
+    setCollectionActionValue(
+      mode === "create-collection"
+        ? "New Collection"
+        : mode === "rename-collection"
+          ? activeCollection?.name ?? ""
+          : mode === "rename-request"
+            ? activeCollectionRequest?.name ?? activeRequest.name
+            : mode === "move-request"
+              ? collectionsCatalog.find((collection) => collection.filePath !== activeCollection?.filePath)
+                  ?.filePath ?? ""
+            : "",
+    );
+  };
+
+  const handleCollectionActionSubmit = async () => {
+    if (collectionActionMode === "create-collection") {
+      if (!collectionActionValue.trim()) {
+        setCollectionActionMessage("Collection name is required.");
+        return;
+      }
+      await handleCreateCollection();
+      return;
+    }
+
+    if (collectionActionMode === "rename-collection") {
+      if (!collectionActionValue.trim()) {
+        setCollectionActionMessage("Collection name is required.");
+        return;
+      }
+      await handleRenameCollection();
+      return;
+    }
+
+    if (collectionActionMode === "delete-collection") {
+      await handleDeleteCollection();
+      return;
+    }
+
+    if (collectionActionMode === "rename-request") {
+      if (!collectionActionValue.trim()) {
+        setCollectionActionMessage("Request name is required.");
+        return;
+      }
+      await handleRenameRequest();
+      return;
+    }
+
+    if (collectionActionMode === "delete-request") {
+      await handleDeleteRequest();
+      return;
+    }
+
+    if (collectionActionMode === "move-request") {
+      await handleMoveRequest();
     }
   };
 
@@ -463,17 +1960,19 @@ export default function App() {
   };
 
   const handleImportCurl = async () => {
-    if (!activeRequest) {
-      return;
-    }
-
     setCurlMessage("Importing cURL...");
     try {
+      const targetRequestId = hasActiveCollectionRequests
+        ? activeRequest.id
+        : `curl-import-${Date.now()}`;
+      const targetCollection = activeCollection?.name ?? "cURL Imports";
+      const targetCollectionFile =
+        activeCollection?.filePath ?? "collections/curl-imports.json";
       const imported = await importCurl({
         command: curlInput,
-        requestId: activeRequest.id,
-        collection: activeRequest.collection,
-        collectionFile: activeRequest.collectionFile,
+        requestId: targetRequestId,
+        collection: targetCollection,
+        collectionFile: targetCollectionFile,
       });
       const method = imported.method.toUpperCase();
       if (!requestMethods.includes(method as RequestMethod)) {
@@ -481,7 +1980,7 @@ export default function App() {
         return;
       }
 
-      replaceRequest({
+      const importedRequest = {
         id: imported.id,
         name: imported.name,
         collection: imported.collection,
@@ -493,8 +1992,15 @@ export default function App() {
         body: imported.body,
         authType: imported.authType as "none" | "bearer",
         authToken: imported.authToken,
-      });
-      setCurlMessage("Imported into the active request. Use Save to persist it.");
+      };
+
+      if (hasActiveCollectionRequests) {
+        replaceRequest(importedRequest);
+      } else {
+        upsertRequests([importedRequest]);
+        setActiveCollectionFile(importedRequest.collectionFile);
+      }
+      setCurlMessage("Imported into the request editor. Use Save to persist it.");
       setIsCurlPanelOpen(true);
     } catch (error) {
       setCurlMessage(commandErrorMessage(error, "Import cURL"));
@@ -502,7 +2008,7 @@ export default function App() {
   };
 
   const handleExportCurl = async () => {
-    if (!activeRequest) {
+    if (!hasActiveCollectionRequests) {
       return;
     }
 
@@ -526,15 +2032,11 @@ export default function App() {
   };
 
   const handleImportPostman = async () => {
-    if (!activeRequest) {
-      return;
-    }
-
     setPostmanMessage("Importing Postman collection...");
     try {
       const importedRequests = await importPostmanCollection({
-        collection: activeRequest.collection,
-        collectionFile: `collections/postman-${Date.now()}.json`,
+        collection: activeCollection?.name ?? "Imported API",
+        collectionFile: activeCollection?.filePath ?? `collections/postman-${Date.now()}.json`,
         collectionJson: postmanInput,
       });
       const supportedRequests = importedRequests.filter((request) =>
@@ -570,7 +2072,7 @@ export default function App() {
   };
 
   const handleUploadFile = async () => {
-    if (!activeRequest || !activeEnvironment) {
+    if (!hasCollections || !hasEnvironments) {
       return;
     }
 
@@ -596,7 +2098,7 @@ export default function App() {
   };
 
   const handleDownloadFile = async () => {
-    if (!activeEnvironment) {
+    if (!hasEnvironments) {
       return;
     }
 
@@ -633,22 +2135,46 @@ export default function App() {
         </div>
 
         <div className="postman-topbar__center">
-          {requests.map((request) => (
-            <button
-              key={request.id}
-              type="button"
-              className={`top-tab ${request.id === activeRequestId ? "is-active" : ""}`}
-              onClick={() => setActiveRequest(request.id)}
-            >
-              {request.name}
-            </button>
-          ))}
+          {hasActiveCollectionRequests ? (
+            activeCollectionRequests.map((request) => (
+              <button
+                key={request.id}
+                type="button"
+                className={`top-tab ${request.id === activeRequestId ? "is-active" : ""}`}
+                onClick={() => setActiveRequest(request.id)}
+              >
+                {request.name}
+              </button>
+            ))
+          ) : (
+            <span className="topbar-empty-state">
+              {hasCollections
+                ? "No requests in this collection yet. Create or import your first request."
+                : "No requests yet. Import or save your first request."}
+            </span>
+          )}
         </div>
 
         <div className="postman-topbar__actions">
           <span className={`status-dot ${bootstrap.loaded ? "is-live" : ""}`}>
-            {bootstrap.loaded ? "Local Data Ready" : "Seed Mode"}
+            {bootstrap.loaded ? "Local Data Ready" : "Browser Preview"}
           </span>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={handleCreateRequest}
+          >
+            New Request
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => {
+              openCollectionAction("create-collection");
+            }}
+          >
+            New Collection
+          </button>
           <button
             type="button"
             className="ghost-button"
@@ -662,6 +2188,7 @@ export default function App() {
           <button
             type="button"
             className="ghost-button"
+            disabled={!hasActiveCollectionRequests}
             onClick={() => {
               void handleExportCurl();
             }}
@@ -671,6 +2198,7 @@ export default function App() {
           <button
             type="button"
             className="ghost-button"
+            disabled={!hasActiveCollectionRequests || !hasEnvironments}
             onClick={() => setIsTransferPanelOpen(true)}
           >
             Files
@@ -686,6 +2214,8 @@ export default function App() {
               <button
                 key={panel.key}
                 type="button"
+                aria-label={panel.label}
+                title={panel.label}
                 className={`workspace-nav__item ${
                   activeSidebarPanel === panel.key ? "is-active" : ""
                 }`}
@@ -698,19 +2228,23 @@ export default function App() {
           </div>
           <div className="workspace-nav__footer">
             <span className={`workspace-nav__status ${bootstrap.loaded ? "is-live" : ""}`} />
-            <small>{bootstrap.loaded ? "local" : "seed"}</small>
+            <small>{bootstrap.loaded ? "local" : "preview"}</small>
           </div>
         </aside>
 
         <aside className="explorer-panel">
           <div className="explorer-panel__header">
-            <div>
+            <div className="explorer-panel__intro">
               <span>{activePanelMeta.caption}</span>
               <h2>{activePanelMeta.label}</h2>
             </div>
-            <button type="button" className="icon-button">
-              {activeSidebarPanel === "history" ? "..." : "+"}
-            </button>
+            <div
+              className="explorer-panel__summary"
+              aria-label={`${explorerSummaryValue} ${explorerSummaryLabel}`}
+            >
+              <span>{explorerSummaryLabel}</span>
+              <strong>{explorerSummaryValue}</strong>
+            </div>
           </div>
 
           <div className="mobile-panel-switcher" aria-label="Workspace sections">
@@ -730,30 +2264,169 @@ export default function App() {
             ))}
           </div>
 
-          <input
-            className="sidebar__search-input"
-            placeholder={`Search ${activePanelMeta.label.toLowerCase()}`}
-          />
+          <div className="explorer-panel__context-bar">
+            <div className="explorer-panel__context-main">
+              <span>{explorerContext.eyebrow}</span>
+              <strong>{explorerContext.title}</strong>
+              <small>{explorerContext.subtitle}</small>
+            </div>
+            <div className="explorer-panel__context-metrics">
+              {explorerContext.metrics.map((metric) => (
+                <div key={metric.label}>
+                  <span>{metric.label}</span>
+                  <strong>{metric.value}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="sidebar__search-shell">
+            <input
+              className="sidebar__search-input"
+              placeholder={`Search ${activePanelMeta.label.toLowerCase()}`}
+              value={explorerSearch}
+              onChange={(event) => setExplorerSearch(event.target.value)}
+            />
+          </div>
 
           {activeSidebarPanel === "collections" ? (
             <div className="explorer-panel__path">
               <span>{bootstrap.recentWorkspace || "default-workspace"}</span>
-              <strong>{activeRequest.collection}</strong>
+              <strong>{activeCollection?.name ?? "No collections yet"}</strong>
+            </div>
+          ) : null}
+
+          {collectionActionMode ? (
+            <div className="collection-action-card">
+              <div className="collection-action-card__header">
+                <strong>{collectionActionTitle}</strong>
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => {
+                    setCollectionActionMode(null);
+                    setCollectionActionValue("");
+                    setCollectionActionMessage("");
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+              {collectionActionMode === "delete-collection" ? (
+                <small>
+                  Delete <strong>{activeCollection?.name ?? "this collection"}</strong> and all of
+                  its requests.
+                </small>
+              ) : collectionActionMode === "delete-request" ? (
+                <small>
+                  Delete <strong>{activeCollectionRequest?.name ?? activeRequest.name}</strong> from{" "}
+                  <strong>{activeCollection?.name ?? activeRequest.collection}</strong>.
+                </small>
+              ) : collectionActionMode === "move-request" ? (
+                <label className="collection-action-card__field">
+                  <span>Target collection</span>
+                  <select
+                    value={collectionActionValue}
+                    onChange={(event) => setCollectionActionValue(event.target.value)}
+                  >
+                    {collectionsCatalog
+                      .filter((collection) => collection.filePath !== activeCollection?.filePath)
+                      .map((collection) => (
+                        <option key={collection.filePath} value={collection.filePath}>
+                          {collection.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              ) : (
+                <label className="collection-action-card__field">
+                  <span>Name</span>
+                  <input
+                    value={collectionActionValue}
+                    onChange={(event) => setCollectionActionValue(event.target.value)}
+                    placeholder="Enter a name"
+                  />
+                </label>
+              )}
+              {collectionActionMessage ? (
+                <div className="collection-action-card__message">{collectionActionMessage}</div>
+              ) : null}
+              <div className="collection-action-card__actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => {
+                    void handleCollectionActionSubmit();
+                  }}
+                >
+                  Confirm
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {activeSidebarPanel === "environments" && environmentActionMode ? (
+            <div className="collection-action-card">
+              <div className="collection-action-card__header">
+                <strong>{environmentActionTitle}</strong>
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => {
+                    setEnvironmentActionMode(null);
+                    setEnvironmentActionValue("");
+                    setEnvironmentActionMessage("");
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+              {environmentActionMode === "delete-environment" ? (
+                <small>
+                  Delete <strong>{activeEnvironment.name}</strong> and remove its local file.
+                </small>
+              ) : (
+                <label className="collection-action-card__field">
+                  <span>Name</span>
+                  <input
+                    value={environmentActionValue}
+                    onChange={(event) => setEnvironmentActionValue(event.target.value)}
+                    placeholder="Enter a name"
+                  />
+                </label>
+              )}
+              {environmentActionMessage ? (
+                <div className="collection-action-card__message">{environmentActionMessage}</div>
+              ) : null}
+              <div className="collection-action-card__actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => {
+                    void handleEnvironmentActionSubmit();
+                  }}
+                >
+                  Confirm
+                </button>
+              </div>
             </div>
           ) : null}
 
           <div className="sidebar__content">
             {activeSidebarPanel === "collections"
-              ? collectionSections.map((section) => (
+              ? filteredCollectionSections.map((section) => (
                   <section
                     key={section.title}
                     className={`tree-group ${expandedCollections[section.title] ? "is-open" : ""}`}
                   >
-                    <button
-                      type="button"
-                      className="tree-group__toggle"
-                      onClick={() => toggleCollection(section.title)}
-                    >
+                        <button
+                          type="button"
+                          className="tree-group__toggle"
+                          onClick={() => {
+                            setActiveCollectionFile(section.filePath);
+                            toggleCollection(section.title);
+                          }}
+                        >
                       <span className="tree-group__chevron">
                         {expandedCollections[section.title] ? "v" : ">"}
                       </span>
@@ -763,10 +2436,104 @@ export default function App() {
                       </div>
                       <span className="tree-group__count">{section.requests.length}</span>
                     </button>
+                    {section.filePath === activeCollection?.filePath ? (
+                      <div className="tree-group__actions">
+                        <button
+                          type="button"
+                          className="text-button"
+                          disabled={isMutatingCollections}
+                          onClick={() => {
+                            void handleMoveCollection("up");
+                          }}
+                        >
+                          Col Up
+                        </button>
+                        <button
+                          type="button"
+                          className="text-button"
+                          disabled={isMutatingCollections}
+                          onClick={() => {
+                            void handleMoveCollection("down");
+                          }}
+                        >
+                          Col Down
+                        </button>
+                        {hasActiveCollectionRequests ? (
+                          <>
+                            <button
+                              type="button"
+                              className="text-button"
+                              disabled={isMutatingCollections}
+                              onClick={() => {
+                                void handleReorderRequest("up");
+                              }}
+                            >
+                              Req Up
+                            </button>
+                            <button
+                              type="button"
+                              className="text-button"
+                              disabled={isMutatingCollections}
+                              onClick={() => {
+                                void handleReorderRequest("down");
+                              }}
+                            >
+                              Req Down
+                            </button>
+                            <button
+                              type="button"
+                              className="text-button"
+                              disabled={isMutatingCollections}
+                              onClick={handleDuplicateRequest}
+                            >
+                              Duplicate
+                            </button>
+                            <button
+                              type="button"
+                              className="text-button"
+                              disabled={isMutatingCollections || collectionsCatalog.length < 2}
+                              onClick={() => openCollectionAction("move-request")}
+                            >
+                              Move Req
+                            </button>
+                            <button
+                              type="button"
+                              className="text-button"
+                              disabled={isMutatingCollections}
+                              onClick={() => openCollectionAction("rename-request")}
+                            >
+                              Rename Req
+                            </button>
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => openCollectionAction("delete-request")}
+                            >
+                              Delete Req
+                            </button>
+                          </>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="text-button"
+                          disabled={isMutatingCollections}
+                          onClick={() => openCollectionAction("rename-collection")}
+                        >
+                          Rename Col
+                        </button>
+                        <button
+                          type="button"
+                          className="text-button"
+                          disabled={isMutatingCollections}
+                          onClick={() => openCollectionAction("delete-collection")}
+                        >
+                          Delete Col
+                        </button>
+                      </div>
+                    ) : null}
 
                     {expandedCollections[section.title] ? (
                       <div className="tree-group__body">
-                        <div className="tree-group__branch">Requests</div>
                         {section.requests.map((request) => (
                             <button
                               key={request.id}
@@ -774,7 +2541,10 @@ export default function App() {
                               className={`tree-request ${
                                 request.id === activeRequestId ? "is-active" : ""
                               }`}
-                              onClick={() => setActiveRequest(request.id)}
+                              onClick={() => {
+                                setActiveCollectionFile(section.filePath);
+                                setActiveRequest(request.id);
+                              }}
                             >
                               <span
                                 className={`method-pill method-pill--${request.method.toLowerCase()}`}
@@ -793,24 +2563,61 @@ export default function App() {
                 ))
               : null}
 
+            {activeSidebarPanel === "collections" && !hasCollections ? (
+              <div className="sidebar-empty-state">
+                <strong>No collections yet</strong>
+                <small>Import a Postman collection or save a request to create your first local collection.</small>
+                <button
+                  type="button"
+                  className="text-button sidebar-empty-state__action"
+                  onClick={() => {
+                    openCollectionAction("create-collection");
+                  }}
+                >
+                  Create collection
+                </button>
+              </div>
+            ) : null}
+
             {activeSidebarPanel === "history"
-              ? history.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className="sidebar-row"
-                    onClick={() => setActiveRequest(item.requestId)}
-                  >
-                    <div>
-                      <strong>{item.title}</strong>
-                      <small>{item.meta}</small>
-                    </div>
-                  </button>
-                ))
+              ? filteredHistory.map((item) => {
+                  const historyMethod = item.method;
+                  const historyPath = safePathname(item.url);
+                  const historyMethodTone =
+                    historyMethod === "GET"
+                      ? "get"
+                      : historyMethod === "POST"
+                        ? "post"
+                        : historyMethod === "PUT" || historyMethod === "PATCH"
+                          ? "put"
+                          : historyMethod === "DELETE"
+                            ? "delete"
+                            : "post";
+
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`sidebar-row sidebar-row--history ${
+                        activeHistoryId === item.id ? "is-active" : ""
+                      }`}
+                      onClick={() => handleRestoreHistory(item)}
+                    >
+                      <span className={`method-pill method-pill--${historyMethodTone}`}>
+                        {historyMethod}
+                      </span>
+                      <div className="sidebar-row__meta">
+                        <strong>{historyPath}</strong>
+                        <small>{item.meta}</small>
+                      </div>
+                      <span className="sidebar-row__status">{item.status}</span>
+                    </button>
+                  );
+                })
               : null}
 
             {activeSidebarPanel === "environments"
-              ? environments.map((environment) => (
+              ? filteredEnvironments.map((environment) => (
                   <article
                     key={environment.id}
                     className={`environment-card ${
@@ -828,9 +2635,29 @@ export default function App() {
                       </div>
                       <span>{environment.vars.length} vars</span>
                     </button>
+                    {environment.id === activeEnvironmentId ? (
+                      <div className="tree-group__actions">
+                        <button
+                          type="button"
+                          className="text-button"
+                          disabled={isSavingEnvironment}
+                          onClick={() => openEnvironmentAction("rename-environment")}
+                        >
+                          Rename Env
+                        </button>
+                        <button
+                          type="button"
+                          className="text-button"
+                          disabled={isSavingEnvironment}
+                          onClick={() => openEnvironmentAction("delete-environment")}
+                        >
+                          Delete Env
+                        </button>
+                      </div>
+                    ) : null}
                     <div className="environment-card__vars">
                       {environment.vars.map((row) => (
-                        <div key={`${environment.id}-${row.key}`} className="environment-var">
+                        <div key={row.id} className="environment-var">
                           <span>{row.key}</span>
                           <strong>{row.value}</strong>
                         </div>
@@ -839,6 +2666,29 @@ export default function App() {
                   </article>
                 ))
               : null}
+
+            {activeSidebarPanel === "environments" && !hasEnvironments ? (
+              <div className="sidebar-empty-state">
+                <strong>No environments yet</strong>
+                <small>Create your first local environment to start using variables, proxy, and cookie settings.</small>
+                <button
+                  type="button"
+                  className="text-button sidebar-empty-state__action"
+                  onClick={() => {
+                    void handleCreateFirstEnvironment();
+                  }}
+                >
+                  Create local environment
+                </button>
+              </div>
+            ) : null}
+
+            {explorerListEmpty ? (
+              <div className="sidebar-empty-state">
+                <strong>No results</strong>
+                <small>{explorerEmptyMessage}</small>
+              </div>
+            ) : null}
 
             {activeSidebarPanel === "settings" ? (
               <>
@@ -900,75 +2750,86 @@ export default function App() {
           className={`workspace ${workspaceMode !== "collections" ? "workspace--with-inspector" : ""}`}
         >
           <div className="workbench">
+          {hasCollections && hasActiveCollectionRequests ? (
+          <>
           <div className="request-editor">
             <div className="request-editor__header">
-              <div className="request-context">
-                <span className="request-context__eyebrow">
-                  {bootstrap.recentWorkspace || "default-workspace"} / {activeRequest.collection}
-                </span>
-                <h1>{activeRequest.name}</h1>
-                <p>{activeBaseUrl}</p>
+              <div className="request-editor__identity">
+                <div className="request-context">
+                  <span className="request-context__eyebrow">
+                    {bootstrap.recentWorkspace || "default-workspace"} / {activeRequest.collection}
+                  </span>
+                  <h1>{activeRequest.name}</h1>
+                </div>
+                <div className="environment-pills">
+                  {displayEnvironments.map((environment) => (
+                    <button
+                      key={environment.id}
+                      type="button"
+                      className={`env-pill ${
+                        environment.id === activeEnvironmentId ? "is-active" : ""
+                      }`}
+                      onClick={() => setActiveEnvironment(environment.id)}
+                    >
+                      {environment.name}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="request-context__stats">
+                <span
+                  className={`request-save-indicator request-save-indicator--${requestStatus.tone}`}
+                >
+                  {requestStatus.message}
+                </span>
                 <span>{activeEnvironment.name}</span>
                 <span>{activeProxy}</span>
                 <span>{activeCookieJar}</span>
               </div>
             </div>
 
-            <div className="request-editor__subbar">
-              <div className="environment-pills">
-                {environments.map((environment) => (
-                  <button
-                    key={environment.id}
-                    type="button"
-                    className={`env-pill ${
-                      environment.id === activeEnvironmentId ? "is-active" : ""
-                    }`}
-                    onClick={() => setActiveEnvironment(environment.id)}
-                  >
-                    {environment.name}
-                  </button>
-                ))}
-              </div>
-
-              <div className="request-meta">
-                <span>Collection: {activeRequest.collection}</span>
-                <span>Storage: SQLite / Filesystem / Keychain</span>
-              </div>
-            </div>
-
             <div className="request-editor__bar">
-              <select
-                className="method-select"
-                value={activeRequest.method}
-                onChange={(event) =>
-                  updateRequestMethod(event.target.value as RequestMethod)
-                }
-              >
-                {requestMethods.map((method) => (
-                  <option key={method} value={method}>
-                    {method}
-                  </option>
-                ))}
-              </select>
-              <input
-                className="request-url-input"
-                value={activeRequest.url}
-                onChange={(event) => updateRequestUrl(event.target.value)}
-              />
+              <div className="request-address-bar">
+                <label className="request-method-shell">
+                  <select
+                    className="method-select"
+                    value={activeRequest.method}
+                    onChange={(event) =>
+                      updateRequestMethod(event.target.value as RequestMethod)
+                    }
+                  >
+                    {requestMethods.map((method) => (
+                      <option key={method} value={method}>
+                        {method}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="request-method-shell__chevron" aria-hidden="true">
+                    v
+                  </span>
+                </label>
+                <div className="request-url-shell">
+                  <input
+                    className="request-url-input"
+                    value={activeRequest.url}
+                    onChange={(event) => updateRequestUrl(event.target.value)}
+                  />
+                </div>
+              </div>
               <button
                 type="button"
                 className="secondary-button"
+                disabled={isSavingRequest || (!requestDirty && requestSaveFeedback?.tone !== "error")}
                 onClick={() => {
                   void handleSaveRequest();
                 }}
               >
-                {isSavingRequest ? "Saving..." : "Save"}
+                {isSavingRequest ? "Saving..." : requestDirty ? "Save" : "Saved"}
               </button>
               <button
                 type="button"
                 className="primary-button"
+                disabled={!hasCollections}
                 onClick={() => {
                   void sendActiveRequest();
                 }}
@@ -977,56 +2838,65 @@ export default function App() {
               </button>
             </div>
 
-            <div className="request-utility-bar">
-              <div className="request-utility-bar__group">
-                <span className="utility-pill utility-pill--active">
-                  Params {activeRequest.params.length}
-                </span>
-                <span className="utility-pill">Headers {activeRequest.headers.length}</span>
-                <span className="utility-pill">
-                  Auth {activeRequest.authType === "none" ? "Off" : "On"}
-                </span>
-                <span className="utility-pill">Body {activeRequest.body.length}</span>
+            <div className="request-editor__nav">
+              <div className="request-tabs">
+                {requestTabs.map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    aria-label={`Request ${tab.label} tab`}
+                    className={`request-tab ${requestTab === tab.key ? "is-active" : ""}`}
+                    onClick={() => setRequestTab(tab.key)}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
               </div>
-              <div className="request-utility-bar__group">
-                <span className="utility-note">Environment: {activeEnvironment.name}</span>
-                <span className="utility-note">URL: {safePathname(activeRequest.url)}</span>
+
+              <div className="request-utility-bar">
+                <div className="request-utility-bar__group">
+                  <span className={`utility-pill ${requestTab === "params" ? "utility-pill--active" : ""}`}>
+                    {visibleParamRows} params
+                  </span>
+                  <span className={`utility-pill ${requestTab === "headers" ? "utility-pill--active" : ""}`}>
+                    {visibleHeaderRows} headers
+                  </span>
+                  <span className={`utility-pill ${requestTab === "auth" ? "utility-pill--active" : ""}`}>
+                    auth {activeRequest.authType === "none" ? "off" : "on"}
+                  </span>
+                  <span className={`utility-pill ${requestTab === "body" ? "utility-pill--active" : ""}`}>
+                    body {activeRequest.body.length}
+                  </span>
+                </div>
+                <div className="request-utility-bar__group">
+                  <span className="utility-note">{safePathname(activeRequest.url)}</span>
+                </div>
               </div>
             </div>
 
             {lastError ? <div className="request-error-banner">{lastError}</div> : null}
-
-            <div className="request-tabs">
-              {requestTabs.map((tab) => (
-                <button
-                  key={tab.key}
-                  type="button"
-                  aria-label={`Request ${tab.label} tab`}
-                  className={`request-tab ${requestTab === tab.key ? "is-active" : ""}`}
-                  onClick={() => setRequestTab(tab.key)}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
 
             <div className="request-content">
               {requestTab === "params" ? (
                 <section className="editor-panel">
                   <div className="editor-panel__header">
                     <div>
-                      <span>Query Params</span>
-                      <h2>Request Parameters</h2>
+                      <span>Params</span>
+                      <h2>Query</h2>
                     </div>
-                    <button type="button" className="text-button" onClick={addParamRow}>
-                      + Add Param
-                    </button>
+                    <div className="editor-panel__actions">
+                      <span className="editor-panel__hint">{visibleParamRows} rows</span>
+                      <button type="button" className="text-button" onClick={handleAddParamRow}>
+                        Add row
+                      </button>
+                    </div>
                   </div>
                   <div className="form-table">
                     <div className="form-table__head">
                       <span>On</span>
                       <span>Key</span>
                       <span>Value</span>
+                      <span>Act</span>
                     </div>
                     <div className="form-grid">
                       {activeRequest.params.map((row) => (
@@ -1039,6 +2909,9 @@ export default function App() {
                             />
                           </label>
                           <input
+                            ref={(element) => {
+                              rowInputRefs.current[`params:${row.id}`] = element;
+                            }}
                             className={!row.enabled ? "is-disabled" : ""}
                             value={row.key}
                             placeholder="key"
@@ -1054,6 +2927,14 @@ export default function App() {
                               updateParamRow(row.id, "value", event.target.value)
                             }
                           />
+                          <button
+                            type="button"
+                            className="row-action-button"
+                            aria-label={`Remove param row ${row.key || row.value || row.id}`}
+                            onClick={() => handleRemoveParamRow(row.id)}
+                          >
+                            x
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -1066,17 +2947,21 @@ export default function App() {
                   <div className="editor-panel__header">
                     <div>
                       <span>Headers</span>
-                      <h2>Request Headers</h2>
+                      <h2>Headers</h2>
                     </div>
-                    <button type="button" className="text-button" onClick={addHeaderRow}>
-                      + Add Header
-                    </button>
+                    <div className="editor-panel__actions">
+                      <span className="editor-panel__hint">{visibleHeaderRows} rows</span>
+                      <button type="button" className="text-button" onClick={handleAddHeaderRow}>
+                        Add row
+                      </button>
+                    </div>
                   </div>
                   <div className="form-table">
                     <div className="form-table__head">
                       <span>On</span>
                       <span>Header</span>
                       <span>Value</span>
+                      <span>Act</span>
                     </div>
                     <div className="form-grid">
                       {activeRequest.headers.map((row) => (
@@ -1089,6 +2974,9 @@ export default function App() {
                             />
                           </label>
                           <input
+                            ref={(element) => {
+                              rowInputRefs.current[`headers:${row.id}`] = element;
+                            }}
                             className={!row.enabled ? "is-disabled" : ""}
                             value={row.key}
                             placeholder="key"
@@ -1104,6 +2992,14 @@ export default function App() {
                               updateHeaderRow(row.id, "value", event.target.value)
                             }
                           />
+                          <button
+                            type="button"
+                            className="row-action-button"
+                            aria-label={`Remove header row ${row.key || row.value || row.id}`}
+                            onClick={() => handleRemoveHeaderRow(row.id)}
+                          >
+                            x
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -1113,10 +3009,10 @@ export default function App() {
 
               {requestTab === "body" ? (
                 <section className="editor-panel editor-panel--full">
-                  <div className="editor-panel__header">
+                  <div className="editor-panel__header editor-panel__header--body">
                     <div>
                       <span>Body</span>
-                      <h2>JSON Body Editor</h2>
+                      <h2>application/json</h2>
                     </div>
                     <div className="chip-row">
                       <span>Pretty</span>
@@ -1125,7 +3021,6 @@ export default function App() {
                     </div>
                   </div>
                   <div className="editor-toolbar">
-                    <span>application/json</span>
                     <span>UTF-8</span>
                     <span>{activeRequest.body.length} chars</span>
                   </div>
@@ -1142,12 +3037,17 @@ export default function App() {
                   <div className="editor-panel__header">
                     <div>
                       <span>Authorization</span>
-                      <h2>Auth Settings</h2>
+                      <h2>Auth</h2>
+                    </div>
+                    <div className="editor-panel__actions">
+                      <span className="editor-panel__hint">
+                        {activeRequest.authType === "none" ? "disabled" : "bearer"}
+                      </span>
                     </div>
                   </div>
                   <div className="auth-grid">
                     <label className="field-block">
-                      <span>Auth Type</span>
+                      <span>Type</span>
                       <select
                         value={activeRequest.authType}
                         onChange={(event) =>
@@ -1440,7 +3340,61 @@ export default function App() {
               </div>
             </section>
           ) : null}
-
+          </>
+          ) : hasCollections ? (
+            <section className="request-empty-state">
+              <div className="request-empty-state__eyebrow">Collection</div>
+              <h1>{activeCollection?.name ?? "Empty collection"}</h1>
+              <p>
+                This collection is ready, but it does not contain any requests yet. Create a new
+                request or import one into this collection.
+              </p>
+              <div className="request-empty-state__actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={handleCreateRequest}
+                >
+                  New Request
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setIsCurlPanelOpen(true)}
+                >
+                  Import cURL
+                </button>
+              </div>
+            </section>
+          ) : (
+            <section className="request-empty-state">
+              <div className="request-empty-state__eyebrow">Request Editor</div>
+              <h1>Create your first request</h1>
+              <p>
+                This workspace is empty. Import a Postman collection, paste a cURL command, or
+                import your first API request to start building a local collection.
+              </p>
+              <div className="request-empty-state__actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setIsPostmanPanelOpen(true)}
+                >
+                  Import Postman
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setIsCurlPanelOpen(true)}
+                >
+                  Import cURL
+                </button>
+              </div>
+              <div className="request-empty-state__note">
+                Collections are created automatically the first time you save an imported request.
+              </div>
+            </section>
+          )}
           </div>
 
           {workspaceMode !== "collections" ? (
@@ -1453,22 +3407,66 @@ export default function App() {
                   <span>History</span>
                   <h2>Recent Request Sessions</h2>
                 </div>
-                <button type="button" className="secondary-button">
-                  Clear
-                </button>
+                <span className="workspace-panel__meta">{history.length} sessions</span>
               </div>
               <div className="workspace-panel__grid">
-                {history.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className="workspace-card workspace-card--interactive"
-                    onClick={() => setActiveRequest(item.requestId)}
-                  >
-                    <strong>{item.title}</strong>
-                    <small>{item.meta}</small>
-                  </button>
-                ))}
+                {hasHistory ? (
+                  history.map((item) => (
+                    <article
+                      key={item.id}
+                      className={`workspace-card workspace-card--interactive history-session-card ${
+                        activeHistoryId === item.id ? "is-active" : ""
+                      }`}
+                    >
+                      <div className="history-session-card__header">
+                        <span
+                          className={`method-pill method-pill--${
+                            item.method === "GET"
+                              ? "get"
+                              : item.method === "POST"
+                                ? "post"
+                                : item.method === "DELETE"
+                                  ? "delete"
+                                  : "put"
+                          }`}
+                        >
+                          {item.method}
+                        </span>
+                        <strong>{safePathname(item.url)}</strong>
+                        <span className="history-session-card__status">{item.status}</span>
+                      </div>
+                      <small>{item.meta}</small>
+                      <div className="history-session-card__details">
+                        <span>{item.requestName}</span>
+                        <span>{item.collection}</span>
+                        <span>{item.environment.name}</span>
+                      </div>
+                      <div className="history-session-card__actions">
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => handleRestoreHistory(item)}
+                        >
+                          Restore
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => {
+                            void handleResendHistory(item);
+                          }}
+                        >
+                          Resend
+                        </button>
+                      </div>
+                    </article>
+                  ))
+                ) : (
+                  <article className="workspace-card workspace-card--empty">
+                    <strong>No history yet</strong>
+                    <small>Send a request to start building a replayable request history.</small>
+                  </article>
+                )}
               </div>
             </section>
           ) : null}
@@ -1480,36 +3478,121 @@ export default function App() {
                   <span>Environment Variables</span>
                   <h2>{activeEnvironment.name}</h2>
                 </div>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => {
-                    void handleSaveEnvironment();
-                  }}
-                >
-                  {isSavingEnvironment ? "Saving..." : "Save Env"}
-                </button>
-              </div>
-              <div className="workspace-panel__table">
-                <div className="workspace-panel__table-head">
-                  <span>Key</span>
-                  <span>Value</span>
-                </div>
-                {activeEnvironment.vars.map((row) => (
-                  <div
-                    key={`${activeEnvironment.id}-${row.key}`}
-                    className="workspace-panel__table-row"
+                <div className="workspace-panel__actions">
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => openEnvironmentAction("create-environment")}
                   >
-                    <strong>{row.key}</strong>
-                    <input
-                      value={row.value}
-                      onChange={(event) =>
-                        updateEnvironmentVar(activeEnvironment.id, row.key, event.target.value)
-                      }
-                    />
-                  </div>
-                ))}
+                    New Env
+                  </button>
+                  {hasEnvironments ? (
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => openEnvironmentAction("rename-environment")}
+                    >
+                      Rename Env
+                    </button>
+                  ) : null}
+                  {hasEnvironments ? (
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => openEnvironmentAction("delete-environment")}
+                    >
+                      Delete Env
+                    </button>
+                  ) : null}
+                  {environmentStatus ? (
+                    <span
+                      className={`request-save-indicator request-save-indicator--${environmentStatus.tone}`}
+                    >
+                      {environmentStatus.message}
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={!hasEnvironments || (isSavingEnvironment ? false : !environmentDirty && environmentSaveFeedback?.tone !== "error")}
+                    onClick={() => {
+                      void handleSaveEnvironment();
+                    }}
+                  >
+                    {isSavingEnvironment ? "Saving..." : "Save Env"}
+                  </button>
+                </div>
               </div>
+              {hasEnvironments ? (
+                <div className="workspace-panel__table">
+                  <div className="workspace-panel__table-head">
+                    <span>Key</span>
+                    <span>Value</span>
+                  </div>
+                  {activeEnvironment.vars.map((row) => (
+                    <div
+                      key={row.id}
+                      className="workspace-panel__table-row"
+                    >
+                      <input
+                        value={row.key}
+                        onChange={(event) =>
+                          updateEnvironmentVar(activeEnvironment.id, row.id, "key", event.target.value)
+                        }
+                        ref={(input) => {
+                          environmentInputRefs.current[`${activeEnvironment.id}:${row.id}:key`] = input;
+                        }}
+                        placeholder="base_url"
+                      />
+                      <div className="workspace-panel__table-row-value">
+                        <input
+                          value={row.value}
+                          onChange={(event) =>
+                            updateEnvironmentVar(activeEnvironment.id, row.id, "value", event.target.value)
+                          }
+                          ref={(input) => {
+                            environmentInputRefs.current[`${activeEnvironment.id}:${row.id}:value`] = input;
+                          }}
+                          placeholder="https://api.example.com"
+                        />
+                        <button
+                          type="button"
+                          className="text-button"
+                          aria-label={`Remove environment var ${row.key || row.id}`}
+                          onClick={() => handleRemoveEnvironmentVar(row.id)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="workspace-panel__table-actions">
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={handleAddEnvironmentVar}
+                    >
+                      Add Variable
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <article className="workspace-card workspace-card--empty">
+                  <strong>No environments yet</strong>
+                  <small>Create a local environment to manage base URLs, proxy, and cookie settings before you send requests.</small>
+                  <div className="request-empty-state__actions">
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => {
+                        void handleCreateFirstEnvironment();
+                      }}
+                    >
+                      Create local environment
+                    </button>
+                  </div>
+                </article>
+              )}
             </section>
           ) : null}
 

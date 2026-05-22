@@ -19,6 +19,7 @@ export type KeyValueRow = {
 };
 
 export type EnvironmentVar = {
+  id: string;
   key: string;
   value: string;
 };
@@ -76,6 +77,19 @@ export type HistoryRecord = {
   title: string;
   meta: string;
   requestId: string;
+  method: RequestMethod;
+  url: string;
+  status: string;
+  durationMs: number;
+  createdAt: string;
+  requestName: string;
+  collection: string;
+  params: KeyValueRow[];
+  headers: KeyValueRow[];
+  body: string;
+  authType: AuthType;
+  authToken: string;
+  environment: EnvironmentRecord;
 };
 
 export type SecretStatus = {
@@ -120,17 +134,23 @@ type RequestStore = {
   history: HistoryRecord[];
   activeRequestId: string;
   activeEnvironmentId: string;
+  activeHistoryId: string | null;
   response: ResponseState;
   bootstrap: BootstrapSnapshot;
   isSending: boolean;
   lastError: string;
   setActiveRequest: (requestId: string) => void;
   setActiveEnvironment: (environmentId: string) => void;
+  setActiveHistory: (historyId: string | null) => void;
   updateEnvironmentVar: (
     environmentId: string,
-    key: string,
+    rowId: string,
+    field: "key" | "value",
     value: string,
   ) => void;
+  addEnvironmentVar: (environmentId: string) => string;
+  removeEnvironmentVar: (environmentId: string, rowId: string) => string;
+  upsertEnvironment: (environment: EnvironmentRecord) => void;
   replaceEnvironment: (environment: EnvironmentRecord) => void;
   applyBootstrap: (input: {
     appDataDir: string;
@@ -154,13 +174,56 @@ type RequestStore = {
   updateHeaderRow: (id: string, field: "key" | "value", value: string) => void;
   toggleParamRow: (id: string) => void;
   toggleHeaderRow: (id: string) => void;
-  addParamRow: () => void;
-  addHeaderRow: () => void;
+  addParamRow: () => string;
+  addHeaderRow: () => string;
+  removeParamRow: (id: string) => string;
+  removeHeaderRow: (id: string) => string;
   replaceRequest: (request: RequestRecord) => void;
+  upsertRequestFromHistory: (history: HistoryRecord) => string;
   upsertRequests: (requests: RequestRecord[]) => void;
   upsertSecretStatus: (secret: SecretStatus) => void;
   sendActiveRequest: () => Promise<void>;
 };
+
+const scratchRequest: RequestRecord = {
+  id: "scratch-request",
+  name: "Untitled Request",
+  collection: "Unfiled",
+  collectionFile: "collections/unfiled.json",
+  method: "GET",
+  url: "",
+  params: [],
+  headers: [],
+  body: "",
+  authType: "none",
+  authToken: "",
+};
+
+export function makeScratchEnvironment(): EnvironmentRecord {
+  return {
+    id: "scratch-environment",
+    name: "No Environment",
+    source: "environments/default.json",
+    vars: [
+      { id: "scratch-environment-var-1", key: "base_url", value: "" },
+      { id: "scratch-environment-var-2", key: "proxy", value: "system" },
+      { id: "scratch-environment-var-3", key: "cookie_jar", value: "default" },
+    ],
+  };
+}
+
+const scratchEnvironment: EnvironmentRecord = makeScratchEnvironment();
+
+function normalizeEnvironmentVars(
+  rows: Array<{ key: string; value: string }>,
+  prefix: string,
+): EnvironmentVar[] {
+  return rows.map((row, index) => ({
+    id: `${prefix}-env-${index + 1}-${row.key || "var"}`,
+    key: row.key,
+    value: row.value,
+  }));
+}
 
 const initialRequests: RequestRecord[] = [
   {
@@ -255,43 +318,52 @@ const initialEnvironments: EnvironmentRecord[] = [
     id: "env-production",
     name: "Production",
     source: "environments/production.json",
-    vars: [
-      { key: "base_url", value: "https://api.example.com" },
-      { key: "auth_token", value: "{{secret.prod_token}}" },
-      { key: "proxy", value: "system" },
-      { key: "tls_verify", value: "true" },
-      { key: "tls_hostname_verify", value: "true" },
-      { key: "https_only", value: "false" },
-      { key: "cookie_jar", value: "workspace_default" },
-    ],
+    vars: normalizeEnvironmentVars(
+      [
+        { key: "base_url", value: "https://api.example.com" },
+        { key: "auth_token", value: "{{secret.prod_token}}" },
+        { key: "proxy", value: "system" },
+        { key: "tls_verify", value: "true" },
+        { key: "tls_hostname_verify", value: "true" },
+        { key: "https_only", value: "false" },
+        { key: "cookie_jar", value: "workspace_default" },
+      ],
+      "env-production",
+    ),
   },
   {
     id: "env-staging",
     name: "Staging",
     source: "environments/staging.json",
-    vars: [
-      { key: "base_url", value: "https://staging-api.example.com" },
-      { key: "auth_token", value: "{{secret.staging_token}}" },
-      { key: "proxy", value: "disabled" },
-      { key: "tls_verify", value: "true" },
-      { key: "tls_hostname_verify", value: "true" },
-      { key: "https_only", value: "false" },
-      { key: "cookie_jar", value: "workspace_staging" },
-    ],
+    vars: normalizeEnvironmentVars(
+      [
+        { key: "base_url", value: "https://staging-api.example.com" },
+        { key: "auth_token", value: "{{secret.staging_token}}" },
+        { key: "proxy", value: "disabled" },
+        { key: "tls_verify", value: "true" },
+        { key: "tls_hostname_verify", value: "true" },
+        { key: "https_only", value: "false" },
+        { key: "cookie_jar", value: "workspace_staging" },
+      ],
+      "env-staging",
+    ),
   },
   {
     id: "env-local",
     name: "Local Mock",
     source: "environments/local.yaml",
-    vars: [
-      { key: "base_url", value: "http://127.0.0.1:8787" },
-      { key: "auth_token", value: "dev-token" },
-      { key: "proxy", value: "disabled" },
-      { key: "tls_verify", value: "false" },
-      { key: "tls_hostname_verify", value: "false" },
-      { key: "https_only", value: "false" },
-      { key: "cookie_jar", value: "workspace_local" },
-    ],
+    vars: normalizeEnvironmentVars(
+      [
+        { key: "base_url", value: "http://127.0.0.1:8787" },
+        { key: "auth_token", value: "dev-token" },
+        { key: "proxy", value: "disabled" },
+        { key: "tls_verify", value: "false" },
+        { key: "tls_hostname_verify", value: "false" },
+        { key: "https_only", value: "false" },
+        { key: "cookie_jar", value: "workspace_local" },
+      ],
+      "env-local",
+    ),
   },
 ];
 
@@ -301,18 +373,103 @@ const initialHistory: HistoryRecord[] = [
     title: "GET /v1/workspaces",
     meta: "200 / 184ms / just now",
     requestId: "req-workspaces",
+    method: "GET",
+    url: "https://api.example.com/v1/workspaces",
+    status: "200 OK",
+    durationMs: 184,
+    createdAt: "just now",
+    requestName: "GET /workspaces",
+    collection: "Core API",
+    params: [
+      { id: "history-param-1", key: "page", value: "1", enabled: true },
+      { id: "history-param-2", key: "limit", value: "20", enabled: true },
+      { id: "history-param-3", key: "include", value: "details,owner", enabled: true },
+    ],
+    headers: [
+      { id: "history-header-1", key: "Accept", value: "application/json", enabled: true },
+      {
+        id: "history-header-2",
+        key: "Authorization",
+        value: "Bearer {{secret.prod_token}}",
+        enabled: true,
+      },
+      {
+        id: "history-header-3",
+        key: "X-Workspace-Trace",
+        value: "req_live_4021",
+        enabled: true,
+      },
+    ],
+    body: "",
+    authType: "bearer",
+    authToken: "{{secret.prod_token}}",
+    environment: initialEnvironments[0],
   },
   {
     id: "history-2",
     title: "POST /v1/login",
     meta: "401 / 96ms / 6 min ago",
     requestId: "req-login",
+    method: "POST",
+    url: "https://api.example.com/v1/login",
+    status: "401 Unauthorized",
+    durationMs: 96,
+    createdAt: "6 min ago",
+    requestName: "POST /login",
+    collection: "Auth",
+    params: [],
+    headers: [
+      { id: "history-header-l1", key: "Accept", value: "application/json", enabled: true },
+      { id: "history-header-l2", key: "Content-Type", value: "application/json", enabled: true },
+    ],
+    body: `{
+  "email": "dev@example.com",
+  "password": "••••••••"
+}`,
+    authType: "none",
+    authToken: "",
+    environment: initialEnvironments[0],
   },
   {
     id: "history-3",
     title: "POST /v1/workspaces/search",
     meta: "200 / 221ms / 15 min ago",
     requestId: "req-search",
+    method: "POST",
+    url: "https://api.example.com/v1/workspaces/search",
+    status: "200 OK",
+    durationMs: 221,
+    createdAt: "15 min ago",
+    requestName: "POST /workspaces/search",
+    collection: "Core API",
+    params: [
+      { id: "history-param-a", key: "query", value: "workspace", enabled: true },
+      { id: "history-param-b", key: "limit", value: "20", enabled: true },
+    ],
+    headers: [
+      { id: "history-header-a", key: "Accept", value: "application/json", enabled: true },
+      {
+        id: "history-header-b",
+        key: "Authorization",
+        value: "Bearer {{secret.prod_token}}",
+        enabled: true,
+      },
+      { id: "history-header-c", key: "Content-Type", value: "application/json", enabled: true },
+      { id: "history-header-d", key: "Cookie", value: "workspace_session=auto", enabled: true },
+    ],
+    body: `{
+  "query": "workspace",
+  "limit": 20,
+  "include": ["details", "owner"],
+  "filters": {
+    "region": "apac",
+    "status": "active"
+  },
+  "preview": true
+}`,
+    authType: "bearer",
+    authToken: "{{secret.prod_token}}",
+    environment: initialEnvironments[0],
   },
 ];
 
@@ -392,20 +549,49 @@ function updateRow(
   return rows.map((row) => (row.id === id ? { ...row, [field]: value } : row));
 }
 
-function addRow(prefix: string, rows: KeyValueRow[]): KeyValueRow[] {
-  return [
-    ...rows,
-    {
-      id: `${prefix}-${rows.length + 1}-${Date.now()}`,
+function toggleRow(rows: KeyValueRow[], id: string): KeyValueRow[] {
+  return rows.map((row) => (row.id === id ? { ...row, enabled: !row.enabled } : row));
+}
+
+function appendRow(prefix: string, rows: KeyValueRow[]) {
+  const nextRow = {
+    id: `${prefix}-${rows.length + 1}-${Date.now()}`,
+    key: "",
+    value: "",
+    enabled: true,
+  };
+
+  return {
+    rows: [...rows, nextRow],
+    focusRowId: nextRow.id,
+  };
+}
+
+function removeRow(prefix: string, rows: KeyValueRow[], id: string) {
+  const removedIndex = rows.findIndex((row) => row.id === id);
+  const remainingRows = rows.filter((row) => row.id !== id);
+
+  if (remainingRows.length === 0) {
+    const fallbackRow = {
+      id: `${prefix}-1-${Date.now()}`,
       key: "",
       value: "",
       enabled: true,
-    },
-  ];
-}
+    };
 
-function toggleRow(rows: KeyValueRow[], id: string): KeyValueRow[] {
-  return rows.map((row) => (row.id === id ? { ...row, enabled: !row.enabled } : row));
+    return {
+      rows: [fallbackRow],
+      focusRowId: fallbackRow.id,
+    };
+  }
+
+  const nextFocusIndex =
+    removedIndex < 0 ? 0 : Math.min(removedIndex, remainingRows.length - 1);
+
+  return {
+    rows: remainingRows,
+    focusRowId: remainingRows[nextFocusIndex]?.id ?? "",
+  };
 }
 
 function safePathname(url: string): string {
@@ -416,30 +602,105 @@ function safePathname(url: string): string {
   }
 }
 
+function appendEnvironmentVar(environmentId: string, rows: EnvironmentVar[]) {
+  const nextRow = {
+    id: `${environmentId}-env-var-${rows.length + 1}-${Date.now()}`,
+    key: "",
+    value: "",
+  };
+
+  return {
+    rows: [...rows, nextRow],
+    focusRowId: nextRow.id,
+  };
+}
+
+function removeEnvironmentVarRow(rows: EnvironmentVar[], id: string) {
+  const removedIndex = rows.findIndex((row) => row.id === id);
+  const remainingRows = rows.filter((row) => row.id !== id);
+
+  if (remainingRows.length === 0) {
+    return {
+      rows: [],
+      focusRowId: "",
+    };
+  }
+
+  const nextFocusIndex =
+    removedIndex < 0 ? 0 : Math.min(removedIndex, remainingRows.length - 1);
+
+  return {
+    rows: remainingRows,
+    focusRowId: remainingRows[nextFocusIndex]?.id ?? "",
+  };
+}
+
 export const useRequestStore = create<RequestStore>((set, get) => ({
   requests: initialRequests,
   environments: initialEnvironments,
   history: initialHistory,
   activeRequestId: "req-search",
   activeEnvironmentId: "env-production",
+  activeHistoryId: null,
   response: initialResponse,
   bootstrap: initialBootstrap,
   isSending: false,
   lastError: "",
   setActiveRequest: (requestId) => set({ activeRequestId: requestId }),
   setActiveEnvironment: (environmentId) => set({ activeEnvironmentId: environmentId }),
-  updateEnvironmentVar: (environmentId, key, value) =>
+  setActiveHistory: (historyId) => set({ activeHistoryId: historyId }),
+  updateEnvironmentVar: (environmentId, rowId, field, value) =>
     set((state) => ({
       environments: state.environments.map((environment) =>
         environment.id === environmentId
           ? {
               ...environment,
               vars: environment.vars.map((item) =>
-                item.key === key ? { ...item, value } : item,
+                item.id === rowId ? { ...item, [field]: value } : item,
               ),
             }
           : environment,
       ),
+    })),
+  addEnvironmentVar: (environmentId) => {
+    let focusRowId = "";
+
+    set((state) => ({
+      environments: state.environments.map((environment) => {
+        if (environment.id !== environmentId) {
+          return environment;
+        }
+
+        const next = appendEnvironmentVar(environment.id, environment.vars);
+        focusRowId = next.focusRowId;
+        return { ...environment, vars: next.rows };
+      }),
+    }));
+
+    return focusRowId;
+  },
+  removeEnvironmentVar: (environmentId, rowId) => {
+    let focusRowId = "";
+
+    set((state) => ({
+      environments: state.environments.map((environment) => {
+        if (environment.id !== environmentId) {
+          return environment;
+        }
+
+        const next = removeEnvironmentVarRow(environment.vars, rowId);
+        focusRowId = next.focusRowId;
+        return { ...environment, vars: next.rows };
+      }),
+    }));
+
+    return focusRowId;
+  },
+  upsertEnvironment: (environment) =>
+    set((state) => ({
+      environments: state.environments.some((item) => item.id === environment.id)
+        ? state.environments.map((item) => (item.id === environment.id ? environment : item))
+        : [...state.environments, environment],
     })),
   replaceEnvironment: (environment) =>
     set((state) => ({
@@ -451,6 +712,54 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
     set((state) => ({
       requests: state.requests.map((item) => (item.id === request.id ? request : item)),
     })),
+  upsertRequestFromHistory: (historyEntry) => {
+    const replayRequestId = `${historyEntry.requestId}-history-${historyEntry.id}`;
+    const replayRequest: RequestRecord = {
+      id: replayRequestId,
+      name: `${historyEntry.requestName} replay`,
+      collection: `${historyEntry.collection} / History`,
+      collectionFile: `history/${historyEntry.requestId}.json`,
+      method: historyEntry.method,
+      url: historyEntry.url,
+      params: historyEntry.params.map((row, index) => ({
+        ...row,
+        id: `${replayRequestId}-param-${index + 1}`,
+      })),
+      headers: historyEntry.headers.map((row, index) => ({
+        ...row,
+        id: `${replayRequestId}-header-${index + 1}`,
+      })),
+      body: historyEntry.body,
+      authType: historyEntry.authType,
+      authToken: historyEntry.authToken,
+    };
+    const replayEnvironmentId = `${historyEntry.environment.id}-history-${historyEntry.id}`;
+    const replayEnvironment: EnvironmentRecord = {
+      ...historyEntry.environment,
+      id: replayEnvironmentId,
+      name: `${historyEntry.environment.name} replay`,
+      source: historyEntry.environment.source,
+      vars: normalizeEnvironmentVars(historyEntry.environment.vars, replayEnvironmentId),
+    };
+
+    set((state) => ({
+      requests: state.requests.some((request) => request.id === replayRequestId)
+        ? state.requests.map((request) =>
+            request.id === replayRequestId ? replayRequest : request,
+          )
+        : [...state.requests, replayRequest],
+      environments: state.environments.some((environment) => environment.id === replayEnvironmentId)
+        ? state.environments.map((environment) =>
+            environment.id === replayEnvironmentId ? replayEnvironment : environment,
+          )
+        : [...state.environments, replayEnvironment],
+      activeRequestId: replayRequestId,
+      activeEnvironmentId: replayEnvironmentId,
+      activeHistoryId: historyEntry.id,
+    }));
+
+    return replayRequestId;
+  },
   upsertRequests: (requests) =>
     set((state) => {
       if (requests.length === 0) {
@@ -479,8 +788,8 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
     })),
   applyBootstrap: (input) =>
     set((state) => ({
-      requests: input.collections.length > 0 ? input.collections : state.requests,
-      history: input.history.length > 0 ? input.history : state.history,
+      requests: input.collections.length > 0 ? input.collections : [scratchRequest],
+      history: input.history,
       environments:
         input.environments.length > 0
           ? input.environments.map((environment) => {
@@ -489,23 +798,32 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
                   item.name === environment.name || item.source === environment.source,
               );
 
-              return environment.vars.length > 0
-                ? environment
-                : {
-                    ...environment,
-                    vars: fallback?.vars ?? [],
-                  };
+              const sourceVars =
+                environment.vars.length > 0
+                  ? environment.vars
+                  : fallback?.vars.map((row) => ({
+                      key: row.key,
+                      value: row.value,
+                    })) ?? [];
+
+              return {
+                ...environment,
+                vars: normalizeEnvironmentVars(
+                  sourceVars,
+                  environment.source || environment.name,
+                ),
+              };
             })
-          : state.environments,
+          : [scratchEnvironment],
       activeEnvironmentId:
         input.environments.find((environment) => environment.id === state.activeEnvironmentId)
           ?.id ??
         input.environments[0]?.id ??
-        state.activeEnvironmentId,
+        scratchEnvironment.id,
       activeRequestId:
         input.collections.find((request) => request.id === state.activeRequestId)?.id ??
         input.collections[0]?.id ??
-        state.activeRequestId,
+        scratchRequest.id,
       bootstrap: {
         loaded: true,
         appDataDir: input.appDataDir,
@@ -517,6 +835,7 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
         runtime: input.runtime,
         secrets: input.secrets,
       },
+      activeHistoryId: null,
       lastError: "",
     })),
   updateRequestMethod: (method) =>
@@ -581,22 +900,74 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
           : request,
       ),
     })),
-  addParamRow: () =>
+  addParamRow: () => {
+    let focusRowId = "";
+
     set((state) => ({
-      requests: state.requests.map((request) =>
-        request.id === state.activeRequestId
-          ? { ...request, params: addRow("param", request.params) }
-          : request,
-      ),
-    })),
-  addHeaderRow: () =>
+      requests: state.requests.map((request) => {
+        if (request.id !== state.activeRequestId) {
+          return request;
+        }
+
+        const next = appendRow("param", request.params);
+        focusRowId = next.focusRowId;
+        return { ...request, params: next.rows };
+      }),
+    }));
+
+    return focusRowId;
+  },
+  addHeaderRow: () => {
+    let focusRowId = "";
+
     set((state) => ({
-      requests: state.requests.map((request) =>
-        request.id === state.activeRequestId
-          ? { ...request, headers: addRow("header", request.headers) }
-          : request,
-      ),
-    })),
+      requests: state.requests.map((request) => {
+        if (request.id !== state.activeRequestId) {
+          return request;
+        }
+
+        const next = appendRow("header", request.headers);
+        focusRowId = next.focusRowId;
+        return { ...request, headers: next.rows };
+      }),
+    }));
+
+    return focusRowId;
+  },
+  removeParamRow: (id) => {
+    let focusRowId = "";
+
+    set((state) => ({
+      requests: state.requests.map((request) => {
+        if (request.id !== state.activeRequestId) {
+          return request;
+        }
+
+        const next = removeRow("param", request.params, id);
+        focusRowId = next.focusRowId;
+        return { ...request, params: next.rows };
+      }),
+    }));
+
+    return focusRowId;
+  },
+  removeHeaderRow: (id) => {
+    let focusRowId = "";
+
+    set((state) => ({
+      requests: state.requests.map((request) => {
+        if (request.id !== state.activeRequestId) {
+          return request;
+        }
+
+        const next = removeRow("header", request.headers, id);
+        focusRowId = next.focusRowId;
+        return { ...request, headers: next.rows };
+      }),
+    }));
+
+    return focusRowId;
+  },
   sendActiveRequest: async () => {
     const state = get();
     const request = state.requests.find((item) => item.id === state.activeRequestId);
@@ -634,6 +1005,22 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
         title: `${request.method} ${safePathname(request.url)}`,
         meta: `${result.status.split(" ")[0]} / ${result.durationMs}ms / just now`,
         requestId: request.id,
+        method: request.method,
+        url: request.url,
+        status: result.status,
+        durationMs: result.durationMs,
+        createdAt: "just now",
+        requestName: request.name,
+        collection: request.collection,
+        params: request.params.map((row) => ({ ...row })),
+        headers: request.headers.map((row) => ({ ...row })),
+        body: request.body,
+        authType: request.authType,
+        authToken: request.authToken,
+        environment: {
+          ...environment,
+          vars: environment.vars.map((row) => ({ ...row })),
+        },
       };
 
       set((current) => ({
@@ -650,6 +1037,7 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
           summary: result.summary,
         },
         history: [historyEntry, ...current.history.slice(0, 7)],
+        activeHistoryId: historyEntry.id,
       }));
     } catch (error) {
       set({
