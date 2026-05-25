@@ -356,7 +356,9 @@ export const useRequestStore = create<RequestState>((set, get) => {
     },
 
     closeTab: (id) => {
-      const { tabs, activeTabId, responses, errors, loadings, wsConnected } = get();
+      const state = get();
+      const { tabs, activeTabId, responses, errors, loadings, wsConnected, wsMessages,
+        testResults, scriptLogs, scriptError, responseHistory } = state;
       // If a WebSocket is still open in this tab, close it on the backend
       if (wsConnected[id]) {
         invoke("ws_close", { requestId: id }).catch(() => {});
@@ -366,7 +368,9 @@ export const useRequestStore = create<RequestState>((set, get) => {
         invoke("cancel_request", { requestId: id }).catch(() => {});
       }
       if (tabs.length === 1) {
-        // Replace with a fresh new request rather than zero tabs
+        // Replace with a fresh new request rather than zero tabs. Reset every
+        // per-request map so we don't keep stale entries (notably
+        // responseHistory, which can hold large response bodies).
         const fresh = createNewRequest();
         set((s) => ({
           tabs: [fresh],
@@ -374,6 +378,12 @@ export const useRequestStore = create<RequestState>((set, get) => {
           responses: {},
           errors: {},
           loadings: {},
+          testResults: {},
+          scriptLogs: {},
+          scriptError: {},
+          responseHistory: {},
+          wsConnected: {},
+          wsMessages: {},
           ...syncDerived({ ...s, tabs: [fresh], activeTabId: fresh.id, responses: {}, errors: {}, loadings: {} }),
         }));
         return;
@@ -389,8 +399,11 @@ export const useRequestStore = create<RequestState>((set, get) => {
       const errRest = { ...errors }; delete errRest[id];
       const loadRest = { ...loadings }; delete loadRest[id];
       const wsConnRest = { ...wsConnected }; delete wsConnRest[id];
-      const { wsMessages } = get();
       const wsMsgRest = { ...wsMessages }; delete wsMsgRest[id];
+      const testResultsRest = { ...testResults }; delete testResultsRest[id];
+      const scriptLogsRest = { ...scriptLogs }; delete scriptLogsRest[id];
+      const scriptErrorRest = { ...scriptError }; delete scriptErrorRest[id];
+      const responseHistoryRest = { ...responseHistory }; delete responseHistoryRest[id];
       set((s) => ({
         tabs: remaining,
         activeTabId: nextActive,
@@ -399,6 +412,10 @@ export const useRequestStore = create<RequestState>((set, get) => {
         loadings: loadRest,
         wsConnected: wsConnRest,
         wsMessages: wsMsgRest,
+        testResults: testResultsRest,
+        scriptLogs: scriptLogsRest,
+        scriptError: scriptErrorRest,
+        responseHistory: responseHistoryRest,
         ...syncDerived({
           ...s,
           tabs: remaining,
@@ -492,16 +509,33 @@ export const useRequestStore = create<RequestState>((set, get) => {
       }
       const transientVars: Record<string, string> = {};
 
-      const result = await executeRequestWithScripts({
-        request: req,
-        collections: get().collections,
-        envVars,
-        transientVars,
-        defaults: {
-          defaultTimeoutMs: get().defaultTimeoutMs,
-          verifyTlsDefault: get().verifyTlsDefault,
-        },
-      });
+      let result: Awaited<ReturnType<typeof executeRequestWithScripts>>;
+      try {
+        result = await executeRequestWithScripts({
+          request: req,
+          collections: get().collections,
+          envVars,
+          transientVars,
+          defaults: {
+            defaultTimeoutMs: get().defaultTimeoutMs,
+            verifyTlsDefault: get().verifyTlsDefault,
+          },
+        });
+      } catch (err) {
+        // Bubble-up failures from the script worker (worker import failure,
+        // unexpected exceptions) — never leave the loading spinner stuck.
+        const msg = err instanceof Error ? err.message : String(err);
+        set((s) => ({
+          errors: { ...s.errors, [reqId]: msg },
+          loadings: { ...s.loadings, [reqId]: false },
+          ...syncDerived({
+            ...s,
+            errors: { ...s.errors, [reqId]: msg },
+            loadings: { ...s.loadings, [reqId]: false },
+          }),
+        }));
+        return;
+      }
 
       // Persist environment if any script mutated it.
       if (activeEnv) {

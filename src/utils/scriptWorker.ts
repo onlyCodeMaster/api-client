@@ -117,22 +117,51 @@ function buildPm(msg: WorkerInMessage, out: WorkerOutMessage) {
       }
       throw new Error("include() only supports strings and arrays");
     };
-    // `.to.be.ok` / `.to.be.true` / etc.
-    chain.to.be = {
-      ok: () => {
+    // `.to.be.ok` / `.to.be.true` / `.to.be.false` / `.to.be.null` need to be
+    // PROPERTY GETTERS that throw on access — matching Chai/Postman semantics.
+    // Defining them as methods (`ok: () => {...}`) would let
+    // `expect(null).to.be.ok` silently pass because the function reference is
+    // truthy. `to.be.a(type)` / `to.be.an(type)` stay as methods (they take an
+    // argument).
+    const be: Record<string, unknown> = {};
+    Object.defineProperty(be, "ok", {
+      enumerable: true,
+      get() {
         if (!actual) throw new Error(`expected ${JSON.stringify(actual)} to be truthy`);
       },
-      true: () => {
+    });
+    Object.defineProperty(be, "true", {
+      enumerable: true,
+      get() {
         if (actual !== true) throw new Error(`expected ${JSON.stringify(actual)} to be true`);
       },
-      false: () => {
+    });
+    Object.defineProperty(be, "false", {
+      enumerable: true,
+      get() {
         if (actual !== false) throw new Error(`expected ${JSON.stringify(actual)} to be false`);
       },
-      a: (type: string) => {
-        const t = Array.isArray(actual) ? "array" : typeof actual;
-        if (t !== type) throw new Error(`expected ${t} to be a ${type}`);
+    });
+    Object.defineProperty(be, "null", {
+      enumerable: true,
+      get() {
+        if (actual !== null) throw new Error(`expected ${JSON.stringify(actual)} to be null`);
       },
+    });
+    Object.defineProperty(be, "undefined", {
+      enumerable: true,
+      get() {
+        if (actual !== undefined) {
+          throw new Error(`expected ${JSON.stringify(actual)} to be undefined`);
+        }
+      },
+    });
+    be.a = (type: string) => {
+      const t = Array.isArray(actual) ? "array" : typeof actual;
+      if (t !== type) throw new Error(`expected ${t} to be a ${type}`);
     };
+    be.an = be.a;
+    chain.to.be = be;
     chain.to.match = (re: RegExp) => {
       if (typeof actual !== "string" || !re.test(actual)) {
         throw new Error(`expected "${actual}" to match ${re}`);

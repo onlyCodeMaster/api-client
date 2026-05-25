@@ -173,33 +173,39 @@ export async function executeRequestWithScripts(input: PipelineInput): Promise<P
 
   // --- Pre-request script -----------------------------------------------------
   if (req.preScript && req.preScript.trim()) {
-    const pre = await runScript({
-      kind: "pre",
-      source: req.preScript,
-      request: {
-        method: req.method,
-        url: req.url,
-        headers: Object.fromEntries(
-          req.headers.filter((h) => h.enabled).map((h) => [h.key, h.value])
-        ),
-        body: req.body || "",
-      },
-      environment: envVars,
-      variables: transientVars,
-    });
-    logs.push(...pre.logs);
-    if (!pre.ok && pre.error) {
-      scriptError = `Pre-request: ${pre.error}`;
+    try {
+      const pre = await runScript({
+        kind: "pre",
+        source: req.preScript,
+        request: {
+          method: req.method,
+          url: req.url,
+          headers: Object.fromEntries(
+            req.headers.filter((h) => h.enabled).map((h) => [h.key, h.value])
+          ),
+          body: req.body || "",
+        },
+        environment: envVars,
+        variables: transientVars,
+      });
+      logs.push(...pre.logs);
+      if (!pre.ok && pre.error) {
+        scriptError = `Pre-request: ${pre.error}`;
+      }
+      // Adopt env/var mutations (additions, updates, deletions).
+      for (const k of Object.keys(pre.environment)) envVars[k] = pre.environment[k];
+      for (const k of Object.keys(envVars)) {
+        if (!(k in pre.environment)) delete envVars[k];
+      }
+      for (const k of Object.keys(transientVars)) {
+        if (!(k in pre.variables)) delete transientVars[k];
+      }
+      Object.assign(transientVars, pre.variables);
+    } catch (e) {
+      // Worker spawn / import failures must not abort the request pipeline —
+      // surface as a script error and continue with unmodified env/vars.
+      scriptError = `Pre-request: ${e instanceof Error ? e.message : String(e)}`;
     }
-    // Adopt env/var mutations (additions, updates, deletions).
-    for (const k of Object.keys(pre.environment)) envVars[k] = pre.environment[k];
-    for (const k of Object.keys(envVars)) {
-      if (!(k in pre.environment)) delete envVars[k];
-    }
-    for (const k of Object.keys(transientVars)) {
-      if (!(k in pre.variables)) delete transientVars[k];
-    }
-    Object.assign(transientVars, pre.variables);
   }
 
   // --- Send -------------------------------------------------------------------
@@ -221,32 +227,37 @@ export async function executeRequestWithScripts(input: PipelineInput): Promise<P
   // --- Post-response (test) script -------------------------------------------
   let tests: TestResult[] = [];
   if (response && req.testScript && req.testScript.trim()) {
-    const post = await runScript({
-      kind: "test",
-      source: req.testScript,
-      request: {
-        method: req.method,
-        url: finalUrl,
-        headers: headerMap,
-        body: bodyStr || "",
-      },
-      response,
-      environment: envVars,
-      variables: transientVars,
-    });
-    logs.push(...post.logs);
-    tests = post.tests;
-    if (!post.ok && post.error) {
-      scriptError = scriptError ? `${scriptError}; Test: ${post.error}` : `Test: ${post.error}`;
+    try {
+      const post = await runScript({
+        kind: "test",
+        source: req.testScript,
+        request: {
+          method: req.method,
+          url: finalUrl,
+          headers: headerMap,
+          body: bodyStr || "",
+        },
+        response,
+        environment: envVars,
+        variables: transientVars,
+      });
+      logs.push(...post.logs);
+      tests = post.tests;
+      if (!post.ok && post.error) {
+        scriptError = scriptError ? `${scriptError}; Test: ${post.error}` : `Test: ${post.error}`;
+      }
+      for (const k of Object.keys(post.environment)) envVars[k] = post.environment[k];
+      for (const k of Object.keys(envVars)) {
+        if (!(k in post.environment)) delete envVars[k];
+      }
+      for (const k of Object.keys(transientVars)) {
+        if (!(k in post.variables)) delete transientVars[k];
+      }
+      Object.assign(transientVars, post.variables);
+    } catch (e) {
+      const msg = `Test: ${e instanceof Error ? e.message : String(e)}`;
+      scriptError = scriptError ? `${scriptError}; ${msg}` : msg;
     }
-    for (const k of Object.keys(post.environment)) envVars[k] = post.environment[k];
-    for (const k of Object.keys(envVars)) {
-      if (!(k in post.environment)) delete envVars[k];
-    }
-    for (const k of Object.keys(transientVars)) {
-      if (!(k in post.variables)) delete transientVars[k];
-    }
-    Object.assign(transientVars, post.variables);
   }
 
   return { response, error, tests, logs, scriptError, finalUrl };
