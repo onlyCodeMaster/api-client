@@ -5,12 +5,23 @@ import { RequestPanel } from "./components/RequestPanel";
 import { ResponsePanel } from "./components/ResponsePanel";
 import { TabBar } from "./components/TabBar";
 import { WsPanel } from "./components/WsPanel";
+import { SsePanel } from "./components/SsePanel";
 import { useRequestStore } from "./store/useRequestStore";
 
 interface WsEvent {
   request_id: string;
   kind: string;
   text: string | null;
+}
+
+interface SseBackendEvent {
+  request_id: string;
+  kind: string;
+  event?: string;
+  data?: string;
+  id?: string;
+  retry?: number;
+  error?: string;
 }
 
 function App() {
@@ -27,6 +38,23 @@ function App() {
     const unlistenPromise = listen<WsEvent>("ws-event", (event) => {
       const { request_id, kind, text } = event.payload;
       useRequestStore.getState().appendWsEvent(request_id, kind, text);
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  // Listen for SSE events from the Rust backend
+  useEffect(() => {
+    const unlistenPromise = listen<SseBackendEvent>("sse-event", (event) => {
+      const { request_id, kind, event: evtName, data, id, retry, error } = event.payload;
+      useRequestStore.getState().appendSseEvent(request_id, kind, {
+        event: evtName,
+        data,
+        id,
+        retry,
+        error,
+      });
     });
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
@@ -95,7 +123,9 @@ function App() {
     );
   }
 
-  const isWs = activeRequest?.protocol === "websocket";
+  const protocol = activeRequest?.protocol;
+  const isWs = protocol === "websocket";
+  const isSse = protocol === "sse";
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-bg">
@@ -107,7 +137,7 @@ function App() {
             <RequestPanel />
           </div>
           <div className="bg-surface rounded-b-apple-lg shadow-apple overflow-hidden flex-1 flex flex-col border-t border-border-light">
-            {isWs ? <WsPanel /> : <ResponsePanel />}
+            {isWs ? <WsPanel /> : isSse ? <SsePanel /> : <ResponsePanel />}
           </div>
         </div>
       </div>

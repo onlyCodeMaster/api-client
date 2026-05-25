@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod db;
 pub mod secrets;
+pub mod sse;
 pub mod storage;
 
 use futures_util::{SinkExt, StreamExt};
@@ -692,6 +693,34 @@ async fn ws_close(
     Ok(())
 }
 
+// ============================================================================
+// Server-Sent Events (SSE) support
+// ============================================================================
+
+/// Open an SSE stream. Long-lived: returns as soon as the handshake succeeds;
+/// events are pushed via the `sse-event` Tauri channel until cancelled or the
+/// server closes the connection.
+#[tauri::command]
+async fn sse_connect(
+    app: AppHandle,
+    connections: State<'_, Arc<sse::SseConnections>>,
+    payload: sse::SseConnectPayload,
+) -> Result<(), String> {
+    // Verify-TLS default mirrors the regular HTTP send: we currently keep
+    // it on (the legacy `danger_accept_invalid_certs(true)` is gone after
+    // PR1). Per-request override is honored via payload.verify_tls.
+    sse::run_sse_stream(app, connections.inner().clone(), payload, true).await
+}
+
+#[tauri::command]
+async fn sse_close(
+    connections: State<'_, Arc<sse::SseConnections>>,
+    request_id: String,
+) -> Result<(), String> {
+    sse::close_sse_stream(connections.inner().clone(), request_id).await;
+    Ok(())
+}
+
 /// Write a response body to disk. Two modes:
 ///
 /// 1. **Truncated body**: when the response was too big to send over IPC in
@@ -752,6 +781,7 @@ pub fn run() {
     let database = db::Database::new().expect("Failed to initialize database");
     let active_requests = Arc::new(ActiveRequests::new());
     let ws_connections = Arc::new(WsConnections::default());
+    let sse_connections = Arc::new(sse::SseConnections::default());
     let cookies = Arc::new(AppCookies::new());
     let cached_bodies = Arc::new(CachedBodies::new());
     cookies.preload_from_db(&database);
@@ -762,6 +792,7 @@ pub fn run() {
         .manage(database)
         .manage(active_requests)
         .manage(ws_connections)
+        .manage(sse_connections)
         .manage(cookies)
         .manage(cached_bodies)
         .invoke_handler(tauri::generate_handler![
@@ -771,6 +802,8 @@ pub fn run() {
             ws_connect,
             ws_send,
             ws_close,
+            sse_connect,
+            sse_close,
             // History
             commands::save_history,
             commands::get_history,
