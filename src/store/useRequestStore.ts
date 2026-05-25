@@ -15,6 +15,7 @@ import type {
   WsMessage,
 } from "../types";
 import { postmanToCollection } from "../utils/postman";
+import { resolveAuth } from "../utils/auth";
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 15);
@@ -172,6 +173,10 @@ interface RequestState {
   reorderCollections: (fromId: string, toId: string) => void;
   reorderRequestsInCollection: (collectionId: string, fromId: string, toId: string) => Promise<void>;
   importPostmanCollection: (data: unknown) => Promise<void>;
+  /** Save a batch of already-built collections (used by every import format). */
+  importCollections: (cols: Collection[]) => Promise<void>;
+  updateCollection: (col: Collection) => Promise<void>;
+  setCollectionAuth: (collectionId: string, auth: AuthConfig | undefined) => Promise<void>;
   refreshCollections: () => Promise<void>;
 
   // Environments
@@ -203,6 +208,25 @@ interface RequestState {
 function activeTab(state: RequestState): RequestItem | null {
   if (!state.activeTabId) return null;
   return state.tabs.find((t) => t.id === state.activeTabId) ?? null;
+}
+
+/** Search a collection (including nested folders) for a request by id. */
+function findRequestInCollection(
+  collection: Collection,
+  requestId: string
+): CollectionRequest | null {
+  const direct = collection.requests.find((r) => r.id === requestId);
+  if (direct) return direct;
+  const walk = (folders: typeof collection.folders): CollectionRequest | null => {
+    for (const f of folders) {
+      const here = f.requests.find((r) => r.id === requestId);
+      if (here) return here;
+      const deeper = walk(f.folders);
+      if (deeper) return deeper;
+    }
+    return null;
+  };
+  return walk(collection.folders);
 }
 
 function updateActiveTab(
@@ -456,9 +480,12 @@ export const useRequestStore = create<RequestState>((set, get) => {
           .filter((h) => h.enabled && h.key)
           .map((h) => ({ key: sub(h.key), value: sub(h.value), enabled: h.enabled }));
 
-        // Inject auth
-        const auth = req.auth;
-        if (auth && auth.auth_type !== "none") {
+        // Inject auth. If the request's own auth is set to "inherit" (or is
+        // missing), walk up its source collection/folder to find the
+        // effective auth. A concrete `auth_type: "none"` opts the request out
+        // of inherited credentials.
+        const auth = resolveAuth(req, get().collections);
+        if (auth && auth.auth_type !== "none" && auth.auth_type !== "inherit") {
           if (auth.auth_type === "bearer" && auth.bearer_token) {
             headers.push({ key: "Authorization", value: `Bearer ${sub(auth.bearer_token)}`, enabled: true });
           } else if (auth.auth_type === "basic" && auth.basic_username) {
@@ -482,7 +509,12 @@ export const useRequestStore = create<RequestState>((set, get) => {
         }
 
         // API Key in query
-        if (auth?.auth_type === "api_key" && auth.api_key_in === "query" && auth.api_key_key) {
+        if (
+          auth &&
+          auth.auth_type === "api_key" &&
+          auth.api_key_in === "query" &&
+          auth.api_key_key
+        ) {
           const sep = finalUrl.includes("?") ? "&" : "?";
           finalUrl = `${finalUrl}${sep}${encodeURIComponent(sub(auth.api_key_key))}=${encodeURIComponent(sub(auth.api_key_value || ""))}`;
         }
@@ -670,6 +702,13 @@ export const useRequestStore = create<RequestState>((set, get) => {
       const col = state.collections.find((c) => c.id === collectionId);
       if (!col) return;
       const now = Date.now();
+      // Default new collection requests to inheriting auth from the
+      // collection/folder. If the user already configured concrete auth on
+      // this tab, keep it.
+      const auth: AuthConfig =
+        req.auth && req.auth.auth_type !== "inherit"
+          ? req.auth
+          : { auth_type: "inherit" };
       const colReq: CollectionRequest = {
         id: req.id,
         name: req.name,
@@ -679,10 +718,15 @@ export const useRequestStore = create<RequestState>((set, get) => {
         params: req.params,
         body: req.body,
         body_type: req.bodyType,
-        auth: req.auth,
+        auth,
         created_at: req.createdAt,
         updated_at: now,
       };
+      // Tag the open tab with its source collection so future inheritance
+      // resolution works without a reload.
+      set((s) => ({
+        ...updateActiveTab(s, { collectionId, auth }),
+      }));
       const updated = { ...col, requests: [...col.requests, colReq], updated_at: now };
       await invoke("save_collection", { collection: updated });
       set((s) => ({ collections: s.collections.map((c) => (c.id === collectionId ? updated : c)) }));
@@ -692,10 +736,14 @@ export const useRequestStore = create<RequestState>((set, get) => {
       const { collections } = get();
       const col = collections.find((c) => c.id === collectionId);
       if (!col) return;
-      const req = col.requests.find((r) => r.id === requestId);
+      const req = findRequestInCollection(col, requestId);
       if (!req) return;
       const requestItem: RequestItem = {
-        id: generateId(),
+        // Keep the original collection request id (not a freshly generated
+        // one) so the auth-inheritance walker can locate this request's
+        // parent folder inside the collection tree. Re-opening the same
+        // collection request reactivates the existing tab.
+        id: req.id,
         name: req.name,
         method: req.method as HttpMethod,
         url: req.url,
@@ -705,6 +753,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
         bodyType: req.body_type as RequestItem["bodyType"],
         formData: [createEmptyKeyValue()],
         auth: req.auth,
+        collectionId,
         protocol: "http",
         createdAt: req.created_at,
       };
@@ -765,10 +814,29 @@ export const useRequestStore = create<RequestState>((set, get) => {
 
     importPostmanCollection: async (data) => {
       const cols = postmanToCollection(data);
+      await get().importCollections(cols);
+    },
+
+    importCollections: async (cols) => {
       for (const col of cols) {
         await invoke("save_collection", { collection: col });
       }
       set((state) => ({ collections: [...state.collections, ...cols] }));
+    },
+
+    updateCollection: async (col) => {
+      const updated = { ...col, updated_at: Date.now() };
+      await invoke("save_collection", { collection: updated });
+      set((s) => ({
+        collections: s.collections.map((c) => (c.id === updated.id ? updated : c)),
+      }));
+    },
+
+    setCollectionAuth: async (collectionId, auth) => {
+      const { collections } = get();
+      const col = collections.find((c) => c.id === collectionId);
+      if (!col) return;
+      await get().updateCollection({ ...col, auth });
     },
 
     refreshCollections: async () => {

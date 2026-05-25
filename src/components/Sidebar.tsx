@@ -16,12 +16,36 @@ import {
   Upload,
   Download,
   ChevronDown,
+  KeyRound,
 } from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
 import { EnvironmentPanel } from "./EnvironmentPanel";
 import { CookiesPanel } from "./CookiesPanel";
 import { SettingsPanel } from "./SettingsPanel";
-import { collectionToPostman } from "../utils/postman";
+import { collectionToPostman, postmanToCollection } from "../utils/postman";
+import { openapiToCollection } from "../utils/openapi";
+import { insomniaToCollections } from "../utils/insomnia";
+import { harToCollection } from "../utils/har";
+import { httpFileToCollection } from "../utils/http-file";
+import { CollectionAuthModal } from "./CollectionAuthModal";
+
+/** Heuristic format sniffers used by `handleImportFile`. */
+function isHar(d: unknown): boolean {
+  const r = d as { log?: { version?: unknown; entries?: unknown } } | null;
+  return !!r && typeof r.log === "object" && Array.isArray(r.log?.entries);
+}
+function isOpenApi(d: unknown): boolean {
+  const r = d as { openapi?: string; swagger?: string; paths?: unknown } | null;
+  return !!r && (typeof r.openapi === "string" || typeof r.swagger === "string") && typeof r.paths === "object";
+}
+function isInsomnia(d: unknown): boolean {
+  const r = d as { _type?: string; resources?: unknown } | null;
+  return !!r && r._type === "export" && Array.isArray(r.resources);
+}
+function isPostman(d: unknown): boolean {
+  const r = d as { info?: { schema?: string } } | null;
+  return !!r && typeof r.info?.schema === "string" && r.info.schema.includes("postman");
+}
 
 const METHOD_BADGE: Record<string, string> = {
   GET: "bg-success/15 text-success",
@@ -45,6 +69,7 @@ export function Sidebar() {
   const [renamingRequest, setRenamingRequest] = useState<{ colId: string; reqId: string } | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [showEnvDropdown, setShowEnvDropdown] = useState(false);
+  const [editingAuthCollectionId, setEditingAuthCollectionId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -98,6 +123,7 @@ export function Sidebar() {
     reorderCollections,
     reorderRequestsInCollection,
     importPostmanCollection,
+    importCollections,
     setActiveEnvironment,
     activeRequestId,
   } = useRequestStore();
@@ -149,15 +175,41 @@ export function Sidebar() {
 
   const activeEnv = environments.find((e) => e.id === workspace?.active_environment_id);
 
-  const handleImportPostman = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  /**
+   * Auto-detect the import format from the file name and contents. We try in
+   * descending order of specificity so e.g. an OpenAPI YAML doesn't get
+   * misclassified as a Postman JSON.
+   */
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
       const text = await file.text();
-      const data = JSON.parse(text);
-      await importPostmanCollection(data);
+      const name = file.name.toLowerCase();
+
+      if (name.endsWith(".http") || name.endsWith(".rest")) {
+        await importCollections([httpFileToCollection(text, file.name)]);
+      } else if (name.endsWith(".yaml") || name.endsWith(".yml")) {
+        await importCollections([openapiToCollection(text)]);
+      } else {
+        // JSON-based formats: sniff the contents.
+        const data = JSON.parse(text);
+        if (isHar(data)) {
+          await importCollections([harToCollection(data)]);
+        } else if (isOpenApi(data)) {
+          await importCollections([openapiToCollection(data)]);
+        } else if (isInsomnia(data)) {
+          await importCollections(insomniaToCollections(data));
+        } else if (isPostman(data)) {
+          await importPostmanCollection(data);
+        } else {
+          // Fall back to Postman so legacy files still work — postmanToCollection
+          // is lenient enough to wrap any item-shaped object.
+          await importCollections(postmanToCollection(data));
+        }
+      }
     } catch (err) {
-      alert(`Failed to import Postman collection: ${String(err)}`);
+      alert(`Failed to import collection: ${String(err)}`);
     } finally {
       e.target.value = "";
     }
@@ -410,7 +462,7 @@ export function Sidebar() {
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     className="flex items-center gap-1 text-[11px] text-text-tertiary hover:text-accent transition-colors"
-                    title="Import Postman v2.1 collection"
+                    title="Import Postman / OpenAPI / Insomnia / HAR / .http file"
                   >
                     <Upload size={11} />
                     Import
@@ -418,9 +470,9 @@ export function Sidebar() {
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".json,application/json"
+                    accept=".json,.yaml,.yml,.har,.http,.rest,application/json,text/yaml"
                     className="hidden"
-                    onChange={handleImportPostman}
+                    onChange={handleImportFile}
                   />
                 </div>
               )}
@@ -485,6 +537,23 @@ export function Sidebar() {
                       title="Rename collection"
                     >
                       <Pencil size={11} className="text-text-tertiary" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingAuthCollectionId(collection.id);
+                      }}
+                      className={`opacity-0 group-hover:opacity-100 p-0.5 hover:bg-accent/10 rounded-md transition-all ${collection.auth && collection.auth.auth_type !== "none" ? "!opacity-100" : ""}`}
+                      title={
+                        collection.auth && collection.auth.auth_type !== "none"
+                          ? `Edit collection auth (currently ${collection.auth.auth_type})`
+                          : "Set collection auth (inherited by requests with 'Inherit')"
+                      }
+                    >
+                      <KeyRound
+                        size={11}
+                        className={collection.auth && collection.auth.auth_type !== "none" ? "text-accent" : "text-text-tertiary"}
+                      />
                     </button>
                     <button
                       onClick={(e) => {
@@ -606,6 +675,10 @@ export function Sidebar() {
       {showEnvPanel && <EnvironmentPanel onClose={() => setShowEnvPanel(false)} />}
       {showCookies && <CookiesPanel onClose={() => setShowCookies(false)} />}
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
+      <CollectionAuthModal
+        collectionId={editingAuthCollectionId}
+        onClose={() => setEditingAuthCollectionId(null)}
+      />
     </div>
   );
 }
