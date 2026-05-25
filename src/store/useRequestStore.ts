@@ -503,8 +503,12 @@ export const useRequestStore = create<RequestState>((set, get) => {
       const state = get();
       const req = activeTab(state);
       if (!req || !req.url) return;
-      // WebSocket tabs use wsConnect/wsSend rather than sendRequest.
-      if (req.protocol === "websocket") return;
+      // Streaming protocols (WS, SSE) have their own connect/disconnect flow
+      // (wsConnect / sseConnect). Cmd+Enter is wired to sendRequest globally,
+      // so without this guard hitting the shortcut on an SSE tab would fire
+      // an HTTP GET against the event-stream endpoint and try to buffer the
+      // entire long-lived response.
+      if (req.protocol === "websocket" || req.protocol === "sse") return;
 
       const reqId = req.id;
       set((s) => ({
