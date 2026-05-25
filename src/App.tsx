@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Sidebar } from "./components/Sidebar";
 import { RequestPanel } from "./components/RequestPanel";
@@ -6,6 +6,7 @@ import { ResponsePanel } from "./components/ResponsePanel";
 import { TabBar } from "./components/TabBar";
 import { WsPanel } from "./components/WsPanel";
 import { SsePanel } from "./components/SsePanel";
+import { SearchPalette } from "./components/SearchPalette";
 import { useRequestStore } from "./store/useRequestStore";
 
 interface WsEvent {
@@ -28,6 +29,7 @@ function App() {
   const initialize = useRequestStore((s) => s.initialize);
   const initialized = useRequestStore((s) => s.initialized);
   const activeRequest = useRequestStore((s) => s.activeRequest);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => {
     initialize();
@@ -69,6 +71,13 @@ function App() {
     if (isMeta && e.key === "Enter") {
       e.preventDefault();
       useRequestStore.getState().sendRequest();
+      return;
+    }
+
+    // Cmd+P / Cmd+K: Open search palette
+    if (isMeta && (e.key === "p" || e.key === "k")) {
+      e.preventDefault();
+      setPaletteOpen(true);
       return;
     }
 
@@ -141,6 +150,7 @@ function App() {
           </div>
         </div>
       </div>
+      {paletteOpen && <SearchPalette onClose={() => setPaletteOpen(false)} />}
     </div>
   );
 }

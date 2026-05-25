@@ -94,6 +94,11 @@ export interface RequestItem {
    * to record assertions surfaced in the response panel.
    */
   testScript?: string;
+  /**
+   * Free-form labels for filtering and color-coding in the sidebar (e.g.
+   * "auth", "v2", "broken"). Persisted with the collection on save.
+   */
+  tags?: string[];
   createdAt: number;
   updatedAt?: number;
 }
@@ -176,6 +181,8 @@ export interface CollectionRequest {
   pre_script?: string;
   /** Post-response test script source. */
   test_script?: string;
+  /** User-defined labels used for filtering & color-coding in the sidebar. */
+  tags?: string[];
   created_at: number;
   updated_at: number;
 }

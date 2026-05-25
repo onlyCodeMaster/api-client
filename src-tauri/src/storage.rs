@@ -60,6 +60,11 @@ pub struct CollectionRequest {
     /// Post-response test script source. Runs in the frontend Web Worker sandbox.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub test_script: Option<String>,
+    /// User-defined free-form labels used for filtering & color-coding in the
+    /// sidebar. Empty / missing == no tags. Pure metadata — not sent with the
+    /// request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }

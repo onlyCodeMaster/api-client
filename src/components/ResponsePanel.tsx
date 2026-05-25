@@ -1,7 +1,9 @@
 import { useState, useMemo } from "react";
-import { Copy, Check, ArrowUpRight, Search, X, Download, AlertTriangle, FileQuestion, GitCompare } from "lucide-react";
+import { Copy, Check, ArrowUpRight, Search, X, Download, AlertTriangle, FileQuestion, GitCompare, ListTree, FileCode2 } from "lucide-react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { JsonView, defaultStyles, darkStyles } from "react-json-view-lite";
+import "react-json-view-lite/dist/index.css";
 import { useRequestStore } from "../store/useRequestStore";
 import { ResponseDiffModal } from "./ResponseDiffModal";
 
@@ -137,6 +139,10 @@ export function ResponsePanel() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [diffOpen, setDiffOpen] = useState(false);
+  // Body view mode: raw pretty-printed text (default) or interactive JSON
+  // tree. Only meaningful when the body is valid JSON; for everything else
+  // we fall back to raw regardless of this setting.
+  const [bodyView, setBodyView] = useState<"raw" | "tree">("raw");
   const { response, loading, error, activeRequest, testResults, scriptLogs, scriptError, responseHistory } = useRequestStore();
   const snapshots = activeRequest ? responseHistory[activeRequest.id] ?? [] : [];
   const canDiff = snapshots.length >= 2;
@@ -159,6 +165,29 @@ export function ResponsePanel() {
     () => (response && !isBinary ? isJson(response.body) : false),
     [response?.body, isBinary]
   );
+
+  // Parsed JSON value for the tree view. Kept separate from `bodyIsJson`
+  // so we don't pay the parse cost again if the user is just looking at
+  // the raw body.
+  const parsedJson = useMemo(() => {
+    if (!bodyIsJson || !response?.body) return undefined;
+    try {
+      return JSON.parse(response.body) as unknown;
+    } catch {
+      return undefined;
+    }
+  }, [bodyIsJson, response?.body]);
+
+  const treeStyles = useMemo(() => {
+    // Pick the JSON tree theme that goes with the app's current
+    // light/dark setting. The store doesn't expose dark-mode state yet,
+    // so detect via the html element's class — set elsewhere by the
+    // SettingsPanel theme toggle.
+    const isDark =
+      typeof document !== "undefined" &&
+      document.documentElement.classList.contains("dark");
+    return isDark ? darkStyles : defaultStyles;
+  }, []);
 
   const highlightedSearchBody = useMemo(() => {
     if (!searchQuery || !formattedBody) return null;
@@ -300,6 +329,19 @@ export function ResponsePanel() {
               </button>
             )}
           </div>
+          {activeTab === "body" && bodyIsJson && (
+            <button
+              onClick={() => setBodyView((v) => (v === "raw" ? "tree" : "raw"))}
+              className={`ml-1.5 w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${bodyView === "tree" ? "bg-accent/15" : "hover:bg-black/5"}`}
+              title={bodyView === "tree" ? "Show raw JSON" : "Show JSON tree"}
+            >
+              {bodyView === "tree" ? (
+                <FileCode2 size={14} className="text-accent" />
+              ) : (
+                <ListTree size={14} className="text-text-tertiary" />
+              )}
+            </button>
+          )}
           <button
             onClick={() => setSearchOpen((s) => !s)}
             className={`ml-1.5 w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${searchOpen ? "bg-accent/15" : "hover:bg-black/5"}`}
@@ -395,7 +437,17 @@ export function ResponsePanel() {
             </pre>
           </div>
         )}
-        {activeTab === "body" && !isBinary && (
+        {activeTab === "body" && !isBinary && bodyView === "tree" && bodyIsJson && parsedJson !== undefined && (
+          <div className="text-[12px] font-mono bg-surface-secondary rounded-apple p-3 overflow-auto json-tree-host">
+            <JsonView
+              data={parsedJson as object}
+              clickToExpandNode
+              shouldExpandNode={(level) => level < 2}
+              style={treeStyles}
+            />
+          </div>
+        )}
+        {activeTab === "body" && !isBinary && (bodyView === "raw" || !bodyIsJson || parsedJson === undefined) && (
           <pre className="text-[12px] font-mono text-text-primary whitespace-pre-wrap break-all leading-[1.65] bg-surface-secondary rounded-apple p-3">
             {searchQuery
               ? highlightedSearchBody
