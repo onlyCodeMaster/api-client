@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, XCircle, Copy, FileDown, Check } from "lucide-react";
+import { Send, XCircle, Copy, FileDown, Check, Code2, Timer, Cable } from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
 import { KeyValueEditor } from "./KeyValueEditor";
+import { CodegenModal } from "./CodegenModal";
 import { exportCurl, parseCurl } from "../utils/curl";
 import type { HttpMethod } from "../types";
 
@@ -17,7 +18,7 @@ const METHOD_COLORS: Record<HttpMethod, string> = {
   OPTIONS: "text-text-secondary",
 };
 
-type RequestTab = "params" | "headers" | "body" | "auth";
+type RequestTab = "params" | "headers" | "body" | "auth" | "settings";
 
 export function RequestPanel() {
   const [activeTab, setActiveTab] = useState<RequestTab>("params");
@@ -33,26 +34,33 @@ export function RequestPanel() {
     setFormData,
     setAuth,
     setName,
+    setTimeoutMs,
+    setProtocol,
+    setGraphqlQuery,
+    setGraphqlVariables,
     sendRequest,
     cancelRequest,
+    defaultTimeoutMs,
   } = useRequestStore();
 
   const urlRef = useRef<HTMLInputElement>(null);
   const [showCurlImport, setShowCurlImport] = useState(false);
   const [curlInput, setCurlInput] = useState("");
   const [curlCopied, setCurlCopied] = useState(false);
+  const [showCodegen, setShowCodegen] = useState(false);
 
   useEffect(() => {
     urlRef.current?.focus();
   }, [activeRequest?.id]);
 
   if (!activeRequest) return null;
+  const isWs = activeRequest.protocol === "websocket";
 
   const tabs: { id: RequestTab; label: string }[] = [
     { id: "params", label: "Params" },
     { id: "headers", label: "Headers" },
-    { id: "body", label: "Body" },
-    { id: "auth", label: "Auth" },
+    ...(isWs ? [] : ([{ id: "body" as const, label: "Body" }, { id: "auth" as const, label: "Auth" }])),
+    { id: "settings", label: "Settings" },
   ];
 
   const paramCount = activeRequest.params.filter((p) => p.key).length;
@@ -61,7 +69,7 @@ export function RequestPanel() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Request Name + cURL buttons */}
+      {/* Request Name + action buttons */}
       <div className="px-4 pt-3 pb-0 flex items-center gap-2">
         <input
           type="text"
@@ -70,6 +78,23 @@ export function RequestPanel() {
           className="text-[13px] text-text-secondary bg-transparent border-0 outline-none flex-1 px-0 py-0.5 placeholder-text-tertiary focus:text-text-primary transition-colors"
           placeholder="Request name..."
         />
+        <div className="segmented-control">
+          <button
+            onClick={() => setProtocol("http")}
+            className={`segment !text-[11px] ${!isWs ? "segment-active" : ""}`}
+            title="HTTP"
+          >
+            HTTP
+          </button>
+          <button
+            onClick={() => setProtocol("websocket")}
+            className={`segment !text-[11px] ${isWs ? "segment-active" : ""}`}
+            title="WebSocket"
+          >
+            <Cable size={11} className="inline -mt-0.5 mr-0.5" />
+            WS
+          </button>
+        </div>
         <button
           onClick={() => {
             const curl = exportCurl(activeRequest);
@@ -90,6 +115,14 @@ export function RequestPanel() {
         >
           <FileDown size={12} />
           Import
+        </button>
+        <button
+          onClick={() => setShowCodegen(true)}
+          className="flex items-center gap-1 text-[11px] text-text-tertiary hover:text-accent transition-colors shrink-0"
+          title="Generate code"
+        >
+          <Code2 size={12} />
+          Code
         </button>
       </div>
 
@@ -132,17 +165,22 @@ export function RequestPanel() {
 
       {/* URL Bar */}
       <div className="flex items-center gap-2 px-4 py-3">
-        <select
-          value={activeRequest.method}
-          onChange={(e) => setMethod(e.target.value as HttpMethod)}
-          className={`input-apple font-semibold w-[100px] ${METHOD_COLORS[activeRequest.method]}`}
-        >
-          {METHODS.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
+        {!isWs && (
+          <select
+            value={activeRequest.method}
+            onChange={(e) => setMethod(e.target.value as HttpMethod)}
+            className={`input-apple font-semibold w-[100px] ${METHOD_COLORS[activeRequest.method]}`}
+          >
+            {METHODS.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        )}
+        {isWs && (
+          <div className="input-apple font-semibold w-[100px] text-accent text-center">WS</div>
+        )}
 
         <input
           ref={urlRef}
@@ -150,29 +188,33 @@ export function RequestPanel() {
           value={activeRequest.url}
           onChange={(e) => setUrl(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") sendRequest();
+            if (e.key === "Enter" && !isWs) sendRequest();
           }}
-          placeholder="https://api.example.com/endpoint"
+          placeholder={
+            isWs ? "wss://echo.websocket.events" : "https://api.example.com/endpoint"
+          }
           className="input-apple flex-1"
         />
 
-        {loading ? (
-          <button
-            onClick={cancelRequest}
-            className="px-4 py-2 bg-error text-white font-medium rounded-apple text-[13px] hover:bg-error/90 active:scale-[0.97] transition-all shadow-apple-sm flex items-center gap-1.5"
-          >
-            <XCircle size={14} />
-            Cancel
-          </button>
-        ) : (
-          <button
-            onClick={sendRequest}
-            disabled={!activeRequest.url}
-            className="btn-send flex items-center gap-1.5"
-          >
-            <Send size={14} />
-            Send
-          </button>
+        {!isWs && (
+          loading ? (
+            <button
+              onClick={cancelRequest}
+              className="px-4 py-2 bg-error text-white font-medium rounded-apple text-[13px] hover:bg-error/90 active:scale-[0.97] transition-all shadow-apple-sm flex items-center gap-1.5"
+            >
+              <XCircle size={14} />
+              Cancel
+            </button>
+          ) : (
+            <button
+              onClick={sendRequest}
+              disabled={!activeRequest.url}
+              className="btn-send flex items-center gap-1.5"
+            >
+              <Send size={14} />
+              Send
+            </button>
+          )
         )}
       </div>
 
@@ -217,16 +259,16 @@ export function RequestPanel() {
           />
         )}
 
-        {activeTab === "body" && (
+        {activeTab === "body" && !isWs && (
           <div className="space-y-3">
-            <div className="segmented-control">
-              {(["none", "json", "text", "xml", "form-data"] as const).map((type) => (
+            <div className="segmented-control flex-wrap">
+              {(["none", "json", "text", "xml", "form-data", "graphql"] as const).map((type) => (
                 <button
                   key={type}
                   onClick={() => setBodyType(type)}
                   className={`segment ${activeRequest.bodyType === type ? "segment-active" : ""}`}
                 >
-                  {type === "form-data" ? "Form" : type.charAt(0).toUpperCase() + type.slice(1)}
+                  {type === "form-data" ? "Form" : type === "graphql" ? "GraphQL" : type.charAt(0).toUpperCase() + type.slice(1)}
                 </button>
               ))}
             </div>
@@ -236,25 +278,48 @@ export function RequestPanel() {
                 onChange={setFormData}
                 keyPlaceholder="Field name"
                 valuePlaceholder="Value"
+                allowFiles
               />
             )}
-            {activeRequest.bodyType !== "none" && activeRequest.bodyType !== "form-data" && (
-              <textarea
-                value={activeRequest.body}
-                onChange={(e) => setBody(e.target.value)}
-                placeholder={
-                  activeRequest.bodyType === "json"
-                    ? '{\n  "key": "value"\n}'
-                    : "Enter request body..."
-                }
-                className="input-apple w-full h-40 font-mono text-[12px] resize-none leading-relaxed"
-                spellCheck={false}
-              />
+            {activeRequest.bodyType === "graphql" && (
+              <div className="space-y-2">
+                <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Query</label>
+                <textarea
+                  value={activeRequest.graphqlQuery || ""}
+                  onChange={(e) => setGraphqlQuery(e.target.value)}
+                  placeholder={"query Example {\n  field\n}"}
+                  className="input-apple w-full h-32 font-mono text-[12px] resize-none leading-relaxed"
+                  spellCheck={false}
+                />
+                <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Variables (JSON)</label>
+                <textarea
+                  value={activeRequest.graphqlVariables || ""}
+                  onChange={(e) => setGraphqlVariables(e.target.value)}
+                  placeholder={'{\n  "id": 1\n}'}
+                  className="input-apple w-full h-24 font-mono text-[12px] resize-none leading-relaxed"
+                  spellCheck={false}
+                />
+              </div>
             )}
+            {activeRequest.bodyType !== "none" &&
+              activeRequest.bodyType !== "form-data" &&
+              activeRequest.bodyType !== "graphql" && (
+                <textarea
+                  value={activeRequest.body}
+                  onChange={(e) => setBody(e.target.value)}
+                  placeholder={
+                    activeRequest.bodyType === "json"
+                      ? '{\n  "key": "value"\n}'
+                      : "Enter request body..."
+                  }
+                  className="input-apple w-full h-40 font-mono text-[12px] resize-none leading-relaxed"
+                  spellCheck={false}
+                />
+              )}
           </div>
         )}
 
-        {activeTab === "auth" && (
+        {activeTab === "auth" && !isWs && (
           <div className="space-y-3">
             <div className="segmented-control">
               {(["none", "bearer", "basic", "api_key"] as const).map((type) => (
@@ -357,7 +422,40 @@ export function RequestPanel() {
             )}
           </div>
         )}
+
+        {activeTab === "settings" && (
+          <div className="space-y-3">
+            <div>
+              <label className="flex items-center gap-1.5 text-[11px] font-medium text-text-secondary uppercase tracking-wider mb-1.5">
+                <Timer size={11} />
+                Timeout (ms)
+              </label>
+              <input
+                type="number"
+                value={activeRequest.timeoutMs ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value.trim();
+                  if (v === "") setTimeoutMs(undefined);
+                  else {
+                    const n = parseInt(v, 10);
+                    if (Number.isFinite(n) && n > 0) setTimeoutMs(n);
+                  }
+                }}
+                placeholder={`Default: ${defaultTimeoutMs} ms`}
+                className="input-apple w-48 text-[12px]"
+                min={1}
+              />
+              <p className="text-[11px] text-text-tertiary mt-1">
+                Leave empty to use the global default.
+              </p>
+            </div>
+          </div>
+        )}
       </div>
+
+      {showCodegen && activeRequest && (
+        <CodegenModal request={activeRequest} onClose={() => setShowCodegen(false)} />
+      )}
     </div>
   );
 }

@@ -1,16 +1,37 @@
 import { useEffect, useCallback } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { Sidebar } from "./components/Sidebar";
 import { RequestPanel } from "./components/RequestPanel";
 import { ResponsePanel } from "./components/ResponsePanel";
+import { TabBar } from "./components/TabBar";
+import { WsPanel } from "./components/WsPanel";
 import { useRequestStore } from "./store/useRequestStore";
+
+interface WsEvent {
+  request_id: string;
+  kind: string;
+  text: string | null;
+}
 
 function App() {
   const initialize = useRequestStore((s) => s.initialize);
   const initialized = useRequestStore((s) => s.initialized);
+  const activeRequest = useRequestStore((s) => s.activeRequest);
 
   useEffect(() => {
     initialize();
   }, [initialize]);
+
+  // Listen for WS events from the Rust backend
+  useEffect(() => {
+    const unlistenPromise = listen<WsEvent>("ws-event", (event) => {
+      const { request_id, kind, text } = event.payload;
+      useRequestStore.getState().appendWsEvent(request_id, kind, text);
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
 
   // Global keyboard shortcuts
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
@@ -23,10 +44,18 @@ function App() {
       return;
     }
 
-    // Cmd+N: New request
-    if (isMeta && e.key === "n") {
+    // Cmd+N or Cmd+T: New request / tab
+    if (isMeta && (e.key === "n" || e.key === "t")) {
       e.preventDefault();
       useRequestStore.getState().createNewRequest();
+      return;
+    }
+
+    // Cmd+W: Close active tab
+    if (isMeta && e.key === "w") {
+      e.preventDefault();
+      const { activeTabId } = useRequestStore.getState();
+      if (activeTabId) useRequestStore.getState().closeTab(activeTabId);
       return;
     }
 
@@ -66,16 +95,19 @@ function App() {
     );
   }
 
+  const isWs = activeRequest?.protocol === "websocket";
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-bg">
       <Sidebar />
       <div className="flex-1 flex flex-col overflow-hidden">
+        <TabBar />
         <div className="flex-1 flex flex-col gap-0 p-3 pl-0 h-full">
           <div className="bg-surface rounded-t-apple-lg shadow-apple overflow-hidden flex flex-col" style={{ height: "48%" }}>
             <RequestPanel />
           </div>
           <div className="bg-surface rounded-b-apple-lg shadow-apple overflow-hidden flex-1 flex flex-col border-t border-border-light">
-            <ResponsePanel />
+            {isWs ? <WsPanel /> : <ResponsePanel />}
           </div>
         </div>
       </div>
