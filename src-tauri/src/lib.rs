@@ -132,6 +132,25 @@ impl ActiveRequests {
     }
 }
 
+/// Cache of full response bodies that were too big to send over IPC in one
+/// piece. Keyed by request id (the same id used for cancellation), so a Save
+/// click can retrieve the complete bytes without having to re-issue the
+/// request (which would be wrong for non-idempotent methods like POST).
+///
+/// The cache only ever holds the **most recent** body for a given request id,
+/// so memory usage is bounded by the largest single response per request slot.
+pub struct CachedBodies {
+    map: Mutex<HashMap<String, bytes::Bytes>>,
+}
+
+impl CachedBodies {
+    pub fn new() -> Self {
+        Self {
+            map: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
 /// Shared cookie jar used by every HTTP client and persisted to SQLite.
 pub struct AppCookies {
     pub jar: Arc<Jar>,
@@ -228,6 +247,7 @@ async fn cancel_request(
 async fn send_request(
     active_requests: State<'_, Arc<ActiveRequests>>,
     cookies: State<'_, Arc<AppCookies>>,
+    cached_bodies: State<'_, Arc<CachedBodies>>,
     db: State<'_, db::Database>,
     payload: RequestPayload,
 ) -> Result<ResponseData, String> {
@@ -401,6 +421,18 @@ async fn send_request(
             "base64".to_string(),
         )
     };
+
+    // Stash the full bytes when we had to truncate, so a subsequent Save can
+    // recover them. Otherwise drop any stale entry from a previous response
+    // in this same request slot so we don't hold onto memory unnecessarily.
+    if !request_id.is_empty() {
+        let mut cache = cached_bodies.map.lock().await;
+        if truncated {
+            cache.insert(request_id.clone(), body_bytes.clone());
+        } else {
+            cache.remove(&request_id);
+        }
+    }
 
     Ok(ResponseData {
         status,
@@ -613,19 +645,45 @@ async fn ws_close(
     Ok(())
 }
 
-/// Write the most recently displayed response body to disk. The frontend
-/// chooses the destination via the native save dialog, then passes the data
-/// it already has back to us — we just put bytes on the filesystem.
+/// Write a response body to disk. Two modes:
 ///
-/// `encoding` matches `ResponseData.body_encoding`: `"text"` writes the
-/// string verbatim, `"base64"` decodes first so the file on disk is the
-/// original binary content.
+/// 1. **Truncated body**: when the response was too big to send over IPC in
+///    full, the backend stashed the original bytes in `CachedBodies` keyed by
+///    `request_id`. Pass `use_cached: true` and the matching `request_id` to
+///    write the complete body — the truncated `body`/`encoding` arguments are
+///    ignored in this mode.
+///
+/// 2. **Inline body** (default): the frontend sends back the `body` it
+///    already has, and we write those bytes verbatim. `encoding` matches
+///    `ResponseData.body_encoding`: `"text"` writes the string verbatim,
+///    `"base64"` decodes first so the file on disk is the original binary.
 #[tauri::command]
 async fn save_response_to_file(
+    cached_bodies: State<'_, Arc<CachedBodies>>,
     path: String,
     body: String,
     encoding: String,
+    #[allow(non_snake_case)] request_id: Option<String>,
+    #[allow(non_snake_case)] use_cached: Option<bool>,
 ) -> Result<(), String> {
+    if use_cached.unwrap_or(false) {
+        let rid = request_id.unwrap_or_default();
+        if rid.is_empty() {
+            return Err("Cannot save full body: no request id was provided.".to_string());
+        }
+        let cache = cached_bodies.map.lock().await;
+        let Some(bytes) = cache.get(&rid) else {
+            return Err(
+                "Full response body is no longer cached. Re-send the request and try again."
+                    .to_string(),
+            );
+        };
+        tokio::fs::write(&path, bytes.as_ref())
+            .await
+            .map_err(|e| format!("Failed to write file '{}': {}", path, e))?;
+        return Ok(());
+    }
+
     let bytes: Vec<u8> = if encoding == "base64" {
         base64::engine::general_purpose::STANDARD
             .decode(body.as_bytes())
@@ -645,6 +703,7 @@ pub fn run() {
     let active_requests = Arc::new(ActiveRequests::new());
     let ws_connections = Arc::new(WsConnections::default());
     let cookies = Arc::new(AppCookies::new());
+    let cached_bodies = Arc::new(CachedBodies::new());
     cookies.preload_from_db(&database);
 
     tauri::Builder::default()
@@ -654,6 +713,7 @@ pub fn run() {
         .manage(active_requests)
         .manage(ws_connections)
         .manage(cookies)
+        .manage(cached_bodies)
         .invoke_handler(tauri::generate_handler![
             send_request,
             cancel_request,

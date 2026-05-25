@@ -32,3 +32,4 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 keyring = "2"
 dirs = "5"
 thiserror = "1"
+bytes = "1.11.1"

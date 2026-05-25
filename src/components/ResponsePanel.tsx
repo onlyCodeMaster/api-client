@@ -192,10 +192,15 @@ export function ResponsePanel() {
     const suggested = defaultFileName(activeRequest?.url || "", mime);
     const path = await saveFileDialog({ defaultPath: suggested });
     if (!path) return;
+    // When the body was truncated for display, ask the backend to write the
+    // full cached bytes from the most recent send. Otherwise just write the
+    // bytes we already have in the frontend.
     await invoke("save_response_to_file", {
       path,
       body: response.body,
       encoding: response.body_encoding,
+      requestId: activeRequest?.id,
+      useCached: response.body_truncated,
     });
     setSavedFlash(true);
     setTimeout(() => setSavedFlash(false), 1500);

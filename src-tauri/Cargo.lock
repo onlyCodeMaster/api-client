@@ -75,6 +75,7 @@ name = "api-client"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "bytes",
  "chrono",
  "cookie",
  "dirs 5.0.1",
