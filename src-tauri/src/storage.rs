@@ -95,13 +95,42 @@ pub struct CollectionFile {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AuthConfig {
-    pub auth_type: String, // "none" | "bearer" | "basic" | "api_key"
+    pub auth_type: String, // "none" | "bearer" | "basic" | "api_key" | "oauth2"
     pub bearer_token: Option<String>,
     pub basic_username: Option<String>,
     pub basic_password: Option<String>,
     pub api_key_key: Option<String>,
     pub api_key_value: Option<String>,
     pub api_key_in: Option<String>, // "header" | "query"
+
+    // OAuth2 fields. Populated only when auth_type == "oauth2".
+    /// "client_credentials" | "password"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth2_grant_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth2_token_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth2_client_id: Option<String>,
+    /// Stored in keychain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth2_client_secret: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth2_scope: Option<String>,
+    /// "basic" (send creds in HTTP Basic header) | "body" (in request body).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth2_client_auth: Option<String>,
+    /// Required for grant_type=password.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth2_username: Option<String>,
+    /// Required for grant_type=password. Stored in keychain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth2_password: Option<String>,
+    /// Cached access token from the most recent fetch. Stored in keychain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth2_access_token: Option<String>,
+    /// Unix millis when the cached token stops being valid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth2_token_expires_at: Option<i64>,
 }
 
 // === Environment Types ===
@@ -154,6 +183,9 @@ pub struct WindowState {
 const AUTH_BEARER: &str = "bearer_token";
 const AUTH_BASIC_PWD: &str = "basic_password";
 const AUTH_API_KEY_VALUE: &str = "api_key_value";
+const AUTH_OAUTH2_CLIENT_SECRET: &str = "oauth2_client_secret";
+const AUTH_OAUTH2_PASSWORD: &str = "oauth2_password";
+const AUTH_OAUTH2_ACCESS_TOKEN: &str = "oauth2_access_token";
 
 fn sanitize_auth(auth: &mut Option<AuthConfig>, scope_id: &str) {
     let Some(a) = auth.as_mut() else { return };
@@ -185,6 +217,30 @@ fn sanitize_auth(auth: &mut Option<AuthConfig>, scope_id: &str) {
         }
         a.api_key_value = Some(String::new());
     }
+    if let Some(v) = a.oauth2_client_secret.as_deref() {
+        if !v.is_empty() {
+            let _ = secrets::store_auth_secret(scope_id, AUTH_OAUTH2_CLIENT_SECRET, v);
+        } else {
+            let _ = secrets::delete_auth_secret(scope_id, AUTH_OAUTH2_CLIENT_SECRET);
+        }
+        a.oauth2_client_secret = Some(String::new());
+    }
+    if let Some(v) = a.oauth2_password.as_deref() {
+        if !v.is_empty() {
+            let _ = secrets::store_auth_secret(scope_id, AUTH_OAUTH2_PASSWORD, v);
+        } else {
+            let _ = secrets::delete_auth_secret(scope_id, AUTH_OAUTH2_PASSWORD);
+        }
+        a.oauth2_password = Some(String::new());
+    }
+    if let Some(v) = a.oauth2_access_token.as_deref() {
+        if !v.is_empty() {
+            let _ = secrets::store_auth_secret(scope_id, AUTH_OAUTH2_ACCESS_TOKEN, v);
+        } else {
+            let _ = secrets::delete_auth_secret(scope_id, AUTH_OAUTH2_ACCESS_TOKEN);
+        }
+        a.oauth2_access_token = Some(String::new());
+    }
 }
 
 fn hydrate_auth(auth: &mut Option<AuthConfig>, scope_id: &str) {
@@ -204,6 +260,21 @@ fn hydrate_auth(auth: &mut Option<AuthConfig>, scope_id: &str) {
             a.api_key_value = Some(v);
         }
     }
+    if a.oauth2_client_secret.as_deref().map_or(true, str::is_empty) {
+        if let Ok(Some(v)) = secrets::get_auth_secret(scope_id, AUTH_OAUTH2_CLIENT_SECRET) {
+            a.oauth2_client_secret = Some(v);
+        }
+    }
+    if a.oauth2_password.as_deref().map_or(true, str::is_empty) {
+        if let Ok(Some(v)) = secrets::get_auth_secret(scope_id, AUTH_OAUTH2_PASSWORD) {
+            a.oauth2_password = Some(v);
+        }
+    }
+    if a.oauth2_access_token.as_deref().map_or(true, str::is_empty) {
+        if let Ok(Some(v)) = secrets::get_auth_secret(scope_id, AUTH_OAUTH2_ACCESS_TOKEN) {
+            a.oauth2_access_token = Some(v);
+        }
+    }
 }
 
 fn purge_auth(auth: &Option<AuthConfig>, scope_id: &str) {
@@ -211,6 +282,9 @@ fn purge_auth(auth: &Option<AuthConfig>, scope_id: &str) {
         let _ = secrets::delete_auth_secret(scope_id, AUTH_BEARER);
         let _ = secrets::delete_auth_secret(scope_id, AUTH_BASIC_PWD);
         let _ = secrets::delete_auth_secret(scope_id, AUTH_API_KEY_VALUE);
+        let _ = secrets::delete_auth_secret(scope_id, AUTH_OAUTH2_CLIENT_SECRET);
+        let _ = secrets::delete_auth_secret(scope_id, AUTH_OAUTH2_PASSWORD);
+        let _ = secrets::delete_auth_secret(scope_id, AUTH_OAUTH2_ACCESS_TOKEN);
     }
 }
 

@@ -1,3 +1,6 @@
+import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { Check, Loader2, AlertTriangle } from "lucide-react";
 import type { AuthConfig } from "../types";
 
 interface Props {
@@ -17,7 +20,7 @@ interface Props {
   inheritedFrom?: string | null;
 }
 
-const ALL: AuthConfig["auth_type"][] = ["inherit", "none", "bearer", "basic", "api_key"];
+const ALL: AuthConfig["auth_type"][] = ["inherit", "none", "bearer", "basic", "api_key", "oauth2"];
 
 export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Props) {
   const current: AuthConfig = value || { auth_type: allowInherit ? "inherit" : "none" };
@@ -34,6 +37,8 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
           >
             {type === "api_key"
               ? "API Key"
+              : type === "oauth2"
+              ? "OAuth 2"
               : type === "none"
               ? "None"
               : type.charAt(0).toUpperCase() + type.slice(1)}
@@ -131,6 +136,10 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
         </div>
       )}
 
+      {current.auth_type === "oauth2" && (
+        <OAuth2Editor value={current} onChange={onChange} />
+      )}
+
       {current.auth_type === "none" && (
         <p className="text-[12px] text-text-tertiary">
           {allowInherit
@@ -138,6 +147,232 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
             : "No authentication is configured."}
         </p>
       )}
+    </div>
+  );
+}
+
+function OAuth2Editor({
+  value,
+  onChange,
+}: {
+  value: AuthConfig;
+  onChange: (next: AuthConfig) => void;
+}) {
+  const [fetching, setFetching] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [fetchOk, setFetchOk] = useState(false);
+  const grant = value.oauth2_grant_type || "client_credentials";
+  const clientAuth = value.oauth2_client_auth || "basic";
+
+  const hasToken = !!value.oauth2_access_token;
+  const expiresAt = value.oauth2_token_expires_at;
+  const isExpired = expiresAt != null && expiresAt < Date.now();
+  const tokenStatus = !hasToken
+    ? null
+    : isExpired
+    ? "expired"
+    : expiresAt != null
+    ? `valid until ${new Date(expiresAt).toLocaleString()}`
+    : "no expiry reported";
+
+  const fetchToken = async () => {
+    setFetching(true);
+    setFetchError(null);
+    setFetchOk(false);
+    try {
+      const resp = await invoke<{ access_token: string; expires_at: number | null }>(
+        "oauth2_fetch_token",
+        {
+          request: {
+            grant_type: grant,
+            token_url: value.oauth2_token_url || "",
+            client_id: value.oauth2_client_id || "",
+            client_secret: value.oauth2_client_secret || "",
+            scope: value.oauth2_scope || null,
+            client_auth: clientAuth,
+            username: grant === "password" ? value.oauth2_username || "" : null,
+            password: grant === "password" ? value.oauth2_password || "" : null,
+            insecure: false,
+          },
+        }
+      );
+      onChange({
+        ...value,
+        oauth2_access_token: resp.access_token,
+        oauth2_token_expires_at: resp.expires_at ?? undefined,
+      });
+      setFetchOk(true);
+    } catch (err) {
+      setFetchError(String(err));
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <div>
+        <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Grant Type</label>
+        <div className="segmented-control mt-1">
+          <button
+            onClick={() => onChange({ ...value, oauth2_grant_type: "client_credentials" })}
+            className={`segment ${grant === "client_credentials" ? "segment-active" : ""}`}
+          >
+            Client Credentials
+          </button>
+          <button
+            onClick={() => onChange({ ...value, oauth2_grant_type: "password" })}
+            className={`segment ${grant === "password" ? "segment-active" : ""}`}
+          >
+            Password
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Token URL</label>
+        <input
+          type="text"
+          value={value.oauth2_token_url || ""}
+          onChange={(e) => onChange({ ...value, oauth2_token_url: e.target.value })}
+          placeholder="https://auth.example.com/oauth/token"
+          className="input-apple w-full font-mono text-[12px] mt-1"
+          spellCheck={false}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Client ID</label>
+          <input
+            type="text"
+            value={value.oauth2_client_id || ""}
+            onChange={(e) => onChange({ ...value, oauth2_client_id: e.target.value })}
+            placeholder="client id"
+            className="input-apple w-full text-[12px] mt-1 font-mono"
+            spellCheck={false}
+          />
+        </div>
+        <div>
+          <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Client Secret</label>
+          <input
+            type="password"
+            value={value.oauth2_client_secret || ""}
+            onChange={(e) => onChange({ ...value, oauth2_client_secret: e.target.value })}
+            placeholder="client secret"
+            className="input-apple w-full text-[12px] mt-1 font-mono"
+          />
+        </div>
+      </div>
+
+      {grant === "password" && (
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Username</label>
+            <input
+              type="text"
+              value={value.oauth2_username || ""}
+              onChange={(e) => onChange({ ...value, oauth2_username: e.target.value })}
+              placeholder="username"
+              className="input-apple w-full text-[12px] mt-1"
+            />
+          </div>
+          <div>
+            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Password</label>
+            <input
+              type="password"
+              value={value.oauth2_password || ""}
+              onChange={(e) => onChange({ ...value, oauth2_password: e.target.value })}
+              placeholder="password"
+              className="input-apple w-full text-[12px] mt-1"
+            />
+          </div>
+        </div>
+      )}
+
+      <div>
+        <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Scope</label>
+        <input
+          type="text"
+          value={value.oauth2_scope || ""}
+          onChange={(e) => onChange({ ...value, oauth2_scope: e.target.value })}
+          placeholder="read write (space-separated)"
+          className="input-apple w-full font-mono text-[12px] mt-1"
+          spellCheck={false}
+        />
+      </div>
+
+      <div>
+        <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Client Auth Method</label>
+        <div className="segmented-control mt-1">
+          <button
+            onClick={() => onChange({ ...value, oauth2_client_auth: "basic" })}
+            className={`segment ${clientAuth === "basic" ? "segment-active" : ""}`}
+            title="HTTP Basic auth header (RFC 6749 §2.3.1 preferred)"
+          >
+            Basic auth header
+          </button>
+          <button
+            onClick={() => onChange({ ...value, oauth2_client_auth: "body" })}
+            className={`segment ${clientAuth === "body" ? "segment-active" : ""}`}
+            title="client_id / client_secret in form body"
+          >
+            Request body
+          </button>
+        </div>
+      </div>
+
+      <div className="pt-2 border-t border-border-light">
+        <button
+          type="button"
+          onClick={fetchToken}
+          disabled={fetching}
+          className="px-3 py-1.5 text-[12px] bg-accent text-white rounded-md hover:bg-accent-hover transition-colors disabled:opacity-50 flex items-center gap-1.5"
+        >
+          {fetching ? (
+            <>
+              <Loader2 size={12} className="animate-spin" />
+              Fetching…
+            </>
+          ) : (
+            <>Fetch Token</>
+          )}
+        </button>
+
+        {fetchError && (
+          <div className="mt-2 flex items-start gap-1.5 text-[11px] text-error">
+            <AlertTriangle size={11} className="mt-0.5 shrink-0" />
+            <span className="break-words">{fetchError}</span>
+          </div>
+        )}
+
+        {fetchOk && !fetchError && (
+          <div className="mt-2 flex items-center gap-1.5 text-[11px] text-success">
+            <Check size={11} />
+            <span>Token fetched.</span>
+          </div>
+        )}
+
+        {hasToken && (
+          <div className="mt-2 text-[11px] text-text-tertiary">
+            Cached token: <span className={isExpired ? "text-error" : "text-text-secondary"}>{tokenStatus}</span>
+            {" — "}
+            <button
+              type="button"
+              onClick={() =>
+                onChange({
+                  ...value,
+                  oauth2_access_token: "",
+                  oauth2_token_expires_at: undefined,
+                })
+              }
+              className="text-accent hover:underline"
+            >
+              clear
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

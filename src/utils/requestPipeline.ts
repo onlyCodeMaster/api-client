@@ -93,6 +93,17 @@ export function buildSendPayload(
       headers.push({ key: "Authorization", value: `Basic ${encoded}`, enabled: true });
     } else if (auth.auth_type === "api_key" && auth.api_key_key && auth.api_key_in === "header") {
       headers.push({ key: sub(auth.api_key_key), value: sub(auth.api_key_value || ""), enabled: true });
+    } else if (auth.auth_type === "oauth2" && auth.oauth2_access_token) {
+      // We don't auto-refresh here: the user fetches a token via the
+      // "Fetch Token" button in the auth editor, and we just attach
+      // whatever's cached. If the token has expired the API will return
+      // 401 and the user can re-fetch. Auto-refresh is intentionally
+      // deferred — see PR description.
+      headers.push({
+        key: "Authorization",
+        value: `Bearer ${auth.oauth2_access_token}`,
+        enabled: true,
+      });
     }
   }
 
