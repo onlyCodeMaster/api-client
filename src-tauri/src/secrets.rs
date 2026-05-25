@@ -1,49 +1,64 @@
-use keyring_core::{Entry, Error};
-use tauri::AppHandle;
+use keyring::Entry;
 
-use crate::error::AppResult;
-use crate::models::SecretStatus;
+const SERVICE_NAME: &str = "com.apiclient.dev";
 
-const SERVICE_NAME: &str = "com.codex.apiclient";
-
-fn entry(secret_name: &str) -> Result<Entry, Error> {
-    Entry::new(SERVICE_NAME, secret_name)
+pub fn store_secret(key: &str, value: &str) -> Result<(), String> {
+    let entry = Entry::new(SERVICE_NAME, key)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+    entry
+        .set_password(value)
+        .map_err(|e| format!("Failed to store secret: {}", e))?;
+    Ok(())
 }
 
-pub fn secret_exists(secret_name: &str) -> AppResult<bool> {
-    let entry = entry(secret_name)?;
+pub fn get_secret(key: &str) -> Result<Option<String>, String> {
+    let entry = Entry::new(SERVICE_NAME, key)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
     match entry.get_password() {
-        Ok(_) => Ok(true),
-        Err(Error::NoEntry) => Ok(false),
-        Err(error) => Err(error.into()),
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!("Failed to get secret: {}", e)),
     }
 }
 
-pub fn list_secret_statuses(_app: &AppHandle) -> AppResult<Vec<SecretStatus>> {
-    let names = ["prod_token", "staging_token", "proxy_password"];
-    let mut secrets = Vec::new();
-
-    for name in names {
-        secrets.push(SecretStatus {
-            name: name.to_string(),
-            exists: secret_exists(name)?,
-        });
+pub fn delete_secret(key: &str) -> Result<(), String> {
+    let entry = Entry::new(SERVICE_NAME, key)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+    match entry.delete_password() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("Failed to delete secret: {}", e)),
     }
-
-    Ok(secrets)
 }
 
-pub fn save_secret(secret_name: &str, value: &str) -> AppResult<SecretStatus> {
-    let entry = entry(secret_name)?;
-    entry.set_password(value)?;
-
-    Ok(SecretStatus {
-        name: secret_name.to_string(),
-        exists: true,
-    })
+/// Store a secret with a namespaced key (e.g., "env:env_id:VAR_NAME")
+pub fn store_env_secret(env_id: &str, var_key: &str, value: &str) -> Result<(), String> {
+    let namespaced_key = format!("env:{}:{}", env_id, var_key);
+    store_secret(&namespaced_key, value)
 }
 
-pub fn read_secret(secret_name: &str) -> AppResult<String> {
-    let entry = entry(secret_name)?;
-    entry.get_password().map_err(Into::into)
+pub fn get_env_secret(env_id: &str, var_key: &str) -> Result<Option<String>, String> {
+    let namespaced_key = format!("env:{}:{}", env_id, var_key);
+    get_secret(&namespaced_key)
+}
+
+pub fn delete_env_secret(env_id: &str, var_key: &str) -> Result<(), String> {
+    let namespaced_key = format!("env:{}:{}", env_id, var_key);
+    delete_secret(&namespaced_key)
+}
+
+/// Store auth credentials (e.g., "auth:collection_id:bearer_token")
+pub fn store_auth_secret(scope_id: &str, auth_key: &str, value: &str) -> Result<(), String> {
+    let namespaced_key = format!("auth:{}:{}", scope_id, auth_key);
+    store_secret(&namespaced_key, value)
+}
+
+pub fn get_auth_secret(scope_id: &str, auth_key: &str) -> Result<Option<String>, String> {
+    let namespaced_key = format!("auth:{}:{}", scope_id, auth_key);
+    get_secret(&namespaced_key)
+}
+
+pub fn delete_auth_secret(scope_id: &str, auth_key: &str) -> Result<(), String> {
+    let namespaced_key = format!("auth:{}:{}", scope_id, auth_key);
+    delete_secret(&namespaced_key)
 }

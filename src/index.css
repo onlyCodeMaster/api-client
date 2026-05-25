@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-bg: #f5f5f7;
+  --color-sidebar: rgba(255,255,255,0.72);
+  --color-surface: #ffffff;
+  --color-surface-secondary: #f2f2f7;
+  --color-border: #d1d1d6;
+  --color-border-light: #e5e5ea;
+  --color-text-primary: #1d1d1f;
+  --color-text-secondary: #6e6e73;
+  --color-text-tertiary: #aeaeb2;
+  --shadow-color: rgba(0,0,0,0.08);
+}
+
+.dark {
+  --color-bg: #1c1c1e;
+  --color-sidebar: rgba(28,28,30,0.92);
+  --color-surface: #2c2c2e;
+  --color-surface-secondary: #3a3a3c;
+  --color-border: #48484a;
+  --color-border-light: #38383a;
+  --color-text-primary: #f5f5f7;
+  --color-text-secondary: #a1a1a6;
+  --color-text-tertiary: #636366;
+  --shadow-color: rgba(0,0,0,0.3);
+}
+
+@layer base {
+  * {
+    @apply border-border-light;
+  }
+
+  body {
+    @apply bg-bg text-text-primary overflow-hidden antialiased;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+      "Helvetica Neue", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-text-tertiary/40 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-text-tertiary/60;
+  }
+
+  select {
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23aeaeb2' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 28px !important;
+  }
+}
+
+@layer components {
+  .btn-send {
+    @apply px-5 py-2 bg-accent text-white font-medium rounded-apple text-[13px]
+      hover:bg-accent-hover active:scale-[0.97] transition-all
+      disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100
+      shadow-apple-sm;
+  }
+
+  .input-apple {
+    @apply bg-surface-secondary border-0 rounded-lg px-3 py-[7px] text-text-primary
+      text-[13px] placeholder-text-tertiary
+      focus:outline-none focus:ring-2 focus:ring-accent/30 focus:bg-surface
+      transition-all;
+  }
+
+  .segmented-control {
+    @apply inline-flex bg-surface-secondary rounded-lg p-[3px] gap-[2px];
+  }
+
+  .segment {
+    @apply px-3 py-[5px] text-[12px] font-medium rounded-md transition-all
+      cursor-pointer select-none text-text-secondary;
+  }
+
+  .segment-active {
+    @apply bg-surface text-text-primary shadow-apple-sm;
+  }
+}

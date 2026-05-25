@@ -1,1021 +1,207 @@
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use tauri::{AppHandle, Emitter, State};
-
-use crate::curl;
-use crate::error::AppError;
-use crate::file_transfer;
-use crate::http;
-use crate::models::{
-    BootstrapState, BridgeEvent, CollectionSummary, CreateCollectionInput, CurlExportInput,
-    CurlImportInput, DeleteCollectionInput, DeleteEnvironmentInput, DeleteRequestInput,
-    EnvironmentSummary, FileDownloadInput, FileDownloadResult, FileUploadInput, FileUploadResult,
-    MoveCollectionInput, MoveRequestInput, MoveRequestResult, PostmanImportInput,
-    RecordHistoryInput, RenameCollectionInput, RenameEnvironmentInput, ReorderRequestInput,
-    SaveCollectionOrganizationInput, SaveEnvironmentInput, SaveRequestInput, SaveResponseBodyInput,
-    SaveResponseBodyResult, SaveSecretInput, SaveSettingsInput, SecretStatus, SendRequestInput,
-    SendRequestResult, StoredRequest,
+use tauri::State;
+use crate::db::{Database, HistoryEntry, SettingEntry, CookieEntry, RecentEntry};
+use crate::storage::{
+    CollectionFile, EnvironmentFile, WorkspaceFile,
 };
-use crate::postman;
 use crate::secrets;
-use crate::storage::{self, StoragePaths};
 
-pub struct AppState {
-    pub paths: StoragePaths,
-    pub current_workspace: Mutex<String>,
-}
+// === History Commands ===
 
-fn current_workspace_name(state: &State<'_, AppState>) -> String {
-    state
-        .current_workspace
-        .lock()
-        .map(|workspace| {
-            let trimmed = workspace.trim();
-            if trimmed.is_empty() {
-                "default-workspace".to_string()
-            } else {
-                trimmed.to_string()
-            }
-        })
-        .unwrap_or_else(|_| "default-workspace".to_string())
-}
-
-const BRIDGE_EVENT_NAME: &str = "api-client://bridge-event";
-
-fn to_command_error(error: AppError) -> String {
-    error.to_string()
-}
-
-fn now_millis() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default()
-}
-
-fn emit_bridge_event(
-    app: &AppHandle,
-    paths: &StoragePaths,
-    command: &str,
-    phase: &str,
-    message: impl Into<String>,
-    detail: Option<String>,
-) {
-    let timestamp = now_millis();
-    let message = message.into();
-    let payload = BridgeEvent {
-        id: format!("{command}-{phase}-{timestamp}"),
-        command: command.to_string(),
-        phase: phase.to_string(),
-        message,
-        timestamp: timestamp.to_string(),
-        detail: detail.clone(),
-    };
-
-    let _ = storage::append_log_entry(
-        paths,
-        command,
-        phase,
-        &payload.message,
-        payload.detail.as_deref(),
-    );
-    let _ = app.emit(BRIDGE_EVENT_NAME, payload);
+#[tauri::command]
+pub fn save_history(db: State<Database>, entry: HistoryEntry) -> Result<(), String> {
+    db.save_history(&entry)
 }
 
 #[tauri::command]
-pub fn load_bootstrap_state(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<BootstrapState, String> {
-    emit_bridge_event(
-        &app,
-        &state.paths,
-        "load_bootstrap_state",
-        "started",
-        "Loading local workspace state",
-        Some(state.paths.app_data_dir.to_string_lossy().into_owned()),
-    );
-
-    let settings = match storage::load_settings(&state.paths) {
-        Ok(settings) => settings,
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "load_bootstrap_state",
-                "failed",
-                "Failed to load settings",
-                Some(message.clone()),
-            );
-            return Err(message);
-        }
-    };
-    if let Ok(mut workspace) = state.current_workspace.lock() {
-        *workspace = settings.recent_workspace.clone();
-    }
-    let history = match storage::list_history(&state.paths) {
-        Ok(history) => history,
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "load_bootstrap_state",
-                "failed",
-                "Failed to load request history",
-                Some(message.clone()),
-            );
-            return Err(message);
-        }
-    };
-    let collections = match storage::list_collections(&state.paths, &settings.recent_workspace) {
-        Ok(collections) => collections,
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "load_bootstrap_state",
-                "failed",
-                "Failed to load collections",
-                Some(message.clone()),
-            );
-            return Err(message);
-        }
-    };
-    let environments = match storage::list_environments(&state.paths) {
-        Ok(environments) => environments,
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "load_bootstrap_state",
-                "failed",
-                "Failed to load environments",
-                Some(message.clone()),
-            );
-            return Err(message);
-        }
-    };
-    let secrets = match secrets::list_secret_statuses(&app) {
-        Ok(secrets) => secrets,
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "load_bootstrap_state",
-                "failed",
-                "Failed to inspect keychain secrets",
-                Some(message.clone()),
-            );
-            return Err(message);
-        }
-    };
-    let runtime = match storage::record_cache_entry(
-        &state.paths,
-        "bootstrap-state",
-        "metadata",
-        0,
-        &format!(
-            "{} collections / {} environments / {} history rows",
-            collections.len(),
-            environments.len(),
-            history.len()
-        ),
-    )
-    .and_then(|_| storage::runtime_summary(&state.paths))
-    {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "load_bootstrap_state",
-                "failed",
-                "Failed to inspect runtime cache and logs",
-                Some(message.clone()),
-            );
-            return Err(message);
-        }
-    };
-
-    emit_bridge_event(
-        &app,
-        &state.paths,
-        "load_bootstrap_state",
-        "completed",
-        "Local workspace state loaded",
-        Some(format!(
-            "{} collections / {} environments / {} history rows",
-            collections.len(),
-            environments.len(),
-            history.len()
-        )),
-    );
-
-    Ok(BootstrapState {
-        paths: state.paths.to_model(),
-        settings,
-        runtime,
-        history,
-        collections,
-        environments,
-        secrets,
-    })
+pub fn get_history(db: State<Database>, limit: usize, offset: usize) -> Result<Vec<HistoryEntry>, String> {
+    db.get_history(limit, offset)
 }
 
 #[tauri::command]
-pub fn save_settings(
-    app: AppHandle,
-    input: SaveSettingsInput,
-    state: State<'_, AppState>,
-) -> Result<crate::models::AppSettings, String> {
-    match storage::save_settings(&state.paths, input) {
-        Ok(settings) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "save_settings",
-                "completed",
-                "Settings saved",
-                Some(settings.recent_workspace.clone()),
-            );
-            Ok(settings)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "save_settings",
-                "failed",
-                "Failed to save settings",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn delete_history(db: State<Database>, id: String) -> Result<(), String> {
+    db.delete_history(&id)
 }
 
 #[tauri::command]
-pub fn record_history_entry(
-    app: AppHandle,
-    input: RecordHistoryInput,
-    state: State<'_, AppState>,
-) -> Result<Vec<crate::models::HistoryEntry>, String> {
-    let method = input.method.clone();
-    let url = input.url.clone();
-    match storage::record_history(&state.paths, input) {
-        Ok(history) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "record_history_entry",
-                "completed",
-                "History entry recorded",
-                Some(format!("{method} {url}")),
-            );
-            Ok(history)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "record_history_entry",
-                "failed",
-                "Failed to record history entry",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn clear_history(db: State<Database>) -> Result<(), String> {
+    db.clear_history()
 }
 
 #[tauri::command]
-pub fn save_secret(
-    app: AppHandle,
-    input: SaveSecretInput,
-    state: State<'_, AppState>,
-) -> Result<SecretStatus, String> {
-    match secrets::save_secret(&input.name, &input.value) {
-        Ok(secret) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "save_secret",
-                "completed",
-                "Secret saved to keychain",
-                Some(secret.name.clone()),
-            );
-            Ok(secret)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "save_secret",
-                "failed",
-                "Failed to save secret",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn search_history(db: State<Database>, query: String) -> Result<Vec<HistoryEntry>, String> {
+    db.search_history(&query)
+}
+
+// === Settings Commands ===
+
+#[tauri::command]
+pub fn set_setting(db: State<Database>, key: String, value: String) -> Result<(), String> {
+    db.set_setting(&key, &value)
 }
 
 #[tauri::command]
-pub fn save_environment(
-    app: AppHandle,
-    input: SaveEnvironmentInput,
-    state: State<'_, AppState>,
-) -> Result<EnvironmentSummary, String> {
-    match storage::save_environment(&state.paths, input) {
-        Ok(environment) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "save_environment",
-                "completed",
-                "Environment file saved",
-                Some(environment.file_path.clone()),
-            );
-            Ok(environment)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "save_environment",
-                "failed",
-                "Failed to save environment",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn get_setting(db: State<Database>, key: String) -> Result<Option<String>, String> {
+    db.get_setting(&key)
 }
 
 #[tauri::command]
-pub fn rename_environment(
-    app: AppHandle,
-    input: RenameEnvironmentInput,
-    state: State<'_, AppState>,
-) -> Result<EnvironmentSummary, String> {
-    match storage::rename_environment(&state.paths, input) {
-        Ok(environment) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "rename_environment",
-                "completed",
-                "Environment renamed",
-                Some(environment.file_path.clone()),
-            );
-            Ok(environment)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "rename_environment",
-                "failed",
-                "Failed to rename environment",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn get_all_settings(db: State<Database>) -> Result<Vec<SettingEntry>, String> {
+    db.get_all_settings()
 }
 
 #[tauri::command]
-pub fn delete_environment(
-    app: AppHandle,
-    input: DeleteEnvironmentInput,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    match storage::delete_environment(&state.paths, input) {
-        Ok(()) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "delete_environment",
-                "completed",
-                "Environment deleted",
-                None,
-            );
-            Ok(())
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "delete_environment",
-                "failed",
-                "Failed to delete environment",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn delete_setting(db: State<Database>, key: String) -> Result<(), String> {
+    db.delete_setting(&key)
+}
+
+// === Cookie Commands ===
+
+#[tauri::command]
+pub fn save_cookie(db: State<Database>, cookie: CookieEntry) -> Result<(), String> {
+    db.save_cookie(&cookie)
 }
 
 #[tauri::command]
-pub fn save_request(
-    app: AppHandle,
-    input: SaveRequestInput,
-    state: State<'_, AppState>,
-) -> Result<CollectionSummary, String> {
-    let workspace_name = current_workspace_name(&state);
-    match storage::save_request_in_workspace(&state.paths, &workspace_name, input) {
-        Ok(collection) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "save_request",
-                "completed",
-                "Collection request saved",
-                Some(collection.file_path.clone()),
-            );
-            Ok(collection)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "save_request",
-                "failed",
-                "Failed to save request",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn get_cookies_by_domain(db: State<Database>, domain: String) -> Result<Vec<CookieEntry>, String> {
+    db.get_cookies_by_domain(&domain)
 }
 
 #[tauri::command]
-pub fn create_collection(
-    app: AppHandle,
-    input: CreateCollectionInput,
-    state: State<'_, AppState>,
-) -> Result<CollectionSummary, String> {
-    let workspace_name = current_workspace_name(&state);
-    match storage::create_collection_in_workspace(&state.paths, &workspace_name, input) {
-        Ok(collection) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "create_collection",
-                "completed",
-                "Collection created",
-                Some(collection.file_path.clone()),
-            );
-            Ok(collection)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "create_collection",
-                "failed",
-                "Failed to create collection",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn get_all_cookies(db: State<Database>) -> Result<Vec<CookieEntry>, String> {
+    db.get_all_cookies()
 }
 
 #[tauri::command]
-pub fn rename_collection(
-    app: AppHandle,
-    input: RenameCollectionInput,
-    state: State<'_, AppState>,
-) -> Result<CollectionSummary, String> {
-    let workspace_name = current_workspace_name(&state);
-    match storage::rename_collection_in_workspace(&state.paths, &workspace_name, input) {
-        Ok(collection) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "rename_collection",
-                "completed",
-                "Collection renamed",
-                Some(collection.file_path.clone()),
-            );
-            Ok(collection)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "rename_collection",
-                "failed",
-                "Failed to rename collection",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn delete_cookie(db: State<Database>, id: String) -> Result<(), String> {
+    db.delete_cookie(&id)
 }
 
 #[tauri::command]
-pub fn delete_collection(
-    app: AppHandle,
-    input: DeleteCollectionInput,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let workspace_name = current_workspace_name(&state);
-    match storage::delete_collection_in_workspace(&state.paths, &workspace_name, input) {
-        Ok(()) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "delete_collection",
-                "completed",
-                "Collection deleted",
-                None,
-            );
-            Ok(())
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "delete_collection",
-                "failed",
-                "Failed to delete collection",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn clear_cookies_by_domain(db: State<Database>, domain: String) -> Result<(), String> {
+    db.clear_cookies_by_domain(&domain)
+}
+
+// === Recent Opened Commands ===
+
+#[tauri::command]
+pub fn add_recent(db: State<Database>, entry: RecentEntry) -> Result<(), String> {
+    db.add_recent(&entry)
 }
 
 #[tauri::command]
-pub fn delete_request(
-    app: AppHandle,
-    input: DeleteRequestInput,
-    state: State<'_, AppState>,
-) -> Result<CollectionSummary, String> {
-    match storage::delete_request(&state.paths, input) {
-        Ok(collection) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "delete_request",
-                "completed",
-                "Request deleted from collection",
-                Some(collection.file_path.clone()),
-            );
-            Ok(collection)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "delete_request",
-                "failed",
-                "Failed to delete request",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn get_recent(db: State<Database>, limit: usize) -> Result<Vec<RecentEntry>, String> {
+    db.get_recent(limit)
 }
 
 #[tauri::command]
-pub fn move_collection(
-    app: AppHandle,
-    input: MoveCollectionInput,
-    state: State<'_, AppState>,
-) -> Result<Vec<CollectionSummary>, String> {
-    let workspace_name = current_workspace_name(&state);
-    match storage::move_collection_in_workspace(&state.paths, &workspace_name, input) {
-        Ok(collections) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "move_collection",
-                "completed",
-                "Collection order updated",
-                Some(format!("{} collections", collections.len())),
-            );
-            Ok(collections)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "move_collection",
-                "failed",
-                "Failed to move collection",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn clear_recent(db: State<Database>) -> Result<(), String> {
+    db.clear_recent()
+}
+
+// === Collection Commands ===
+
+#[tauri::command]
+pub fn save_collection(collection: CollectionFile) -> Result<(), String> {
+    crate::storage::save_collection(&collection)
 }
 
 #[tauri::command]
-pub fn save_collection_organization(
-    app: AppHandle,
-    input: SaveCollectionOrganizationInput,
-    state: State<'_, AppState>,
-) -> Result<Vec<CollectionSummary>, String> {
-    let workspace_name = current_workspace_name(&state);
-    match storage::save_collection_organization_in_workspace(&state.paths, &workspace_name, input) {
-        Ok(collections) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "save_collection_organization",
-                "completed",
-                "Collection organization saved",
-                Some(format!("{} collections", collections.len())),
-            );
-            Ok(collections)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "save_collection_organization",
-                "failed",
-                "Failed to save collection organization",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn load_collection(id: String) -> Result<CollectionFile, String> {
+    crate::storage::load_collection(&id)
 }
 
 #[tauri::command]
-pub fn reorder_request(
-    app: AppHandle,
-    input: ReorderRequestInput,
-    state: State<'_, AppState>,
-) -> Result<CollectionSummary, String> {
-    match storage::reorder_request(&state.paths, input) {
-        Ok(collection) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "reorder_request",
-                "completed",
-                "Request order updated",
-                Some(collection.file_path.clone()),
-            );
-            Ok(collection)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "reorder_request",
-                "failed",
-                "Failed to reorder request",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn list_collections() -> Result<Vec<CollectionFile>, String> {
+    crate::storage::list_collections()
 }
 
 #[tauri::command]
-pub fn move_request(
-    app: AppHandle,
-    input: MoveRequestInput,
-    state: State<'_, AppState>,
-) -> Result<MoveRequestResult, String> {
-    match storage::move_request(&state.paths, input) {
-        Ok(result) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "move_request",
-                "completed",
-                "Request moved between collections",
-                Some(result.moved_request.collection_file.clone()),
-            );
-            Ok(result)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "move_request",
-                "failed",
-                "Failed to move request",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn delete_collection(id: String) -> Result<(), String> {
+    crate::storage::delete_collection(&id)
+}
+
+// === Environment Commands ===
+
+#[tauri::command]
+pub fn save_environment(env: EnvironmentFile) -> Result<(), String> {
+    crate::storage::save_environment(&env)
 }
 
 #[tauri::command]
-pub fn import_curl(
-    app: AppHandle,
-    input: CurlImportInput,
-    state: State<'_, AppState>,
-) -> Result<StoredRequest, String> {
-    match curl::import_command(input) {
-        Ok(request) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "import_curl",
-                "completed",
-                "cURL command imported",
-                Some(format!("{} {}", request.method, request.url)),
-            );
-            Ok(request)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "import_curl",
-                "failed",
-                "Failed to import cURL command",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn load_environment(id: String) -> Result<EnvironmentFile, String> {
+    crate::storage::load_environment(&id)
 }
 
 #[tauri::command]
-pub fn export_curl(
-    app: AppHandle,
-    input: CurlExportInput,
-    state: State<'_, AppState>,
-) -> Result<String, String> {
-    match curl::export_command(input) {
-        Ok(command) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "export_curl",
-                "completed",
-                "cURL command exported",
-                None,
-            );
-            Ok(command)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "export_curl",
-                "failed",
-                "Failed to export cURL command",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn list_environments() -> Result<Vec<EnvironmentFile>, String> {
+    crate::storage::list_environments()
 }
 
 #[tauri::command]
-pub fn import_postman_collection(
-    app: AppHandle,
-    input: PostmanImportInput,
-    state: State<'_, AppState>,
-) -> Result<Vec<StoredRequest>, String> {
-    match postman::import_collection(input) {
-        Ok(requests) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "import_postman_collection",
-                "completed",
-                "Postman collection imported",
-                Some(format!("{} requests", requests.len())),
-            );
-            Ok(requests)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "import_postman_collection",
-                "failed",
-                "Failed to import Postman collection",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn delete_environment(id: String) -> Result<(), String> {
+    crate::storage::delete_environment(&id)
+}
+
+// === Workspace Commands ===
+
+#[tauri::command]
+pub fn save_workspace(workspace: WorkspaceFile) -> Result<(), String> {
+    crate::storage::save_workspace(&workspace)
 }
 
 #[tauri::command]
-pub fn upload_file(
-    app: AppHandle,
-    input: FileUploadInput,
-    state: State<'_, AppState>,
-) -> Result<FileUploadResult, String> {
-    match file_transfer::upload_file(input) {
-        Ok(result) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "upload_file",
-                "completed",
-                "File uploaded",
-                Some(format!(
-                    "{} / {} bytes",
-                    result.file_name, result.size_bytes
-                )),
-            );
-            Ok(result)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "upload_file",
-                "failed",
-                "Failed to upload file",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn load_workspace(id: String) -> Result<WorkspaceFile, String> {
+    crate::storage::load_workspace(&id)
 }
 
 #[tauri::command]
-pub fn download_file(
-    app: AppHandle,
-    input: FileDownloadInput,
-    state: State<'_, AppState>,
-) -> Result<FileDownloadResult, String> {
-    match file_transfer::download_file(input) {
-        Ok(result) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "download_file",
-                "completed",
-                "File downloaded",
-                Some(format!(
-                    "{} bytes -> {}",
-                    result.size_bytes, result.destination_path
-                )),
-            );
-            Ok(result)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "download_file",
-                "failed",
-                "Failed to download file",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn load_default_workspace() -> Result<WorkspaceFile, String> {
+    crate::storage::load_default_workspace()
+}
+
+// === Secret / Keychain Commands ===
+
+#[tauri::command]
+pub fn store_secret(key: String, value: String) -> Result<(), String> {
+    secrets::store_secret(&key, &value)
 }
 
 #[tauri::command]
-pub fn save_response_body(
-    app: AppHandle,
-    input: SaveResponseBodyInput,
-    state: State<'_, AppState>,
-) -> Result<SaveResponseBodyResult, String> {
-    match file_transfer::save_response_body(input) {
-        Ok(result) => {
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "save_response_body",
-                "completed",
-                "Response body saved",
-                Some(format!(
-                    "{} bytes -> {}",
-                    result.size_bytes, result.destination_path
-                )),
-            );
-            Ok(result)
-        }
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "save_response_body",
-                "failed",
-                "Failed to save response body",
-                Some(message.clone()),
-            );
-            Err(message)
-        }
-    }
+pub fn get_secret(key: String) -> Result<Option<String>, String> {
+    secrets::get_secret(&key)
 }
 
 #[tauri::command]
-pub fn send_request(
-    app: AppHandle,
-    input: SendRequestInput,
-    state: State<'_, AppState>,
-) -> Result<SendRequestResult, String> {
-    emit_bridge_event(
-        &app,
-        &state.paths,
-        "send_request",
-        "started",
-        "HTTP request started",
-        Some(format!("{} {}", input.method, input.url)),
-    );
+pub fn delete_secret(key: String) -> Result<(), String> {
+    secrets::delete_secret(&key)
+}
 
-    let result = match http::execute_request(&state.paths, input.clone()) {
-        Ok(result) => result,
-        Err(error) => {
-            let message = to_command_error(error);
-            emit_bridge_event(
-                &app,
-                &state.paths,
-                "send_request",
-                "failed",
-                "HTTP request failed",
-                Some(message.clone()),
-            );
-            return Err(message);
-        }
-    };
+#[tauri::command]
+pub fn store_env_secret(env_id: String, var_key: String, value: String) -> Result<(), String> {
+    secrets::store_env_secret(&env_id, &var_key, &value)
+}
 
-    if let Err(error) = storage::record_history(
-        &state.paths,
-        RecordHistoryInput {
-            request_id: input.request_id,
-            method: input.method,
-            url: input.url,
-            status: result.status.clone(),
-            duration_ms: result.duration_ms,
-            request_name: input.request_name,
-            collection: input.collection,
-            params: input.params,
-            headers: input.headers,
-            body: input.body,
-            body_mode: input.body_mode,
-            body_content_type: input.body_content_type,
-            body_rows: input.body_rows,
-            auth_type: input.auth_type,
-            auth_token: input.auth_token,
-            auth_basic_username: input.auth_basic_username,
-            auth_basic_password: input.auth_basic_password,
-            auth_api_key_name: input.auth_api_key_name,
-            auth_api_key_value: input.auth_api_key_value,
-            auth_api_key_in: input.auth_api_key_in,
-            environment: input.environment,
-        },
-    ) {
-        let message = to_command_error(error);
-        emit_bridge_event(
-            &app,
-            &state.paths,
-            "send_request",
-            "failed",
-            "HTTP response received but history recording failed",
-            Some(message.clone()),
-        );
-        return Err(message);
-    }
+#[tauri::command]
+pub fn get_env_secret(env_id: String, var_key: String) -> Result<Option<String>, String> {
+    secrets::get_env_secret(&env_id, &var_key)
+}
 
-    emit_bridge_event(
-        &app,
-        &state.paths,
-        "send_request",
-        "completed",
-        "HTTP request completed",
-        Some(format!("{} in {}ms", result.status, result.duration_ms)),
-    );
+#[tauri::command]
+pub fn delete_env_secret(env_id: String, var_key: String) -> Result<(), String> {
+    secrets::delete_env_secret(&env_id, &var_key)
+}
 
-    Ok(result)
+#[tauri::command]
+pub fn store_auth_secret(scope_id: String, auth_key: String, value: String) -> Result<(), String> {
+    secrets::store_auth_secret(&scope_id, &auth_key, &value)
+}
+
+#[tauri::command]
+pub fn get_auth_secret(scope_id: String, auth_key: String) -> Result<Option<String>, String> {
+    secrets::get_auth_secret(&scope_id, &auth_key)
+}
+
+#[tauri::command]
+pub fn delete_auth_secret(scope_id: String, auth_key: String) -> Result<(), String> {
+    secrets::delete_auth_secret(&scope_id, &auth_key)
 }
