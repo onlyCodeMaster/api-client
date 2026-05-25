@@ -185,21 +185,34 @@ impl AppCookies {
 
     /// Hydrate the jar from cookies already persisted in SQLite.
     pub fn preload_from_db(&self, db: &db::Database) {
-        let new_jar = build_jar_from_db(db);
-        *self.jar.write().expect("AppCookies jar lock poisoned") = new_jar;
+        if let Some(new_jar) = build_jar_from_db(db) {
+            *self.jar.write().expect("AppCookies jar lock poisoned") = new_jar;
+        }
     }
 
     /// Replace the in-memory jar with a freshly-populated one. Call this after
     /// any operation that removes cookies from SQLite (delete, clear).
+    ///
+    /// If the SQLite read fails (poisoned mutex, transient I/O error) we
+    /// **keep the existing in-memory jar** rather than wiping it — losing the
+    /// cookies the user collected this session would be a worse outcome than
+    /// possibly continuing to send a deleted cookie until the DB recovers.
     pub fn rebuild_from_db(&self, db: &db::Database) {
-        let new_jar = build_jar_from_db(db);
-        *self.jar.write().expect("AppCookies jar lock poisoned") = new_jar;
+        if let Some(new_jar) = build_jar_from_db(db) {
+            *self.jar.write().expect("AppCookies jar lock poisoned") = new_jar;
+        }
     }
 }
 
-fn build_jar_from_db(db: &db::Database) -> Arc<Jar> {
+/// Build a fresh jar from the cookies currently in SQLite. Returns `None` on
+/// a DB read failure so the caller can decide whether to swap or keep the
+/// existing jar.
+fn build_jar_from_db(db: &db::Database) -> Option<Arc<Jar>> {
+    let all = match db.get_all_cookies() {
+        Ok(all) => all,
+        Err(_) => return None,
+    };
     let jar = Arc::new(Jar::default());
-    let Ok(all) = db.get_all_cookies() else { return jar };
     for c in all {
         let scheme = if c.secure { "https" } else { "http" };
         let path = if c.path.is_empty() { "/" } else { &c.path };
@@ -214,7 +227,7 @@ fn build_jar_from_db(db: &db::Database) -> Arc<Jar> {
         }
         jar.add_cookie_str(&s, &url);
     }
-    jar
+    Some(jar)
 }
 
 fn now_ms() -> i64 {

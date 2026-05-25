@@ -4,7 +4,9 @@ import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { useRequestStore } from "../store/useRequestStore";
 import { KeyValueEditor } from "./KeyValueEditor";
 import { CodegenModal } from "./CodegenModal";
+import { AuthEditor } from "./AuthEditor";
 import { exportCurl, parseCurl } from "../utils/curl";
+import { describeInherited } from "../utils/auth";
 import type { HttpMethod } from "../types";
 
 const METHODS: HttpMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
@@ -73,6 +75,8 @@ export function RequestPanel() {
   const paramCount = activeRequest.params.filter((p) => p.key).length;
   const headerCount = activeRequest.headers.filter((h) => h.key).length;
   const currentAuth = activeRequest.auth || { auth_type: "none" as const };
+  const collections = useRequestStore((s) => s.collections);
+  const inheritedDescription = describeInherited(activeRequest, collections);
 
   return (
     <div className="flex flex-col h-full">
@@ -328,105 +332,12 @@ export function RequestPanel() {
 
         {activeTab === "auth" && !isWs && (
           <div className="space-y-3">
-            <div className="segmented-control">
-              {(["none", "bearer", "basic", "api_key"] as const).map((type) => (
-                <button
-                  key={type}
-                  onClick={() => setAuth({ ...currentAuth, auth_type: type })}
-                  className={`segment ${currentAuth.auth_type === type ? "segment-active" : ""}`}
-                >
-                  {type === "api_key" ? "API Key" : type === "none" ? "None" : type.charAt(0).toUpperCase() + type.slice(1)}
-                </button>
-              ))}
-            </div>
-
-            {currentAuth.auth_type === "bearer" && (
-              <div className="space-y-2">
-                <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Token</label>
-                <input
-                  type="text"
-                  value={currentAuth.bearer_token || ""}
-                  onChange={(e) => setAuth({ ...currentAuth, bearer_token: e.target.value })}
-                  placeholder="Enter bearer token..."
-                  className="input-apple w-full font-mono text-[12px]"
-                  spellCheck={false}
-                />
-              </div>
-            )}
-
-            {currentAuth.auth_type === "basic" && (
-              <div className="space-y-2">
-                <div>
-                  <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Username</label>
-                  <input
-                    type="text"
-                    value={currentAuth.basic_username || ""}
-                    onChange={(e) => setAuth({ ...currentAuth, basic_username: e.target.value })}
-                    placeholder="Username"
-                    className="input-apple w-full text-[12px] mt-1"
-                  />
-                </div>
-                <div>
-                  <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Password</label>
-                  <input
-                    type="password"
-                    value={currentAuth.basic_password || ""}
-                    onChange={(e) => setAuth({ ...currentAuth, basic_password: e.target.value })}
-                    placeholder="Password"
-                    className="input-apple w-full text-[12px] mt-1"
-                  />
-                </div>
-              </div>
-            )}
-
-            {currentAuth.auth_type === "api_key" && (
-              <div className="space-y-2">
-                <div>
-                  <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Key</label>
-                  <input
-                    type="text"
-                    value={currentAuth.api_key_key || ""}
-                    onChange={(e) => setAuth({ ...currentAuth, api_key_key: e.target.value })}
-                    placeholder="X-API-Key"
-                    className="input-apple w-full text-[12px] mt-1"
-                  />
-                </div>
-                <div>
-                  <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Value</label>
-                  <input
-                    type="text"
-                    value={currentAuth.api_key_value || ""}
-                    onChange={(e) => setAuth({ ...currentAuth, api_key_value: e.target.value })}
-                    placeholder="your-api-key"
-                    className="input-apple w-full font-mono text-[12px] mt-1"
-                    spellCheck={false}
-                  />
-                </div>
-                <div>
-                  <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Add to</label>
-                  <div className="segmented-control mt-1">
-                    <button
-                      onClick={() => setAuth({ ...currentAuth, api_key_in: "header" })}
-                      className={`segment ${(currentAuth.api_key_in || "header") === "header" ? "segment-active" : ""}`}
-                    >
-                      Header
-                    </button>
-                    <button
-                      onClick={() => setAuth({ ...currentAuth, api_key_in: "query" })}
-                      className={`segment ${currentAuth.api_key_in === "query" ? "segment-active" : ""}`}
-                    >
-                      Query Param
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {currentAuth.auth_type === "none" && (
-              <p className="text-[12px] text-text-tertiary">
-                This request does not use any authorization.
-              </p>
-            )}
+            <AuthEditor
+              value={currentAuth}
+              onChange={setAuth}
+              allowInherit={!!activeRequest.collectionId}
+              inheritedFrom={inheritedDescription}
+            />
           </div>
         )}
 

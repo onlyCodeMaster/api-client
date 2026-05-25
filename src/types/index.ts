@@ -12,7 +12,16 @@ export interface KeyValue {
 }
 
 export interface AuthConfig {
-  auth_type: "none" | "bearer" | "basic" | "api_key";
+  /**
+   * Authentication strategy.
+   *
+   * - `"inherit"`: delegate to the parent folder/collection at send time.
+   *   This is the default for requests created under a collection.
+   * - `"none"`: explicitly disable authentication for this scope, even if
+   *   the parent has auth configured.
+   * - `"bearer" | "basic" | "api_key"`: concrete schemes.
+   */
+  auth_type: "inherit" | "none" | "bearer" | "basic" | "api_key";
   bearer_token?: string;
   basic_username?: string;
   basic_password?: string;
@@ -62,6 +71,12 @@ export interface RequestItem {
     /** Bundle passphrase. */
     password?: string;
   };
+  /**
+   * When this request was loaded from a collection, the source collection id.
+   * Used to resolve `auth: { auth_type: "inherit" }` at send time by walking
+   * up the collection tree to find the effective auth.
+   */
+  collectionId?: string;
   /** Protocol selector: HTTP request or WebSocket connection. */
   protocol?: Protocol;
   /** GraphQL query and variables when bodyType === "graphql". */
@@ -104,6 +119,8 @@ export interface HistoryEntry {
 export interface CollectionFolder {
   id: string;
   name: string;
+  /** Folder-level auth override. Requests in this folder with auth_type "inherit" fall back to this. */
+  auth?: AuthConfig;
   requests: CollectionRequest[];
   folders: CollectionFolder[];
 }

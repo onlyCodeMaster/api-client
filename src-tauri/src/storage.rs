@@ -62,6 +62,10 @@ pub struct CollectionRequest {
 pub struct CollectionFolder {
     pub id: String,
     pub name: String,
+    /// Folder-level auth. Requests under this folder with auth_type=inherit
+    /// fall back to this before walking up to the collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<AuthConfig>,
     pub requests: Vec<CollectionRequest>,
     pub folders: Vec<CollectionFolder>,
 }
@@ -218,6 +222,8 @@ fn visit_folder_auths<F: FnMut(&mut Option<AuthConfig>, &str)>(
     folder: &mut CollectionFolder,
     f: &mut F,
 ) {
+    let folder_scope = folder.id.clone();
+    f(&mut folder.auth, &folder_scope);
     for req in &mut folder.requests {
         let req_id = req.id.clone();
         f(&mut req.auth, &req_id);
@@ -244,6 +250,7 @@ fn read_folder_auths<F: FnMut(&Option<AuthConfig>, &str)>(
     folder: &CollectionFolder,
     f: &mut F,
 ) {
+    f(&folder.auth, &folder.id);
     for req in &folder.requests {
         f(&req.auth, &req.id);
     }
