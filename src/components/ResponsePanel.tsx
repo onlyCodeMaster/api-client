@@ -1,10 +1,11 @@
 import { useState, useMemo } from "react";
-import { Copy, Check, ArrowUpRight, Search, X, Download, AlertTriangle, FileQuestion } from "lucide-react";
+import { Copy, Check, ArrowUpRight, Search, X, Download, AlertTriangle, FileQuestion, GitCompare } from "lucide-react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { useRequestStore } from "../store/useRequestStore";
+import { ResponseDiffModal } from "./ResponseDiffModal";
 
-type ResponseTab = "body" | "headers";
+type ResponseTab = "body" | "headers" | "tests";
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -135,7 +136,16 @@ export function ResponsePanel() {
   const [savedFlash, setSavedFlash] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const { response, loading, error, activeRequest } = useRequestStore();
+  const [diffOpen, setDiffOpen] = useState(false);
+  const { response, loading, error, activeRequest, testResults, scriptLogs, scriptError, responseHistory } = useRequestStore();
+  const snapshots = activeRequest ? responseHistory[activeRequest.id] ?? [] : [];
+  const canDiff = snapshots.length >= 2;
+
+  const tests = activeRequest ? testResults[activeRequest.id] ?? null : null;
+  const logs = activeRequest ? scriptLogs[activeRequest.id] ?? null : null;
+  const sErr = activeRequest ? scriptError[activeRequest.id] ?? null : null;
+  const passedCount = tests ? tests.filter((t) => t.passed).length : 0;
+  const failedCount = tests ? tests.length - passedCount : 0;
 
   const isBinary = response?.body_encoding === "base64";
   const mime = useMemo(() => (response ? extractMime(response.headers) : ""), [response]);
@@ -270,6 +280,25 @@ export function ResponsePanel() {
                 {Object.keys(response.headers).length}
               </span>
             </button>
+            {(tests !== null || sErr !== null || (logs && logs.length > 0)) && (
+              <button
+                onClick={() => setActiveTab("tests")}
+                className={`segment ${activeTab === "tests" ? "segment-active" : ""}`}
+              >
+                Tests
+                {tests && tests.length > 0 && (
+                  <span
+                    className={`ml-1 text-[10px] ${
+                      failedCount > 0 ? "text-error" : "text-success"
+                    }`}
+                  >
+                    {failedCount > 0
+                      ? `${failedCount}/${tests.length} failed`
+                      : `${passedCount}/${tests.length} passed`}
+                  </span>
+                )}
+              </button>
+            )}
           </div>
           <button
             onClick={() => setSearchOpen((s) => !s)}
@@ -277,6 +306,14 @@ export function ResponsePanel() {
             title="Search in response"
           >
             <Search size={14} className={searchOpen ? "text-accent" : "text-text-tertiary"} />
+          </button>
+          <button
+            onClick={() => setDiffOpen(true)}
+            disabled={!canDiff}
+            className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${canDiff ? "hover:bg-black/5 active:bg-black/8" : "opacity-40 cursor-not-allowed"}`}
+            title={canDiff ? `Compare with previous responses (${snapshots.length} captured)` : "Need 2+ responses to diff"}
+          >
+            <GitCompare size={14} className="text-text-tertiary" />
           </button>
           <button
             onClick={copyBody}
@@ -382,7 +419,74 @@ export function ResponsePanel() {
             ))}
           </div>
         )}
+        {activeTab === "tests" && (
+          <div className="space-y-3">
+            {sErr && (
+              <div className="bg-error/5 text-error rounded-apple px-3 py-2 text-[12px]">
+                {sErr}
+              </div>
+            )}
+            {tests && tests.length > 0 && (
+              <div className="bg-surface-secondary rounded-apple overflow-hidden">
+                {tests.map((t, i) => (
+                  <div
+                    key={i}
+                    className={`flex items-start gap-2 px-3 py-2 ${
+                      i !== tests.length - 1 ? "border-b border-border-light/60" : ""
+                    }`}
+                  >
+                    <span
+                      className={`mt-0.5 inline-block w-1.5 h-1.5 rounded-full shrink-0 ${
+                        t.passed ? "bg-success" : "bg-error"
+                      }`}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div
+                        className={`text-[12px] ${
+                          t.passed ? "text-text-primary" : "text-error"
+                        }`}
+                      >
+                        {t.name}
+                      </div>
+                      {!t.passed && t.error && (
+                        <div className="text-[11px] text-text-tertiary font-mono mt-0.5 break-words">
+                          {t.error}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {tests && tests.length === 0 && !sErr && (
+              <p className="text-[12px] text-text-tertiary">
+                Test script ran without recording any assertions.
+              </p>
+            )}
+            {logs && logs.length > 0 && (
+              <div>
+                <div className="text-[11px] font-medium text-text-secondary uppercase tracking-wider mb-1.5">
+                  Console
+                </div>
+                <pre className="text-[11px] font-mono whitespace-pre-wrap bg-surface-secondary rounded-apple p-3">
+                  {logs
+                    .map(
+                      (l) =>
+                        `${l.level === "error" ? "✕" : l.level === "warn" ? "!" : "›"} ${l.args.join(" ")}`
+                    )
+                    .join("\n")}
+                </pre>
+              </div>
+            )}
+          </div>
+        )}
       </div>
+      {diffOpen && (
+        <ResponseDiffModal
+          snapshots={snapshots}
+          onClose={() => setDiffOpen(false)}
+        />
+      )}
     </div>
   );
 }

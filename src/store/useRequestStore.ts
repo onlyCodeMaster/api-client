@@ -5,6 +5,7 @@ import type {
   KeyValue,
   RequestItem,
   ResponseData,
+  ResponseSnapshot,
   Collection,
   CollectionRequest,
   HistoryEntry,
@@ -13,9 +14,11 @@ import type {
   AuthConfig,
   CookieEntry,
   WsMessage,
+  TestResult,
+  ScriptLog,
 } from "../types";
 import { postmanToCollection } from "../utils/postman";
-import { resolveAuth } from "../utils/auth";
+import { executeRequestWithScripts } from "../utils/requestPipeline";
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 15);
@@ -98,6 +101,14 @@ interface RequestState {
   responses: Record<string, ResponseData | null>;
   errors: Record<string, string | null>;
   loadings: Record<string, boolean>;
+  /** Test results from the most recent post-response script, keyed by request id. */
+  testResults: Record<string, TestResult[] | null>;
+  /** Script execution logs (pre + post combined), keyed by request id. */
+  scriptLogs: Record<string, ScriptLog[] | null>;
+  /** Script error message (timeout, syntax, etc.), keyed by request id. */
+  scriptError: Record<string, string | null>;
+  /** Recent response snapshots (newest first) per request id, capped at 10, for diff view. */
+  responseHistory: Record<string, ResponseSnapshot[]>;
 
   // WebSocket state per tab
   wsConnected: Record<string, boolean>;
@@ -149,10 +160,13 @@ interface RequestState {
   setProtocol: (protocol: "http" | "websocket") => void;
   setGraphqlQuery: (q: string) => void;
   setGraphqlVariables: (v: string) => void;
+  setPreScript: (s: string) => void;
+  setTestScript: (s: string) => void;
 
   sendRequest: () => Promise<void>;
   cancelRequest: () => void;
   createNewRequest: () => void;
+  clearResponseHistory: (requestId: string) => void;
 
   // History
   addToHistory: (request: RequestItem, response?: ResponseData | null) => void;
@@ -269,6 +283,10 @@ export const useRequestStore = create<RequestState>((set, get) => {
     responses: {},
     errors: {},
     loadings: {},
+    testResults: {},
+    scriptLogs: {},
+    scriptError: {},
+    responseHistory: {},
 
     wsConnected: {},
     wsMessages: {},
@@ -433,6 +451,8 @@ export const useRequestStore = create<RequestState>((set, get) => {
     setProtocol: (protocol) => set((s) => ({ ...updateActiveTab(s, { protocol }), ...syncDerived({ ...s, ...updateActiveTab(s, { protocol }) } as RequestState) })),
     setGraphqlQuery: (graphqlQuery) => set((s) => ({ ...updateActiveTab(s, { graphqlQuery }), ...syncDerived({ ...s, ...updateActiveTab(s, { graphqlQuery }) } as RequestState) })),
     setGraphqlVariables: (graphqlVariables) => set((s) => ({ ...updateActiveTab(s, { graphqlVariables }), ...syncDerived({ ...s, ...updateActiveTab(s, { graphqlVariables }) } as RequestState) })),
+    setPreScript: (preScript) => set((s) => ({ ...updateActiveTab(s, { preScript }), ...syncDerived({ ...s, ...updateActiveTab(s, { preScript }) } as RequestState) })),
+    setTestScript: (testScript) => set((s) => ({ ...updateActiveTab(s, { testScript }), ...syncDerived({ ...s, ...updateActiveTab(s, { testScript }) } as RequestState) })),
 
     sendRequest: async () => {
       const state = get();
@@ -446,6 +466,9 @@ export const useRequestStore = create<RequestState>((set, get) => {
         loadings: { ...s.loadings, [reqId]: true },
         errors: { ...s.errors, [reqId]: null },
         responses: { ...s.responses, [reqId]: null },
+        testResults: { ...s.testResults, [reqId]: null },
+        scriptLogs: { ...s.scriptLogs, [reqId]: null },
+        scriptError: { ...s.scriptError, [reqId]: null },
         ...syncDerived({
           ...s,
           loadings: { ...s.loadings, [reqId]: true },
@@ -454,138 +477,109 @@ export const useRequestStore = create<RequestState>((set, get) => {
         }),
       }));
 
-      // Build variable map from active environment
+      // Build variable map from the active environment. Pre/post scripts may
+      // mutate this; if anything changes we persist the environment back so
+      // the change sticks across requests / restarts.
       const envVars: Record<string, string> = {};
       const activeEnvId = state.workspace?.active_environment_id;
-      if (activeEnvId) {
-        const activeEnv = state.environments.find((e) => e.id === activeEnvId);
-        if (activeEnv) {
-          for (const v of activeEnv.variables) {
-            if (v.enabled && v.key) envVars[v.key] = v.value;
-          }
+      const activeEnv = activeEnvId
+        ? state.environments.find((e) => e.id === activeEnvId)
+        : undefined;
+      if (activeEnv) {
+        for (const v of activeEnv.variables) {
+          if (v.enabled && v.key) envVars[v.key] = v.value;
         }
       }
-      const sub = (str: string) => str.replace(/\{\{(\w+)\}\}/g, (_, key) => envVars[key] ?? `{{${key}}}`);
+      const transientVars: Record<string, string> = {};
 
-      try {
-        let finalUrl = sub(req.url);
-        const enabledParams = req.params.filter((p) => p.enabled && p.key);
-        if (enabledParams.length > 0) {
-          const qs = enabledParams.map((p) => `${encodeURIComponent(sub(p.key))}=${encodeURIComponent(sub(p.value))}`).join("&");
-          const sep = finalUrl.includes("?") ? "&" : "?";
-          finalUrl = `${finalUrl}${sep}${qs}`;
+      const result = await executeRequestWithScripts({
+        request: req,
+        collections: get().collections,
+        envVars,
+        transientVars,
+        defaults: {
+          defaultTimeoutMs: get().defaultTimeoutMs,
+          verifyTlsDefault: get().verifyTlsDefault,
+        },
+      });
+
+      // Persist environment if any script mutated it.
+      if (activeEnv) {
+        const original: Record<string, string> = {};
+        for (const v of activeEnv.variables) {
+          if (v.enabled && v.key) original[v.key] = v.value;
         }
-
-        const headers = req.headers
-          .filter((h) => h.enabled && h.key)
-          .map((h) => ({ key: sub(h.key), value: sub(h.value), enabled: h.enabled }));
-
-        // Inject auth. If the request's own auth is set to "inherit" (or is
-        // missing), walk up its source collection/folder to find the
-        // effective auth. A concrete `auth_type: "none"` opts the request out
-        // of inherited credentials.
-        const auth = resolveAuth(req, get().collections);
-        if (auth && auth.auth_type !== "none" && auth.auth_type !== "inherit") {
-          if (auth.auth_type === "bearer" && auth.bearer_token) {
-            headers.push({ key: "Authorization", value: `Bearer ${sub(auth.bearer_token)}`, enabled: true });
-          } else if (auth.auth_type === "basic" && auth.basic_username) {
-            const encoded = btoa(`${sub(auth.basic_username)}:${sub(auth.basic_password || "")}`);
-            headers.push({ key: "Authorization", value: `Basic ${encoded}`, enabled: true });
-          } else if (auth.auth_type === "api_key" && auth.api_key_key && auth.api_key_in === "header") {
-            headers.push({ key: sub(auth.api_key_key), value: sub(auth.api_key_value || ""), enabled: true });
+        const changed =
+          Object.keys(envVars).length !== Object.keys(original).length ||
+          Object.entries(envVars).some(([k, v]) => original[k] !== v);
+        if (changed) {
+          const nextVars = activeEnv.variables
+            .filter((v) => !v.enabled || !v.key || v.key in envVars)
+            .map((v) =>
+              v.enabled && v.key && v.key in envVars
+                ? { ...v, value: envVars[v.key] }
+                : v
+            );
+          for (const k of Object.keys(envVars)) {
+            if (!activeEnv.variables.some((v) => v.key === k)) {
+              nextVars.push({ key: k, value: envVars[k], enabled: true, is_secret: false });
+            }
           }
+          // Fire-and-forget so a save failure doesn't mask the response.
+          get()
+            .updateEnvironment({ ...activeEnv, variables: nextVars })
+            .catch((e) => console.error("Failed to persist env mutations:", e));
         }
+      }
 
-        // Auto Content-Type
-        const hasCT = headers.some((h) => h.key.toLowerCase() === "content-type");
-        if (!hasCT) {
-          if (req.bodyType === "json" || req.bodyType === "graphql") {
-            headers.push({ key: "Content-Type", value: "application/json", enabled: true });
-          } else if (req.bodyType === "xml") {
-            headers.push({ key: "Content-Type", value: "application/xml", enabled: true });
-          } else if (req.bodyType === "text") {
-            headers.push({ key: "Content-Type", value: "text/plain", enabled: true });
-          }
-        }
+      if (!get().loadings[reqId]) return;
 
-        // API Key in query
-        if (
-          auth &&
-          auth.auth_type === "api_key" &&
-          auth.api_key_in === "query" &&
-          auth.api_key_key
-        ) {
-          const sep = finalUrl.includes("?") ? "&" : "?";
-          finalUrl = `${finalUrl}${sep}${encodeURIComponent(sub(auth.api_key_key))}=${encodeURIComponent(sub(auth.api_key_value || ""))}`;
-        }
+      if (result.error) {
+        set((s) => ({
+          errors: { ...s.errors, [reqId]: result.error ?? null },
+          loadings: { ...s.loadings, [reqId]: false },
+          scriptLogs: { ...s.scriptLogs, [reqId]: result.logs },
+          scriptError: { ...s.scriptError, [reqId]: result.scriptError ?? null },
+          ...syncDerived({
+            ...s,
+            errors: { ...s.errors, [reqId]: result.error ?? null },
+            loadings: { ...s.loadings, [reqId]: false },
+          }),
+        }));
+        return;
+      }
 
-        // Body
-        let bodyStr: string | null = null;
-        let formData: { key: string; value: string; enabled: boolean; is_file?: boolean; file_path?: string }[] | null = null;
-        if (req.bodyType === "form-data") {
-          formData = req.formData
-            .filter((f) => f.enabled && f.key)
-            .map((f) => ({
-              key: f.key,
-              value: f.value,
-              enabled: f.enabled,
-              is_file: !!f.is_file,
-              file_path: f.file_path,
-            }));
-        } else if (req.bodyType === "graphql") {
-          bodyStr = JSON.stringify({
-            query: sub(req.graphqlQuery || ""),
-            variables: req.graphqlVariables ? JSON.parse(sub(req.graphqlVariables)) : undefined,
-          });
-        } else if (req.bodyType !== "none") {
-          bodyStr = sub(req.body || "") || null;
-        }
-
-        const payload = {
-          method: req.method,
-          url: finalUrl,
-          headers,
-          body: bodyStr,
-          body_type: req.bodyType !== "none" ? req.bodyType : null,
-          form_data: formData,
-          timeout_ms: req.timeoutMs ?? get().defaultTimeoutMs,
-          request_id: req.id,
-          verify_tls: req.verifyTls ?? get().verifyTlsDefault,
-          redirect_policy: req.redirectPolicy ?? null,
-          max_redirects: req.maxRedirects ?? null,
-          proxy_url: req.proxyUrl?.trim() ? req.proxyUrl.trim() : null,
-          client_cert:
-            req.clientCert && req.clientCert.path
-              ? { path: req.clientCert.path, password: req.clientCert.password ?? null }
-              : null,
+      set((s) => {
+        const prevHistory = s.responseHistory[reqId] ?? [];
+        const nextHistory = result.response
+          ? [
+              { id: generateId(), takenAt: Date.now(), response: result.response },
+              ...prevHistory,
+            ].slice(0, 10)
+          : prevHistory;
+        return {
+          responses: { ...s.responses, [reqId]: result.response ?? null },
+          loadings: { ...s.loadings, [reqId]: false },
+          testResults: { ...s.testResults, [reqId]: result.tests },
+          scriptLogs: { ...s.scriptLogs, [reqId]: result.logs },
+          scriptError: { ...s.scriptError, [reqId]: result.scriptError ?? null },
+          responseHistory: { ...s.responseHistory, [reqId]: nextHistory },
+          ...syncDerived({
+            ...s,
+            responses: { ...s.responses, [reqId]: result.response ?? null },
+            loadings: { ...s.loadings, [reqId]: false },
+          }),
         };
-
-        const response = await invoke<ResponseData>("send_request", { payload });
-        if (get().loadings[reqId]) {
-          set((s) => ({
-            responses: { ...s.responses, [reqId]: response },
-            loadings: { ...s.loadings, [reqId]: false },
-            ...syncDerived({
-              ...s,
-              responses: { ...s.responses, [reqId]: response },
-              loadings: { ...s.loadings, [reqId]: false },
-            }),
-          }));
-          get().addToHistory(req, response);
-        }
-      } catch (err) {
-        if (get().loadings[reqId]) {
-          set((s) => ({
-            errors: { ...s.errors, [reqId]: String(err) },
-            loadings: { ...s.loadings, [reqId]: false },
-            ...syncDerived({
-              ...s,
-              errors: { ...s.errors, [reqId]: String(err) },
-              loadings: { ...s.loadings, [reqId]: false },
-            }),
-          }));
-        }
+      });
+      if (result.response) {
+        get().addToHistory(req, result.response);
       }
+    },
+
+    clearResponseHistory: (requestId: string) => {
+      set((s) => ({
+        responseHistory: { ...s.responseHistory, [requestId]: [] },
+      }));
     },
 
     cancelRequest: () => {
@@ -719,6 +713,8 @@ export const useRequestStore = create<RequestState>((set, get) => {
         body: req.body,
         body_type: req.bodyType,
         auth,
+        pre_script: req.preScript,
+        test_script: req.testScript,
         created_at: req.createdAt,
         updated_at: now,
       };
@@ -754,6 +750,8 @@ export const useRequestStore = create<RequestState>((set, get) => {
         formData: [createEmptyKeyValue()],
         auth: req.auth,
         collectionId,
+        preScript: req.pre_script,
+        testScript: req.test_script,
         protocol: "http",
         createdAt: req.created_at,
       };

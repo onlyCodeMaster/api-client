@@ -54,6 +54,12 @@ pub struct CollectionRequest {
     pub body: String,
     pub body_type: String,
     pub auth: Option<AuthConfig>,
+    /// Pre-request script source. Runs in the frontend Web Worker sandbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_script: Option<String>,
+    /// Post-response test script source. Runs in the frontend Web Worker sandbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_script: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }

@@ -21,7 +21,7 @@ const METHOD_COLORS: Record<HttpMethod, string> = {
   OPTIONS: "text-text-secondary",
 };
 
-type RequestTab = "params" | "headers" | "body" | "auth" | "settings";
+type RequestTab = "params" | "headers" | "body" | "auth" | "pre" | "tests" | "settings";
 
 export function RequestPanel() {
   const [activeTab, setActiveTab] = useState<RequestTab>("params");
@@ -46,6 +46,8 @@ export function RequestPanel() {
     setProtocol,
     setGraphqlQuery,
     setGraphqlVariables,
+    setPreScript,
+    setTestScript,
     sendRequest,
     cancelRequest,
     defaultTimeoutMs,
@@ -68,7 +70,14 @@ export function RequestPanel() {
   const tabs: { id: RequestTab; label: string }[] = [
     { id: "params", label: "Params" },
     { id: "headers", label: "Headers" },
-    ...(isWs ? [] : ([{ id: "body" as const, label: "Body" }, { id: "auth" as const, label: "Auth" }])),
+    ...(isWs
+      ? []
+      : ([
+          { id: "body" as const, label: "Body" },
+          { id: "auth" as const, label: "Auth" },
+          { id: "pre" as const, label: "Pre-request" },
+          { id: "tests" as const, label: "Tests" },
+        ])),
     { id: "settings", label: "Settings" },
   ];
 
@@ -337,6 +346,55 @@ export function RequestPanel() {
               onChange={setAuth}
               allowInherit={!!activeRequest.collectionId}
               inheritedFrom={inheritedDescription}
+            />
+          </div>
+        )}
+
+        {activeTab === "pre" && !isWs && (
+          <div className="space-y-2">
+            <p className="text-[11px] text-text-tertiary leading-relaxed">
+              Runs before the request is sent. Mutate variables with{" "}
+              <code className="text-text-secondary">pm.environment.set(k, v)</code> /{" "}
+              <code className="text-text-secondary">pm.variables.set(k, v)</code>. Script is
+              terminated after 5s.
+            </p>
+            <textarea
+              value={activeRequest.preScript ?? ""}
+              onChange={(e) => setPreScript(e.target.value)}
+              spellCheck={false}
+              placeholder={
+                "// Example: stamp every request with a fresh token\n" +
+                "pm.environment.set('ts', String(Date.now()));\n" +
+                "pm.variables.set('nonce', Math.random().toString(36).slice(2));"
+              }
+              className="w-full h-72 bg-bg-secondary border border-border rounded px-3 py-2 text-[12px] font-mono leading-relaxed resize-none focus:outline-none focus:border-accent"
+            />
+          </div>
+        )}
+
+        {activeTab === "tests" && !isWs && (
+          <div className="space-y-2">
+            <p className="text-[11px] text-text-tertiary leading-relaxed">
+              Runs after the response arrives. Use{" "}
+              <code className="text-text-secondary">pm.test('name', fn)</code> with{" "}
+              <code className="text-text-secondary">pm.expect(...)</code>. Results show in the
+              response panel.
+            </p>
+            <textarea
+              value={activeRequest.testScript ?? ""}
+              onChange={(e) => setTestScript(e.target.value)}
+              spellCheck={false}
+              placeholder={
+                "// Example assertions\n" +
+                "pm.test('responds with 200', () => {\n" +
+                "  pm.expect(pm.response).to.have.status(200);\n" +
+                "});\n" +
+                "pm.test('body has id', () => {\n" +
+                "  const json = pm.response.json();\n" +
+                "  pm.expect(json).to.have.property('id');\n" +
+                "});"
+              }
+              className="w-full h-72 bg-bg-secondary border border-border rounded px-3 py-2 text-[12px] font-mono leading-relaxed resize-none focus:outline-none focus:border-accent"
             />
           </div>
         )}
