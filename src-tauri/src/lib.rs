@@ -152,35 +152,69 @@ impl CachedBodies {
 }
 
 /// Shared cookie jar used by every HTTP client and persisted to SQLite.
+///
+/// The jar lives behind a `RwLock` so the UI can ask us to **rebuild** it from
+/// SQLite whenever a cookie is deleted or a domain is cleared. `reqwest::cookie::Jar`
+/// has no `remove` API, so the only way to make a deletion visible to new
+/// requests is to swap in a fresh jar populated from the post-deletion DB.
+///
+/// Each `send_request` / `ws_connect` calls `current_jar()` at the time the
+/// HTTP client is built, so subsequent requests immediately see the rebuilt
+/// jar. Already-in-flight requests keep their old `Arc<Jar>` and finish with
+/// the cookies they were started with, which is the correct semantic.
 pub struct AppCookies {
-    pub jar: Arc<Jar>,
+    jar: std::sync::RwLock<Arc<Jar>>,
 }
 
 impl AppCookies {
     pub fn new() -> Self {
         Self {
-            jar: Arc::new(Jar::default()),
+            jar: std::sync::RwLock::new(Arc::new(Jar::default())),
         }
+    }
+
+    /// The `Arc<Jar>` to hand to `reqwest::ClientBuilder::cookie_provider`.
+    /// Cheap clone of an `Arc`; never panics because we only ever swap the
+    /// inner value under the write lock.
+    pub fn current_jar(&self) -> Arc<Jar> {
+        self.jar
+            .read()
+            .expect("AppCookies jar lock poisoned")
+            .clone()
     }
 
     /// Hydrate the jar from cookies already persisted in SQLite.
     pub fn preload_from_db(&self, db: &db::Database) {
-        let Ok(all) = db.get_all_cookies() else { return };
-        for c in all {
-            let scheme = if c.secure { "https" } else { "http" };
-            let path = if c.path.is_empty() { "/" } else { &c.path };
-            let url_str = format!("{}://{}{}", scheme, c.domain, path);
-            let Ok(url) = url::Url::parse(&url_str) else { continue };
-            let mut s = format!("{}={}; Domain={}; Path={}", c.name, c.value, c.domain, path);
-            if c.secure {
-                s.push_str("; Secure");
-            }
-            if c.http_only {
-                s.push_str("; HttpOnly");
-            }
-            self.jar.add_cookie_str(&s, &url);
-        }
+        let new_jar = build_jar_from_db(db);
+        *self.jar.write().expect("AppCookies jar lock poisoned") = new_jar;
     }
+
+    /// Replace the in-memory jar with a freshly-populated one. Call this after
+    /// any operation that removes cookies from SQLite (delete, clear).
+    pub fn rebuild_from_db(&self, db: &db::Database) {
+        let new_jar = build_jar_from_db(db);
+        *self.jar.write().expect("AppCookies jar lock poisoned") = new_jar;
+    }
+}
+
+fn build_jar_from_db(db: &db::Database) -> Arc<Jar> {
+    let jar = Arc::new(Jar::default());
+    let Ok(all) = db.get_all_cookies() else { return jar };
+    for c in all {
+        let scheme = if c.secure { "https" } else { "http" };
+        let path = if c.path.is_empty() { "/" } else { &c.path };
+        let url_str = format!("{}://{}{}", scheme, c.domain, path);
+        let Ok(url) = url::Url::parse(&url_str) else { continue };
+        let mut s = format!("{}={}; Domain={}; Path={}", c.name, c.value, c.domain, path);
+        if c.secure {
+            s.push_str("; Secure");
+        }
+        if c.http_only {
+            s.push_str("; HttpOnly");
+        }
+        jar.add_cookie_str(&s, &url);
+    }
+    jar
 }
 
 fn now_ms() -> i64 {
@@ -265,7 +299,7 @@ async fn send_request(
 
     let mut builder = reqwest::Client::builder()
         .danger_accept_invalid_certs(!verify_tls)
-        .cookie_provider(cookies.jar.clone())
+        .cookie_provider(cookies.current_jar())
         .redirect(redirect)
         .timeout(timeout);
 
@@ -671,12 +705,15 @@ async fn save_response_to_file(
         if rid.is_empty() {
             return Err("Cannot save full body: no request id was provided.".to_string());
         }
-        let cache = cached_bodies.map.lock().await;
-        let Some(bytes) = cache.get(&rid) else {
-            return Err(
+        // Clone the Bytes (cheap: it's Arc-backed) and drop the lock before we
+        // hit the filesystem. Saving a multi-hundred-MiB body should not block
+        // any other request finishing and updating the cache.
+        let bytes = {
+            let cache = cached_bodies.map.lock().await;
+            cache.get(&rid).cloned().ok_or_else(|| {
                 "Full response body is no longer cached. Re-send the request and try again."
-                    .to_string(),
-            );
+                    .to_string()
+            })?
         };
         tokio::fs::write(&path, bytes.as_ref())
             .await
