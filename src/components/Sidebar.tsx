@@ -18,6 +18,7 @@ import {
   ChevronDown,
   KeyRound,
   Play,
+  Braces,
 } from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
 import { EnvironmentPanel } from "./EnvironmentPanel";
@@ -30,6 +31,7 @@ import { harToCollection } from "../utils/har";
 import { httpFileToCollection } from "../utils/http-file";
 import { CollectionAuthModal } from "./CollectionAuthModal";
 import { CollectionRunnerModal } from "./CollectionRunnerModal";
+import { VariableScopeModal } from "./VariableScopeModal";
 import { tagColor } from "../utils/tagColor";
 
 /** Heuristic format sniffers used by `handleImportFile`. */
@@ -74,6 +76,9 @@ export function Sidebar() {
   const [showEnvDropdown, setShowEnvDropdown] = useState(false);
   const [editingAuthCollectionId, setEditingAuthCollectionId] = useState<string | null>(null);
   const [runnerCollectionId, setRunnerCollectionId] = useState<string | null>(null);
+  const [variableScope, setVariableScope] = useState<
+    { kind: "global" } | { kind: "collection"; collectionId: string } | null
+  >(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -319,6 +324,16 @@ export function Sidebar() {
               >
                 Manage environments…
               </button>
+              <button
+                onClick={() => {
+                  setVariableScope({ kind: "global" });
+                  setShowEnvDropdown(false);
+                }}
+                className="block w-full text-left px-3 py-1.5 text-[12px] text-accent hover:bg-accent/10 transition-colors"
+                title="Workspace-wide variables, available to every request regardless of active environment"
+              >
+                Global variables…
+              </button>
             </div>
           )}
         </div>
@@ -562,6 +577,23 @@ export function Sidebar() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
+                        setVariableScope({ kind: "collection", collectionId: collection.id });
+                      }}
+                      className={`opacity-0 group-hover:opacity-100 p-0.5 hover:bg-accent/10 rounded-md transition-all ${collection.variables && collection.variables.length > 0 ? "!opacity-100" : ""}`}
+                      title={
+                        collection.variables && collection.variables.length > 0
+                          ? `Edit collection variables (${collection.variables.length} defined)`
+                          : "Set collection-scoped variables"
+                      }
+                    >
+                      <Braces
+                        size={11}
+                        className={collection.variables && collection.variables.length > 0 ? "text-accent" : "text-text-tertiary"}
+                      />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
                         setRunnerCollectionId(collection.id);
                       }}
                       className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-accent/10 rounded-md transition-all"
@@ -715,6 +747,7 @@ export function Sidebar() {
           onClose={() => setRunnerCollectionId(null)}
         />
       )}
+      <VariableScopeModal scope={variableScope} onClose={() => setVariableScope(null)} />
     </div>
   );
 }
