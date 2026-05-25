@@ -144,6 +144,35 @@ fn process_line(line: &str, builder: &mut EventBuilder) -> bool {
     false
 }
 
+/// Drain whatever remains in `buffer` at stream EOF / error. The inner
+/// line-draining loop may have stopped with content still pending:
+///
+/// 1. A deferred trailing `\r` waiting for its paired `\n` of a `\r\n`
+///    sequence that won't ever arrive — we treat the `\r` as a complete
+///    terminator on its own (which the SSE spec allows).
+/// 2. A final line with no terminator at all (the server closed mid-line) —
+///    spec says still process it as if it were terminated.
+///
+/// Caller is expected to invoke `builder.dispatch(...)` after this
+/// (the post-flush empty line is the final dispatch boundary).
+fn flush_trailing(
+    buffer: &mut String,
+    builder: &mut EventBuilder,
+    request_id: &str,
+    app: &AppHandle,
+) {
+    if buffer.ends_with('\r') {
+        buffer.pop();
+    }
+    if buffer.is_empty() {
+        return;
+    }
+    let line = std::mem::take(buffer);
+    if process_line(&line, builder) {
+        builder.dispatch(request_id, app);
+    }
+}
+
 /// Entry point invoked by the Tauri `sse_connect` command.
 ///
 /// Resolves outside the command handler so we can return early with a useful
@@ -318,11 +347,24 @@ pub async fn run_sse_stream(
                             }
                         }
                         Some(Err(e)) => {
+                            // Stream errored mid-flight. Match the original
+                            // behavior — drop any in-flight event and only
+                            // surface the error to the frontend. (Unlike
+                            // EOF, we have no guarantee the partial line
+                            // is complete.)
                             error_msg = Some(e.to_string());
                             break;
                         }
                         None => {
-                            // Stream EOF. Flush any in-progress event.
+                            // Stream EOF. The inner line-draining loop may
+                            // have left content in `buffer`: either a
+                            // deferred `\r` waiting on its paired `\n`, or
+                            // a final line with no trailing terminator at
+                            // all. Both cases need to be processed before
+                            // we emit the final dispatch — otherwise the
+                            // last event of a stream that ends abruptly is
+                            // silently dropped.
+                            flush_trailing(&mut buffer, &mut builder, &request_id_clone, &app_clone);
                             builder.dispatch(&request_id_clone, &app_clone);
                             break;
                         }
