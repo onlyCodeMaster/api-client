@@ -107,7 +107,7 @@ pub struct CollectionFile {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AuthConfig {
-    pub auth_type: String, // "none" | "bearer" | "basic" | "api_key" | "oauth2"
+    pub auth_type: String, // "none" | "bearer" | "basic" | "api_key" | "oauth2" | "sigv4"
     pub bearer_token: Option<String>,
     pub basic_username: Option<String>,
     pub basic_password: Option<String>,
@@ -143,6 +143,21 @@ pub struct AuthConfig {
     /// Unix millis when the cached token stops being valid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth2_token_expires_at: Option<i64>,
+
+    // AWS SigV4 — populated only when auth_type == "sigv4".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_access_key_id: Option<String>,
+    /// Stored in keychain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_secret_access_key: Option<String>,
+    /// Optional STS session token. Stored in keychain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_session_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_region: Option<String>,
+    /// AWS service name (e.g. "s3", "execute-api", "dynamodb").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_service: Option<String>,
 }
 
 // === Environment Types ===
@@ -206,6 +221,8 @@ const AUTH_API_KEY_VALUE: &str = "api_key_value";
 const AUTH_OAUTH2_CLIENT_SECRET: &str = "oauth2_client_secret";
 const AUTH_OAUTH2_PASSWORD: &str = "oauth2_password";
 const AUTH_OAUTH2_ACCESS_TOKEN: &str = "oauth2_access_token";
+const AUTH_AWS_SECRET_KEY: &str = "aws_secret_access_key";
+const AUTH_AWS_SESSION_TOKEN: &str = "aws_session_token";
 
 fn sanitize_auth(auth: &mut Option<AuthConfig>, scope_id: &str) {
     let Some(a) = auth.as_mut() else { return };
@@ -261,6 +278,22 @@ fn sanitize_auth(auth: &mut Option<AuthConfig>, scope_id: &str) {
         }
         a.oauth2_access_token = Some(String::new());
     }
+    if let Some(v) = a.aws_secret_access_key.as_deref() {
+        if !v.is_empty() {
+            let _ = secrets::store_auth_secret(scope_id, AUTH_AWS_SECRET_KEY, v);
+        } else {
+            let _ = secrets::delete_auth_secret(scope_id, AUTH_AWS_SECRET_KEY);
+        }
+        a.aws_secret_access_key = Some(String::new());
+    }
+    if let Some(v) = a.aws_session_token.as_deref() {
+        if !v.is_empty() {
+            let _ = secrets::store_auth_secret(scope_id, AUTH_AWS_SESSION_TOKEN, v);
+        } else {
+            let _ = secrets::delete_auth_secret(scope_id, AUTH_AWS_SESSION_TOKEN);
+        }
+        a.aws_session_token = Some(String::new());
+    }
 }
 
 fn hydrate_auth(auth: &mut Option<AuthConfig>, scope_id: &str) {
@@ -295,6 +328,16 @@ fn hydrate_auth(auth: &mut Option<AuthConfig>, scope_id: &str) {
             a.oauth2_access_token = Some(v);
         }
     }
+    if a.aws_secret_access_key.as_deref().map_or(true, str::is_empty) {
+        if let Ok(Some(v)) = secrets::get_auth_secret(scope_id, AUTH_AWS_SECRET_KEY) {
+            a.aws_secret_access_key = Some(v);
+        }
+    }
+    if a.aws_session_token.as_deref().map_or(true, str::is_empty) {
+        if let Ok(Some(v)) = secrets::get_auth_secret(scope_id, AUTH_AWS_SESSION_TOKEN) {
+            a.aws_session_token = Some(v);
+        }
+    }
 }
 
 fn purge_auth(auth: &Option<AuthConfig>, scope_id: &str) {
@@ -305,6 +348,8 @@ fn purge_auth(auth: &Option<AuthConfig>, scope_id: &str) {
         let _ = secrets::delete_auth_secret(scope_id, AUTH_OAUTH2_CLIENT_SECRET);
         let _ = secrets::delete_auth_secret(scope_id, AUTH_OAUTH2_PASSWORD);
         let _ = secrets::delete_auth_secret(scope_id, AUTH_OAUTH2_ACCESS_TOKEN);
+        let _ = secrets::delete_auth_secret(scope_id, AUTH_AWS_SECRET_KEY);
+        let _ = secrets::delete_auth_secret(scope_id, AUTH_AWS_SESSION_TOKEN);
     }
 }
 

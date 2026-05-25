@@ -121,6 +121,8 @@ function labelFor(a: AuthConfig): string {
       return "API Key";
     case "oauth2":
       return "OAuth 2";
+    case "sigv4":
+      return "AWS SigV4";
     case "none":
       return "No auth";
     case "inherit":

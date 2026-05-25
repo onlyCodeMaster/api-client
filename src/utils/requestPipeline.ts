@@ -9,6 +9,7 @@ import type {
 import { resolveAuth } from "./auth";
 import { runScript } from "./scriptRunner";
 import { substituteAll } from "./dynamicVars";
+import { signSigV4 } from "./sigv4";
 
 /** Defaults pulled from the request store / settings panel. */
 export interface PipelineDefaults {
@@ -55,18 +56,18 @@ export function makeSubstitute(
  * chain. Lifted out of `sendRequest` so the Collection Runner reuses the
  * same logic instead of duplicating it.
  */
-export function buildSendPayload(
+export async function buildSendPayload(
   req: RequestItem,
   collections: Collection[],
   envVars: Record<string, string>,
   transientVars: Record<string, string>,
   defaults: PipelineDefaults
-): {
+): Promise<{
   finalUrl: string;
   headers: { key: string; value: string; enabled: boolean }[];
   bodyStr: string | null;
   payload: Record<string, unknown>;
-} {
+}> {
   const sub = makeSubstitute(envVars, transientVars);
 
   let finalUrl = sub(req.url);
@@ -105,6 +106,8 @@ export function buildSendPayload(
         enabled: true,
       });
     }
+    // SigV4 happens after body construction below, since the canonical
+    // request hashes the payload. We resolve auth here and stash a flag.
   }
 
   // Auto Content-Type if user hasn't set one explicitly.
@@ -147,6 +150,37 @@ export function buildSendPayload(
     });
   } else if (req.bodyType !== "none") {
     bodyStr = sub(req.body || "") || null;
+  }
+
+  // AWS SigV4 — signs URL/headers/body. Has to run after the body is fully
+  // computed because the signature hashes the payload bytes.
+  if (
+    auth &&
+    auth.auth_type === "sigv4" &&
+    auth.aws_access_key_id &&
+    auth.aws_secret_access_key &&
+    auth.aws_region &&
+    auth.aws_service
+  ) {
+    const sig = await signSigV4({
+      method: req.method,
+      url: finalUrl,
+      // Strip enabled flag — signer only needs k/v pairs.
+      headers: headers.map((h) => ({ key: h.key, value: h.value })),
+      body: bodyStr,
+      // Form-data is built by the Rust backend, so we don't have the
+      // exact bytes to hash here. Fall back to UNSIGNED-PAYLOAD which
+      // S3/API Gateway accept over HTTPS.
+      unsignedPayload: req.bodyType === "form-data",
+      accessKeyId: sub(auth.aws_access_key_id),
+      secretAccessKey: sub(auth.aws_secret_access_key),
+      sessionToken: auth.aws_session_token ? sub(auth.aws_session_token) : undefined,
+      region: sub(auth.aws_region),
+      service: sub(auth.aws_service),
+    });
+    for (const h of sig.headers) {
+      headers.push({ key: h.key, value: h.value, enabled: true });
+    }
   }
 
   const payload = {
@@ -225,7 +259,7 @@ export async function executeRequestWithScripts(input: PipelineInput): Promise<P
   let bodyStr: string | null = null;
   let headerMap: Record<string, string> = {};
   try {
-    const built = buildSendPayload(req, collections, envVars, transientVars, defaults);
+    const built = await buildSendPayload(req, collections, envVars, transientVars, defaults);
     finalUrl = built.finalUrl;
     bodyStr = built.bodyStr;
     headerMap = Object.fromEntries(built.headers.map((h) => [h.key, h.value]));

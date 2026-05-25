@@ -21,7 +21,7 @@ export interface AuthConfig {
    *   the parent has auth configured.
    * - `"bearer" | "basic" | "api_key" | "oauth2"`: concrete schemes.
    */
-  auth_type: "inherit" | "none" | "bearer" | "basic" | "api_key" | "oauth2";
+  auth_type: "inherit" | "none" | "bearer" | "basic" | "api_key" | "oauth2" | "sigv4";
   bearer_token?: string;
   basic_username?: string;
   basic_password?: string;
@@ -48,6 +48,16 @@ export interface AuthConfig {
   oauth2_access_token?: string;
   /** Unix millis when the cached token stops being valid. */
   oauth2_token_expires_at?: number;
+
+  // AWS SigV4 — populated only when auth_type === "sigv4".
+  aws_access_key_id?: string;
+  /** Stored in keychain. */
+  aws_secret_access_key?: string;
+  /** Optional STS session token. Stored in keychain. */
+  aws_session_token?: string;
+  aws_region?: string;
+  /** AWS service name (e.g. "s3", "execute-api", "dynamodb"). */
+  aws_service?: string;
 }
 
 export type BodyType = "none" | "json" | "text" | "xml" | "form-data" | "graphql";

@@ -20,7 +20,7 @@ interface Props {
   inheritedFrom?: string | null;
 }
 
-const ALL: AuthConfig["auth_type"][] = ["inherit", "none", "bearer", "basic", "api_key", "oauth2"];
+const ALL: AuthConfig["auth_type"][] = ["inherit", "none", "bearer", "basic", "api_key", "oauth2", "sigv4"];
 
 export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Props) {
   const current: AuthConfig = value || { auth_type: allowInherit ? "inherit" : "none" };
@@ -39,6 +39,8 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
               ? "API Key"
               : type === "oauth2"
               ? "OAuth 2"
+              : type === "sigv4"
+              ? "AWS SigV4"
               : type === "none"
               ? "None"
               : type.charAt(0).toUpperCase() + type.slice(1)}
@@ -138,6 +140,72 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
 
       {current.auth_type === "oauth2" && (
         <OAuth2Editor value={current} onChange={onChange} />
+      )}
+
+      {current.auth_type === "sigv4" && (
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Access Key ID</label>
+              <input
+                type="text"
+                value={current.aws_access_key_id || ""}
+                onChange={(e) => onChange({ ...current, aws_access_key_id: e.target.value })}
+                placeholder="AKIA..."
+                className="input-apple w-full font-mono text-[12px] mt-1"
+                spellCheck={false}
+              />
+            </div>
+            <div>
+              <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Secret Access Key</label>
+              <input
+                type="password"
+                value={current.aws_secret_access_key || ""}
+                onChange={(e) => onChange({ ...current, aws_secret_access_key: e.target.value })}
+                placeholder="secret"
+                className="input-apple w-full font-mono text-[12px] mt-1"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Region</label>
+              <input
+                type="text"
+                value={current.aws_region || ""}
+                onChange={(e) => onChange({ ...current, aws_region: e.target.value })}
+                placeholder="us-east-1"
+                className="input-apple w-full font-mono text-[12px] mt-1"
+                spellCheck={false}
+              />
+            </div>
+            <div>
+              <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Service</label>
+              <input
+                type="text"
+                value={current.aws_service || ""}
+                onChange={(e) => onChange({ ...current, aws_service: e.target.value })}
+                placeholder="execute-api / s3 / dynamodb"
+                className="input-apple w-full font-mono text-[12px] mt-1"
+                spellCheck={false}
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Session Token (optional)</label>
+            <input
+              type="password"
+              value={current.aws_session_token || ""}
+              onChange={(e) => onChange({ ...current, aws_session_token: e.target.value })}
+              placeholder="STS session token — leave blank for long-lived credentials"
+              className="input-apple w-full font-mono text-[12px] mt-1"
+            />
+          </div>
+          <p className="text-[10px] text-text-tertiary leading-relaxed">
+            Signing happens client-side on every Send. form-data bodies are signed with UNSIGNED-PAYLOAD
+            (works for S3 and API Gateway over HTTPS).
+          </p>
+        </div>
       )}
 
       {current.auth_type === "none" && (
