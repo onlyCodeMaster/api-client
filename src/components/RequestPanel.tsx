@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, XCircle, Copy, FileDown, Check, Code2, Timer, Cable, ShieldCheck, ShieldAlert, Globe, Lock, ArrowRightCircle } from "lucide-react";
+import { Send, XCircle, Copy, FileDown, Check, Code2, Timer, Cable, Radio, ShieldCheck, ShieldAlert, Globe, Lock, ArrowRightCircle } from "lucide-react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { useRequestStore } from "../store/useRequestStore";
 import { KeyValueEditor } from "./KeyValueEditor";
@@ -66,11 +66,17 @@ export function RequestPanel() {
 
   if (!activeRequest) return null;
   const isWs = activeRequest.protocol === "websocket";
+  const isSse = activeRequest.protocol === "sse";
+  // SSE and WebSocket are both header-only request protocols: no body, no auth
+  // editor (use a header), and pre/post scripts don't fit the long-lived
+  // stream model. Keep Params + Headers + Settings so users can still inject
+  // env vars, query string, and per-stream TLS/timeout.
+  const isStreaming = isWs || isSse;
 
   const tabs: { id: RequestTab; label: string }[] = [
     { id: "params", label: "Params" },
     { id: "headers", label: "Headers" },
-    ...(isWs
+    ...(isStreaming
       ? []
       : ([
           { id: "body" as const, label: "Body" },
@@ -101,7 +107,7 @@ export function RequestPanel() {
         <div className="segmented-control">
           <button
             onClick={() => setProtocol("http")}
-            className={`segment !text-[11px] ${!isWs ? "segment-active" : ""}`}
+            className={`segment !text-[11px] ${!isWs && !isSse ? "segment-active" : ""}`}
             title="HTTP"
           >
             HTTP
@@ -113,6 +119,14 @@ export function RequestPanel() {
           >
             <Cable size={11} className="inline -mt-0.5 mr-0.5" />
             WS
+          </button>
+          <button
+            onClick={() => setProtocol("sse")}
+            className={`segment !text-[11px] ${isSse ? "segment-active" : ""}`}
+            title="Server-Sent Events"
+          >
+            <Radio size={11} className="inline -mt-0.5 mr-0.5" />
+            SSE
           </button>
         </div>
         <button
@@ -185,7 +199,7 @@ export function RequestPanel() {
 
       {/* URL Bar */}
       <div className="flex items-center gap-2 px-4 py-3">
-        {!isWs && (
+        {!isStreaming && (
           <select
             value={activeRequest.method}
             onChange={(e) => setMethod(e.target.value as HttpMethod)}
@@ -201,6 +215,9 @@ export function RequestPanel() {
         {isWs && (
           <div className="input-apple font-semibold w-[100px] text-accent text-center">WS</div>
         )}
+        {isSse && (
+          <div className="input-apple font-semibold w-[100px] text-accent text-center">SSE</div>
+        )}
 
         <input
           ref={urlRef}
@@ -208,15 +225,19 @@ export function RequestPanel() {
           value={activeRequest.url}
           onChange={(e) => setUrl(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !isWs) sendRequest();
+            if (e.key === "Enter" && !isStreaming) sendRequest();
           }}
           placeholder={
-            isWs ? "wss://echo.websocket.events" : "https://api.example.com/endpoint"
+            isWs
+              ? "wss://echo.websocket.events"
+              : isSse
+                ? "https://example.com/events"
+                : "https://api.example.com/endpoint"
           }
           className="input-apple flex-1"
         />
 
-        {!isWs && (
+        {!isStreaming && (
           loading ? (
             <button
               onClick={cancelRequest}
@@ -279,7 +300,7 @@ export function RequestPanel() {
           />
         )}
 
-        {activeTab === "body" && !isWs && (
+        {activeTab === "body" && !isStreaming && (
           <div className="space-y-3">
             <div className="segmented-control flex-wrap">
               {(["none", "json", "text", "xml", "form-data", "graphql"] as const).map((type) => (
@@ -339,7 +360,7 @@ export function RequestPanel() {
           </div>
         )}
 
-        {activeTab === "auth" && !isWs && (
+        {activeTab === "auth" && !isStreaming && (
           <div className="space-y-3">
             <AuthEditor
               value={currentAuth}
@@ -350,7 +371,7 @@ export function RequestPanel() {
           </div>
         )}
 
-        {activeTab === "pre" && !isWs && (
+        {activeTab === "pre" && !isStreaming && (
           <div className="space-y-2">
             <p className="text-[11px] text-text-tertiary leading-relaxed">
               Runs before the request is sent. Mutate variables with{" "}
@@ -372,7 +393,7 @@ export function RequestPanel() {
           </div>
         )}
 
-        {activeTab === "tests" && !isWs && (
+        {activeTab === "tests" && !isStreaming && (
           <div className="space-y-2">
             <p className="text-[11px] text-text-tertiary leading-relaxed">
               Runs after the response arrives. Use{" "}

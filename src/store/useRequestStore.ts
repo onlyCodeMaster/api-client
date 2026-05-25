@@ -14,6 +14,8 @@ import type {
   AuthConfig,
   CookieEntry,
   WsMessage,
+  SseEventRecord,
+  Protocol,
   TestResult,
   ScriptLog,
 } from "../types";
@@ -114,6 +116,10 @@ interface RequestState {
   wsConnected: Record<string, boolean>;
   wsMessages: Record<string, WsMessage[]>;
 
+  // Server-Sent Events state per tab
+  sseConnected: Record<string, boolean>;
+  sseEvents: Record<string, SseEventRecord[]>;
+
   // Cookies
   cookies: CookieEntry[];
 
@@ -157,7 +163,7 @@ interface RequestState {
   setMaxRedirects: (n: number | undefined) => void;
   setProxyUrl: (url: string | undefined) => void;
   setClientCert: (cert: RequestItem["clientCert"]) => void;
-  setProtocol: (protocol: "http" | "websocket") => void;
+  setProtocol: (protocol: Protocol) => void;
   setGraphqlQuery: (q: string) => void;
   setGraphqlVariables: (v: string) => void;
   setPreScript: (s: string) => void;
@@ -214,6 +220,15 @@ interface RequestState {
   wsSend: (text: string) => Promise<void>;
   wsClose: () => Promise<void>;
   appendWsEvent: (requestId: string, kind: string, text?: string | null) => void;
+
+  // Server-Sent Events
+  sseConnect: () => Promise<void>;
+  sseClose: () => Promise<void>;
+  appendSseEvent: (
+    requestId: string,
+    kind: string,
+    detail: { event?: string; data?: string; id?: string; retry?: number; error?: string }
+  ) => void;
 
   // Workspace
   saveWorkspaceState: () => Promise<void>;
@@ -291,6 +306,9 @@ export const useRequestStore = create<RequestState>((set, get) => {
     wsConnected: {},
     wsMessages: {},
 
+    sseConnected: {},
+    sseEvents: {},
+
     cookies: [],
     defaultTimeoutMs: 30000,
     verifyTlsDefault: true,
@@ -358,10 +376,14 @@ export const useRequestStore = create<RequestState>((set, get) => {
     closeTab: (id) => {
       const state = get();
       const { tabs, activeTabId, responses, errors, loadings, wsConnected, wsMessages,
-        testResults, scriptLogs, scriptError, responseHistory } = state;
+        testResults, scriptLogs, scriptError, responseHistory, sseConnected, sseEvents } = state;
       // If a WebSocket is still open in this tab, close it on the backend
       if (wsConnected[id]) {
         invoke("ws_close", { requestId: id }).catch(() => {});
+      }
+      // Same for an open SSE stream
+      if (sseConnected[id]) {
+        invoke("sse_close", { requestId: id }).catch(() => {});
       }
       // If an HTTP request is still in flight, cancel it
       if (loadings[id]) {
@@ -384,6 +406,8 @@ export const useRequestStore = create<RequestState>((set, get) => {
           responseHistory: {},
           wsConnected: {},
           wsMessages: {},
+          sseConnected: {},
+          sseEvents: {},
           ...syncDerived({ ...s, tabs: [fresh], activeTabId: fresh.id, responses: {}, errors: {}, loadings: {} }),
         }));
         return;
@@ -404,6 +428,8 @@ export const useRequestStore = create<RequestState>((set, get) => {
       const scriptLogsRest = { ...scriptLogs }; delete scriptLogsRest[id];
       const scriptErrorRest = { ...scriptError }; delete scriptErrorRest[id];
       const responseHistoryRest = { ...responseHistory }; delete responseHistoryRest[id];
+      const sseConnRest = { ...sseConnected }; delete sseConnRest[id];
+      const sseEventsRest = { ...sseEvents }; delete sseEventsRest[id];
       set((s) => ({
         tabs: remaining,
         activeTabId: nextActive,
@@ -416,6 +442,8 @@ export const useRequestStore = create<RequestState>((set, get) => {
         scriptLogs: scriptLogsRest,
         scriptError: scriptErrorRest,
         responseHistory: responseHistoryRest,
+        sseConnected: sseConnRest,
+        sseEvents: sseEventsRest,
         ...syncDerived({
           ...s,
           tabs: remaining,
@@ -1041,6 +1069,95 @@ export const useRequestStore = create<RequestState>((set, get) => {
         return {
           wsMessages: { ...s.wsMessages, [requestId]: [...list, msg] },
           wsConnected: { ...s.wsConnected, [requestId]: kind === "open" ? true : kind === "close" || kind === "error" ? false : !!s.wsConnected[requestId] },
+        };
+      });
+    },
+
+    // === Server-Sent Events ===
+
+    sseConnect: async () => {
+      const state = get();
+      const req = activeTab(state);
+      if (!req) return;
+      const reqId = req.id;
+
+      // Variable substitution mirrors the WS path: only env vars; SSE has no
+      // request body so there's nothing else to substitute.
+      const envVars: Record<string, string> = {};
+      const activeEnvId = state.workspace?.active_environment_id;
+      if (activeEnvId) {
+        const activeEnv = state.environments.find((e) => e.id === activeEnvId);
+        if (activeEnv) {
+          for (const v of activeEnv.variables) {
+            if (v.enabled && v.key) envVars[v.key] = v.value;
+          }
+        }
+      }
+      const sub = (str: string) =>
+        str.replace(/\{\{(\w+)\}\}/g, (_, key) => envVars[key] ?? `{{${key}}}`);
+
+      try {
+        set((s) => ({
+          sseEvents: { ...s.sseEvents, [reqId]: [] },
+          errors: { ...s.errors, [reqId]: null },
+          ...syncDerived({ ...s, errors: { ...s.errors, [reqId]: null } }),
+        }));
+        await invoke("sse_connect", {
+          payload: {
+            url: sub(req.url),
+            headers: req.headers
+              .filter((h) => h.enabled && h.key)
+              .map((h) => ({
+                key: sub(h.key),
+                value: sub(h.value),
+                enabled: true,
+                is_file: false,
+                file_path: null,
+              })),
+            request_id: reqId,
+            verify_tls: req.verifyTls,
+            timeout_ms: req.timeoutMs ?? state.defaultTimeoutMs,
+          },
+        });
+      } catch (err) {
+        set((s) => ({
+          errors: { ...s.errors, [reqId]: String(err) },
+          ...syncDerived({ ...s, errors: { ...s.errors, [reqId]: String(err) } }),
+        }));
+      }
+    },
+
+    sseClose: async () => {
+      const state = get();
+      const req = activeTab(state);
+      if (!req) return;
+      try {
+        await invoke("sse_close", { requestId: req.id });
+      } catch {}
+    },
+
+    appendSseEvent: (requestId, kind, detail) => {
+      set((s) => {
+        const list = s.sseEvents[requestId] || [];
+        const next: SseEventRecord = {
+          id: generateId(),
+          ts: Date.now(),
+          kind: kind as SseEventRecord["kind"],
+          event: detail.event,
+          data: detail.data,
+          lastEventId: detail.id,
+          retry: detail.retry,
+          error: detail.error,
+        };
+        const connectedNext =
+          kind === "open"
+            ? true
+            : kind === "close" || kind === "error"
+              ? false
+              : !!s.sseConnected[requestId];
+        return {
+          sseEvents: { ...s.sseEvents, [requestId]: [...list, next] },
+          sseConnected: { ...s.sseConnected, [requestId]: connectedNext },
         };
       });
     },

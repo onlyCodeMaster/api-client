@@ -32,7 +32,7 @@ export interface AuthConfig {
 
 export type BodyType = "none" | "json" | "text" | "xml" | "form-data" | "graphql";
 
-export type Protocol = "http" | "websocket";
+export type Protocol = "http" | "websocket" | "sse";
 
 export interface RequestItem {
   id: string;
@@ -259,4 +259,26 @@ export interface WsMessage {
   direction: "sent" | "received" | "system";
   text: string;
   ts: number;
+}
+
+// Server-Sent Events
+/**
+ * One entry in the per-request SSE event log. `kind = "message"` carries the
+ * parsed fields from the wire frame; `"open" / "close" / "error"` are
+ * system markers emitted by the backend reader.
+ */
+export interface SseEventRecord {
+  id: string;
+  ts: number;
+  kind: "message" | "open" | "close" | "error" | "system";
+  /** Custom `event:` field from the frame, if the server sent one. */
+  event?: string;
+  /** `data:` field — multiple `data:` lines are joined with `\n`. */
+  data?: string;
+  /** Server-supplied `id:` field. */
+  lastEventId?: string;
+  /** Server-supplied `retry:` field, in ms. */
+  retry?: number;
+  /** Filled when `kind === "error"`. */
+  error?: string;
 }
