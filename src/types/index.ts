@@ -5,6 +5,10 @@ export interface KeyValue {
   key: string;
   value: string;
   enabled: boolean;
+  /** When true, this entry represents a file upload (used in form-data only). */
+  is_file?: boolean;
+  /** Absolute path to file on disk (for form-data file uploads). */
+  file_path?: string;
 }
 
 export interface AuthConfig {
@@ -17,6 +21,10 @@ export interface AuthConfig {
   api_key_in?: "header" | "query";
 }
 
+export type BodyType = "none" | "json" | "text" | "xml" | "form-data" | "graphql";
+
+export type Protocol = "http" | "websocket";
+
 export interface RequestItem {
   id: string;
   name: string;
@@ -25,9 +33,16 @@ export interface RequestItem {
   headers: KeyValue[];
   params: KeyValue[];
   body: string;
-  bodyType: "none" | "json" | "text" | "xml" | "form-data";
+  bodyType: BodyType;
   formData: KeyValue[];
   auth?: AuthConfig;
+  /** Per-request timeout in milliseconds. Falls back to global default if undefined. */
+  timeoutMs?: number;
+  /** Protocol selector: HTTP request or WebSocket connection. */
+  protocol?: Protocol;
+  /** GraphQL query and variables when bodyType === "graphql". */
+  graphqlQuery?: string;
+  graphqlVariables?: string;
   createdAt: number;
   updatedAt?: number;
 }
@@ -150,4 +165,12 @@ export interface RecentEntry {
   item_id: string;
   name: string;
   opened_at: number;
+}
+
+// WebSocket
+export interface WsMessage {
+  id: string;
+  direction: "sent" | "received" | "system";
+  text: string;
+  ts: number;
 }

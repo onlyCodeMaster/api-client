@@ -3,21 +3,28 @@ pub mod db;
 pub mod secrets;
 pub mod storage;
 
+use futures_util::{SinkExt, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::multipart;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
+use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct KeyValue {
     pub key: String,
     pub value: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub is_file: bool,
+    #[serde(default)]
+    pub file_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -107,12 +114,28 @@ async fn send_request(
 
     let mut request_builder = client.request(method, &payload.url).headers(headers);
 
-    // Handle form-data (multipart)
+    // Handle form-data (multipart) with optional file upload support
     if payload.body_type.as_deref() == Some("form-data") {
         if let Some(form_fields) = &payload.form_data {
             let mut form = multipart::Form::new();
             for field in form_fields {
-                if field.enabled && !field.key.is_empty() {
+                if !field.enabled || field.key.is_empty() {
+                    continue;
+                }
+                if field.is_file {
+                    if let Some(path) = &field.file_path {
+                        let bytes = tokio::fs::read(path).await.map_err(|e| {
+                            format!("Failed to read file '{}': {}", path, e)
+                        })?;
+                        let file_name = std::path::Path::new(path)
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("file")
+                            .to_string();
+                        let part = multipart::Part::bytes(bytes).file_name(file_name);
+                        form = form.part(field.key.clone(), part);
+                    }
+                } else {
                     form = form.text(field.key.clone(), field.value.clone());
                 }
             }
@@ -172,18 +195,204 @@ async fn send_request(
     })
 }
 
+// ============================================================================
+// WebSocket support
+// ============================================================================
+
+#[derive(Default)]
+pub struct WsConnections {
+    map: Mutex<HashMap<String, mpsc::UnboundedSender<WsCommand>>>,
+}
+
+enum WsCommand {
+    Send(String),
+    Close,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct WsEvent {
+    pub request_id: String,
+    pub kind: String, // "open" | "message" | "error" | "close"
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WsConnectPayload {
+    pub url: String,
+    pub headers: Vec<KeyValue>,
+    pub request_id: String,
+}
+
+#[tauri::command]
+async fn ws_connect(
+    app: AppHandle,
+    connections: State<'_, Arc<WsConnections>>,
+    payload: WsConnectPayload,
+) -> Result<(), String> {
+    let WsConnectPayload {
+        url,
+        headers: _headers,
+        request_id,
+    } = payload;
+
+    // If already connected, close first.
+    {
+        let mut map = connections.map.lock().await;
+        if let Some(tx) = map.remove(&request_id) {
+            let _ = tx.send(WsCommand::Close);
+        }
+    }
+
+    // Validate the URL early for a friendlier error message; tokio-tungstenite
+    // accepts a &str directly via IntoClientRequest.
+    url::Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
+
+    let (ws_stream, _resp) = tokio_tungstenite::connect_async(url.as_str())
+        .await
+        .map_err(|e| format!("WebSocket connection failed: {}", e))?;
+
+    let (mut sink, mut stream) = ws_stream.split();
+
+    let (tx, mut rx) = mpsc::unbounded_channel::<WsCommand>();
+    {
+        let mut map = connections.map.lock().await;
+        map.insert(request_id.clone(), tx);
+    }
+
+    let _ = app.emit(
+        "ws-event",
+        WsEvent {
+            request_id: request_id.clone(),
+            kind: "open".to_string(),
+            text: None,
+        },
+    );
+
+    // Task: forward outgoing commands to sink
+    let app_clone = app.clone();
+    let connections_arc = connections.inner().clone();
+    let request_id_clone = request_id.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                cmd = rx.recv() => {
+                    match cmd {
+                        Some(WsCommand::Send(text)) => {
+                            if sink.send(Message::Text(text)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Some(WsCommand::Close) | None => {
+                            let _ = sink.send(Message::Close(None)).await;
+                            break;
+                        }
+                    }
+                }
+                msg = stream.next() => {
+                    match msg {
+                        Some(Ok(Message::Text(t))) => {
+                            let _ = app_clone.emit(
+                                "ws-event",
+                                WsEvent {
+                                    request_id: request_id_clone.clone(),
+                                    kind: "message".to_string(),
+                                    text: Some(t),
+                                },
+                            );
+                        }
+                        Some(Ok(Message::Binary(b))) => {
+                            let _ = app_clone.emit(
+                                "ws-event",
+                                WsEvent {
+                                    request_id: request_id_clone.clone(),
+                                    kind: "message".to_string(),
+                                    text: Some(format!("[binary {} bytes]", b.len())),
+                                },
+                            );
+                        }
+                        Some(Ok(Message::Close(_))) | None => {
+                            break;
+                        }
+                        Some(Ok(_)) => {
+                            // ping/pong/frame – ignore
+                        }
+                        Some(Err(e)) => {
+                            let _ = app_clone.emit(
+                                "ws-event",
+                                WsEvent {
+                                    request_id: request_id_clone.clone(),
+                                    kind: "error".to_string(),
+                                    text: Some(e.to_string()),
+                                },
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        let _ = app_clone.emit(
+            "ws-event",
+            WsEvent {
+                request_id: request_id_clone.clone(),
+                kind: "close".to_string(),
+                text: None,
+            },
+        );
+        let mut map = connections_arc.map.lock().await;
+        map.remove(&request_id_clone);
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn ws_send(
+    connections: State<'_, Arc<WsConnections>>,
+    request_id: String,
+    text: String,
+) -> Result<(), String> {
+    let map = connections.map.lock().await;
+    if let Some(tx) = map.get(&request_id) {
+        tx.send(WsCommand::Send(text))
+            .map_err(|e| format!("WS send failed: {}", e))?;
+        Ok(())
+    } else {
+        Err("WebSocket not connected".to_string())
+    }
+}
+
+#[tauri::command]
+async fn ws_close(
+    connections: State<'_, Arc<WsConnections>>,
+    request_id: String,
+) -> Result<(), String> {
+    let mut map = connections.map.lock().await;
+    if let Some(tx) = map.remove(&request_id) {
+        let _ = tx.send(WsCommand::Close);
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let database = db::Database::new().expect("Failed to initialize database");
     let active_requests = Arc::new(ActiveRequests::new());
+    let ws_connections = Arc::new(WsConnections::default());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(database)
         .manage(active_requests)
+        .manage(ws_connections)
         .invoke_handler(tauri::generate_handler![
             send_request,
             cancel_request,
+            ws_connect,
+            ws_send,
+            ws_close,
             // History
             commands::save_history,
             commands::get_history,
