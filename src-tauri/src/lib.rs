@@ -19,6 +19,8 @@ use tokio_tungstenite::tungstenite::http::{HeaderName as WsHeaderName, HeaderVal
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 
+use base64::Engine;
+
 use crate::db::CookieEntry;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -30,6 +32,16 @@ pub struct KeyValue {
     pub is_file: bool,
     #[serde(default)]
     pub file_path: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ClientCert {
+    /// Filesystem path to a PKCS#12 (`.p12` / `.pfx`) bundle containing the
+    /// client certificate and its private key.
+    pub path: String,
+    /// Optional passphrase protecting the PKCS#12 bundle.
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -46,6 +58,27 @@ pub struct RequestPayload {
     /// When `None` or `Some(true)`, verify normally (the safe default).
     #[serde(default)]
     pub verify_tls: Option<bool>,
+    /// `"follow"` (default), `"none"`, or `"manual"`. Manual is treated the
+    /// same as none — the response body is returned with the redirect headers
+    /// intact so the caller can inspect them.
+    #[serde(default)]
+    pub redirect_policy: Option<String>,
+    /// Maximum number of redirects to follow when `redirect_policy` is `follow`.
+    /// Defaults to 10 if unspecified.
+    #[serde(default)]
+    pub max_redirects: Option<u32>,
+    /// Outbound proxy, e.g. `http://user:pass@host:8080`, `https://...`, or
+    /// `socks5://host:1080`. Applied to both HTTP and HTTPS.
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+    /// Optional client certificate for mTLS.
+    #[serde(default)]
+    pub client_cert: Option<ClientCert>,
+    /// Maximum number of bytes of the response body to return inline. When the
+    /// real body exceeds this, the body is truncated and `body_truncated`
+    /// is set in the response. Defaults to 10 MiB.
+    #[serde(default)]
+    pub max_body_bytes: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,8 +87,37 @@ pub struct ResponseData {
     pub status_text: String,
     pub headers: HashMap<String, String>,
     pub body: String,
+    /// `"text"` when `body` is a UTF-8 string, `"base64"` when `body` holds
+    /// base64-encoded binary content.
+    pub body_encoding: String,
+    /// True when the response was larger than `max_body_bytes` and `body`
+    /// holds only the first chunk. `size_bytes` still reflects the full size.
+    pub body_truncated: bool,
     pub time_ms: u64,
     pub size_bytes: usize,
+}
+
+/// Heuristic: treat these MIME types as text and decode as UTF-8. Everything
+/// else is base64-encoded so the frontend can show an appropriate preview.
+fn is_text_mime(ct: &str) -> bool {
+    let lower = ct.to_ascii_lowercase();
+    let mime = lower.split(';').next().unwrap_or("").trim();
+    if mime.starts_with("text/") {
+        return true;
+    }
+    matches!(
+        mime,
+        "application/json"
+            | "application/ld+json"
+            | "application/xml"
+            | "application/xhtml+xml"
+            | "application/javascript"
+            | "application/x-www-form-urlencoded"
+            | "application/graphql"
+            | "application/yaml"
+            | "application/x-yaml"
+    ) || mime.ends_with("+json")
+        || mime.ends_with("+xml")
 }
 
 pub struct ActiveRequests {
@@ -63,6 +125,25 @@ pub struct ActiveRequests {
 }
 
 impl ActiveRequests {
+    pub fn new() -> Self {
+        Self {
+            map: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+/// Cache of full response bodies that were too big to send over IPC in one
+/// piece. Keyed by request id (the same id used for cancellation), so a Save
+/// click can retrieve the complete bytes without having to re-issue the
+/// request (which would be wrong for non-idempotent methods like POST).
+///
+/// The cache only ever holds the **most recent** body for a given request id,
+/// so memory usage is bounded by the largest single response per request slot.
+pub struct CachedBodies {
+    map: Mutex<HashMap<String, bytes::Bytes>>,
+}
+
+impl CachedBodies {
     pub fn new() -> Self {
         Self {
             map: Mutex::new(HashMap::new()),
@@ -166,6 +247,7 @@ async fn cancel_request(
 async fn send_request(
     active_requests: State<'_, Arc<ActiveRequests>>,
     cookies: State<'_, Arc<AppCookies>>,
+    cached_bodies: State<'_, Arc<CachedBodies>>,
     db: State<'_, db::Database>,
     payload: RequestPayload,
 ) -> Result<ResponseData, String> {
@@ -174,10 +256,42 @@ async fn send_request(
     // explicitly opts out (per-request or via the global setting).
     let verify_tls = payload.verify_tls.unwrap_or(true);
 
-    let client = reqwest::Client::builder()
+    // Redirect policy. Default: follow up to 10. "none" or "manual" => stop
+    // at the first 3xx so the caller can see the Location header.
+    let redirect = match payload.redirect_policy.as_deref().unwrap_or("follow") {
+        "none" | "manual" => reqwest::redirect::Policy::none(),
+        _ => reqwest::redirect::Policy::limited(payload.max_redirects.unwrap_or(10) as usize),
+    };
+
+    let mut builder = reqwest::Client::builder()
         .danger_accept_invalid_certs(!verify_tls)
         .cookie_provider(cookies.jar.clone())
-        .timeout(timeout)
+        .redirect(redirect)
+        .timeout(timeout);
+
+    if let Some(proxy_url) = payload.proxy_url.as_deref() {
+        if !proxy_url.is_empty() {
+            let proxy = reqwest::Proxy::all(proxy_url)
+                .map_err(|e| format!("Invalid proxy URL: {}", e))?;
+            builder = builder.proxy(proxy);
+        }
+    }
+
+    if let Some(cert) = &payload.client_cert {
+        if !cert.path.is_empty() {
+            let pkcs12_bytes = tokio::fs::read(&cert.path)
+                .await
+                .map_err(|e| format!("Failed to read client certificate '{}': {}", cert.path, e))?;
+            let identity = reqwest::Identity::from_pkcs12_der(
+                &pkcs12_bytes,
+                cert.password.as_deref().unwrap_or(""),
+            )
+            .map_err(|e| format!("Invalid client certificate: {}", e))?;
+            builder = builder.identity(identity);
+        }
+    }
+
+    let client = builder
         .build()
         .map_err(|e| format!("Failed to create client: {}", e))?;
 
@@ -284,13 +398,49 @@ async fn send_request(
         .await
         .map_err(|e| format!("Failed to read body: {}", e))?;
     let size_bytes = body_bytes.len();
-    let body = String::from_utf8_lossy(&body_bytes).to_string();
+
+    // Truncate before encoding so we don't blow up the IPC channel.
+    // Default cap is 10 MiB; the frontend can configure this per request.
+    let cap = payload.max_body_bytes.unwrap_or(10 * 1024 * 1024);
+    let truncated = size_bytes > cap;
+    let take = if truncated { cap } else { size_bytes };
+    let display_bytes = &body_bytes[..take];
+
+    let content_type = resp_headers
+        .get("content-type")
+        .cloned()
+        .unwrap_or_default();
+    let (body, body_encoding) = if is_text_mime(&content_type) {
+        (
+            String::from_utf8_lossy(display_bytes).to_string(),
+            "text".to_string(),
+        )
+    } else {
+        (
+            base64::engine::general_purpose::STANDARD.encode(display_bytes),
+            "base64".to_string(),
+        )
+    };
+
+    // Stash the full bytes when we had to truncate, so a subsequent Save can
+    // recover them. Otherwise drop any stale entry from a previous response
+    // in this same request slot so we don't hold onto memory unnecessarily.
+    if !request_id.is_empty() {
+        let mut cache = cached_bodies.map.lock().await;
+        if truncated {
+            cache.insert(request_id.clone(), body_bytes.clone());
+        } else {
+            cache.remove(&request_id);
+        }
+    }
 
     Ok(ResponseData {
         status,
         status_text,
         headers: resp_headers,
         body,
+        body_encoding,
+        body_truncated: truncated,
         time_ms: elapsed,
         size_bytes,
     })
@@ -495,12 +645,65 @@ async fn ws_close(
     Ok(())
 }
 
+/// Write a response body to disk. Two modes:
+///
+/// 1. **Truncated body**: when the response was too big to send over IPC in
+///    full, the backend stashed the original bytes in `CachedBodies` keyed by
+///    `request_id`. Pass `use_cached: true` and the matching `request_id` to
+///    write the complete body — the truncated `body`/`encoding` arguments are
+///    ignored in this mode.
+///
+/// 2. **Inline body** (default): the frontend sends back the `body` it
+///    already has, and we write those bytes verbatim. `encoding` matches
+///    `ResponseData.body_encoding`: `"text"` writes the string verbatim,
+///    `"base64"` decodes first so the file on disk is the original binary.
+#[tauri::command]
+async fn save_response_to_file(
+    cached_bodies: State<'_, Arc<CachedBodies>>,
+    path: String,
+    body: String,
+    encoding: String,
+    #[allow(non_snake_case)] request_id: Option<String>,
+    #[allow(non_snake_case)] use_cached: Option<bool>,
+) -> Result<(), String> {
+    if use_cached.unwrap_or(false) {
+        let rid = request_id.unwrap_or_default();
+        if rid.is_empty() {
+            return Err("Cannot save full body: no request id was provided.".to_string());
+        }
+        let cache = cached_bodies.map.lock().await;
+        let Some(bytes) = cache.get(&rid) else {
+            return Err(
+                "Full response body is no longer cached. Re-send the request and try again."
+                    .to_string(),
+            );
+        };
+        tokio::fs::write(&path, bytes.as_ref())
+            .await
+            .map_err(|e| format!("Failed to write file '{}': {}", path, e))?;
+        return Ok(());
+    }
+
+    let bytes: Vec<u8> = if encoding == "base64" {
+        base64::engine::general_purpose::STANDARD
+            .decode(body.as_bytes())
+            .map_err(|e| format!("Invalid base64 body: {}", e))?
+    } else {
+        body.into_bytes()
+    };
+    tokio::fs::write(&path, &bytes)
+        .await
+        .map_err(|e| format!("Failed to write file '{}': {}", path, e))?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let database = db::Database::new().expect("Failed to initialize database");
     let active_requests = Arc::new(ActiveRequests::new());
     let ws_connections = Arc::new(WsConnections::default());
     let cookies = Arc::new(AppCookies::new());
+    let cached_bodies = Arc::new(CachedBodies::new());
     cookies.preload_from_db(&database);
 
     tauri::Builder::default()
@@ -510,9 +713,11 @@ pub fn run() {
         .manage(active_requests)
         .manage(ws_connections)
         .manage(cookies)
+        .manage(cached_bodies)
         .invoke_handler(tauri::generate_handler![
             send_request,
             cancel_request,
+            save_response_to_file,
             ws_connect,
             ws_send,
             ws_close,
