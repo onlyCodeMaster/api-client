@@ -4,6 +4,7 @@ import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { JsonView, defaultStyles, darkStyles } from "react-json-view-lite";
 import "react-json-view-lite/dist/index.css";
+import { useDarkMode } from "../utils/useDarkMode";
 import { useRequestStore } from "../store/useRequestStore";
 import { ResponseDiffModal } from "./ResponseDiffModal";
 
@@ -178,16 +179,11 @@ export function ResponsePanel() {
     }
   }, [bodyIsJson, response?.body]);
 
-  const treeStyles = useMemo(() => {
-    // Pick the JSON tree theme that goes with the app's current
-    // light/dark setting. The store doesn't expose dark-mode state yet,
-    // so detect via the html element's class — set elsewhere by the
-    // SettingsPanel theme toggle.
-    const isDark =
-      typeof document !== "undefined" &&
-      document.documentElement.classList.contains("dark");
-    return isDark ? darkStyles : defaultStyles;
-  }, []);
+  // Pick the JSON tree theme that follows the app's current light/dark
+  // setting. `useDarkMode` subscribes to the `.dark` class on the document
+  // root so we re-render and swap styles when the user toggles the theme.
+  const isDark = useDarkMode();
+  const treeStyles = isDark ? darkStyles : defaultStyles;
 
   const highlightedSearchBody = useMemo(() => {
     if (!searchQuery || !formattedBody) return null;
