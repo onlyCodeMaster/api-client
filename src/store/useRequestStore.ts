@@ -298,7 +298,15 @@ export const useRequestStore = create<RequestState>((set, get) => {
     },
 
     closeTab: (id) => {
-      const { tabs, activeTabId, responses, errors, loadings } = get();
+      const { tabs, activeTabId, responses, errors, loadings, wsConnected } = get();
+      // If a WebSocket is still open in this tab, close it on the backend
+      if (wsConnected[id]) {
+        invoke("ws_close", { requestId: id }).catch(() => {});
+      }
+      // If an HTTP request is still in flight, cancel it
+      if (loadings[id]) {
+        invoke("cancel_request", { requestId: id }).catch(() => {});
+      }
       if (tabs.length === 1) {
         // Replace with a fresh new request rather than zero tabs
         const fresh = createNewRequest();
@@ -319,15 +327,20 @@ export const useRequestStore = create<RequestState>((set, get) => {
         const fallback = remaining[Math.max(0, idx - 1)] ?? remaining[0];
         nextActive = fallback.id;
       }
-      const { [id]: _r, ...respRest } = responses;
-      const { [id]: _e, ...errRest } = errors;
-      const { [id]: _l, ...loadRest } = loadings;
+      const respRest = { ...responses }; delete respRest[id];
+      const errRest = { ...errors }; delete errRest[id];
+      const loadRest = { ...loadings }; delete loadRest[id];
+      const wsConnRest = { ...wsConnected }; delete wsConnRest[id];
+      const { wsMessages } = get();
+      const wsMsgRest = { ...wsMessages }; delete wsMsgRest[id];
       set((s) => ({
         tabs: remaining,
         activeTabId: nextActive,
         responses: respRest,
         errors: errRest,
         loadings: loadRest,
+        wsConnected: wsConnRest,
+        wsMessages: wsMsgRest,
         ...syncDerived({
           ...s,
           tabs: remaining,
@@ -380,6 +393,8 @@ export const useRequestStore = create<RequestState>((set, get) => {
       const state = get();
       const req = activeTab(state);
       if (!req || !req.url) return;
+      // WebSocket tabs use wsConnect/wsSend rather than sendRequest.
+      if (req.protocol === "websocket") return;
 
       const reqId = req.id;
       set((s) => ({

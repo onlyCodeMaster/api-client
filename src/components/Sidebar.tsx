@@ -64,6 +64,19 @@ export function Sidebar() {
     }
   }, []);
 
+  // Close the environment dropdown when clicking outside of it
+  useEffect(() => {
+    if (!showEnvDropdown) return;
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest("[data-env-dropdown]")) {
+        setShowEnvDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [showEnvDropdown]);
+
   const {
     history,
     collections,
@@ -207,7 +220,7 @@ export function Sidebar() {
         </div>
 
         {/* Environment selector */}
-        <div className="relative mb-3">
+        <div className="relative mb-3" data-env-dropdown>
           <button
             onClick={() => setShowEnvDropdown((v) => !v)}
             className="w-full flex items-center justify-between gap-1.5 px-2.5 py-1.5 bg-surface-secondary hover:bg-surface-secondary/70 rounded-lg text-[12px] text-text-secondary transition-colors"
