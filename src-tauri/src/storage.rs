@@ -142,21 +142,31 @@ const AUTH_API_KEY_VALUE: &str = "api_key_value";
 
 fn sanitize_auth(auth: &mut Option<AuthConfig>, scope_id: &str) {
     let Some(a) = auth.as_mut() else { return };
+    // For each secret field: if the user provided a value, persist it to the
+    // keychain; if they cleared the field, delete the keychain entry so the
+    // clear actually takes effect. Without the delete branch, hydrate_auth
+    // would silently restore the old value on the next load.
     if let Some(t) = a.bearer_token.as_deref() {
         if !t.is_empty() {
             let _ = secrets::store_auth_secret(scope_id, AUTH_BEARER, t);
+        } else {
+            let _ = secrets::delete_auth_secret(scope_id, AUTH_BEARER);
         }
         a.bearer_token = Some(String::new());
     }
     if let Some(p) = a.basic_password.as_deref() {
         if !p.is_empty() {
             let _ = secrets::store_auth_secret(scope_id, AUTH_BASIC_PWD, p);
+        } else {
+            let _ = secrets::delete_auth_secret(scope_id, AUTH_BASIC_PWD);
         }
         a.basic_password = Some(String::new());
     }
     if let Some(v) = a.api_key_value.as_deref() {
         if !v.is_empty() {
             let _ = secrets::store_auth_secret(scope_id, AUTH_API_KEY_VALUE, v);
+        } else {
+            let _ = secrets::delete_auth_secret(scope_id, AUTH_API_KEY_VALUE);
         }
         a.api_key_value = Some(String::new());
     }
@@ -244,8 +254,15 @@ fn read_folder_auths<F: FnMut(&Option<AuthConfig>, &str)>(
 
 fn sanitize_environment(env: &mut EnvironmentFile) {
     for var in &mut env.variables {
-        if var.is_secret && !var.value.is_empty() {
-            let _ = secrets::store_env_secret(&env.id, &var.key, &var.value);
+        if var.is_secret {
+            // Mirror sanitize_auth: a non-empty value means "store/update",
+            // an empty value means "the user cleared this, drop it from the
+            // keychain so hydrate_environment doesn't resurrect it".
+            if !var.value.is_empty() {
+                let _ = secrets::store_env_secret(&env.id, &var.key, &var.value);
+            } else {
+                let _ = secrets::delete_env_secret(&env.id, &var.key);
+            }
             var.value = String::new();
         }
     }
