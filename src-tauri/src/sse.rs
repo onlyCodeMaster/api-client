@@ -293,6 +293,14 @@ pub async fn run_sse_stream(
                                     (None, None) => None,
                                 };
                                 let Some(idx) = cut else { break };
+                                // If the terminator is a trailing `\r` with no
+                                // byte after it, the paired `\n` of a `\r\n`
+                                // sequence might be split across a chunk
+                                // boundary. Bail out and wait for the next
+                                // chunk so we don't dispatch an event twice.
+                                if buffer.as_bytes()[idx] == b'\r' && idx + 1 == buffer.len() {
+                                    break;
+                                }
                                 let line: String = buffer.drain(..idx).collect();
                                 // Pop the terminator (and the paired \n in CRLF).
                                 let first = buffer.chars().next();
