@@ -82,8 +82,38 @@ export interface RequestItem {
   /** GraphQL query and variables when bodyType === "graphql". */
   graphqlQuery?: string;
   graphqlVariables?: string;
+  /**
+   * Pre-request script source. Runs in a Web Worker sandbox before the
+   * request is sent and can mutate environment / variable scopes via the
+   * `pm.environment` and `pm.variables` APIs.
+   */
+  preScript?: string;
+  /**
+   * Post-response test script source. Runs in a Web Worker sandbox after
+   * the response arrives. Can call `pm.test(name, fn)` and `pm.expect(...)`
+   * to record assertions surfaced in the response panel.
+   */
+  testScript?: string;
   createdAt: number;
   updatedAt?: number;
+}
+
+export interface TestResult {
+  name: string;
+  passed: boolean;
+  error?: string;
+}
+
+export interface ScriptLog {
+  level: "log" | "warn" | "error";
+  args: string[];
+}
+
+export interface ScriptRunOutcome {
+  ok: boolean;
+  error?: string;
+  tests: TestResult[];
+  logs: ScriptLog[];
 }
 
 export interface ResponseData {
@@ -97,6 +127,13 @@ export interface ResponseData {
   body_truncated: boolean;
   time_ms: number;
   size_bytes: number;
+}
+
+/** In-memory snapshot of a response kept for diffing against newer responses. */
+export interface ResponseSnapshot {
+  id: string;
+  takenAt: number;
+  response: ResponseData;
 }
 
 // SQLite history entry (matches Rust struct)
@@ -135,6 +172,10 @@ export interface CollectionRequest {
   body: string;
   body_type: string;
   auth?: AuthConfig;
+  /** Pre-request script source. */
+  pre_script?: string;
+  /** Post-response test script source. */
+  test_script?: string;
   created_at: number;
   updated_at: number;
 }

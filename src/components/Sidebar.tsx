@@ -17,6 +17,7 @@ import {
   Download,
   ChevronDown,
   KeyRound,
+  Play,
 } from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
 import { EnvironmentPanel } from "./EnvironmentPanel";
@@ -28,6 +29,7 @@ import { insomniaToCollections } from "../utils/insomnia";
 import { harToCollection } from "../utils/har";
 import { httpFileToCollection } from "../utils/http-file";
 import { CollectionAuthModal } from "./CollectionAuthModal";
+import { CollectionRunnerModal } from "./CollectionRunnerModal";
 
 /** Heuristic format sniffers used by `handleImportFile`. */
 function isHar(d: unknown): boolean {
@@ -70,6 +72,7 @@ export function Sidebar() {
   const [renameValue, setRenameValue] = useState("");
   const [showEnvDropdown, setShowEnvDropdown] = useState(false);
   const [editingAuthCollectionId, setEditingAuthCollectionId] = useState<string | null>(null);
+  const [runnerCollectionId, setRunnerCollectionId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -558,6 +561,16 @@ export function Sidebar() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
+                        setRunnerCollectionId(collection.id);
+                      }}
+                      className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-accent/10 rounded-md transition-all"
+                      title="Run collection"
+                    >
+                      <Play size={11} className="text-text-tertiary" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
                         exportPostman(collection.id);
                       }}
                       className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-accent/10 rounded-md transition-all"
@@ -679,6 +692,12 @@ export function Sidebar() {
         collectionId={editingAuthCollectionId}
         onClose={() => setEditingAuthCollectionId(null)}
       />
+      {runnerCollectionId && (
+        <CollectionRunnerModal
+          collectionId={runnerCollectionId}
+          onClose={() => setRunnerCollectionId(null)}
+        />
+      )}
     </div>
   );
 }
