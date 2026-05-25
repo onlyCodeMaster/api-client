@@ -30,6 +30,7 @@ import { harToCollection } from "../utils/har";
 import { httpFileToCollection } from "../utils/http-file";
 import { CollectionAuthModal } from "./CollectionAuthModal";
 import { CollectionRunnerModal } from "./CollectionRunnerModal";
+import { tagColor } from "../utils/tagColor";
 
 /** Heuristic format sniffers used by `handleImportFile`. */
 function isHar(d: unknown): boolean {
@@ -655,6 +656,22 @@ export function Sidebar() {
                           title="Double-click to rename"
                         >
                           {item.name || item.url || "Untitled"}
+                        </span>
+                      )}
+                      {item.tags && item.tags.length > 0 && (
+                        <span
+                          className="flex items-center gap-0.5 shrink-0"
+                          title={item.tags.join(", ")}
+                        >
+                          {item.tags.slice(0, 3).map((t) => {
+                            const c = tagColor(t);
+                            return (
+                              <span
+                                key={t}
+                                className={`inline-block w-1.5 h-1.5 rounded-full ${c.bg.replace("/15", "")}`}
+                              />
+                            );
+                          })}
                         </span>
                       )}
                       <button

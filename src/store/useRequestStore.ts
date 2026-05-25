@@ -21,6 +21,7 @@ import type {
 } from "../types";
 import { postmanToCollection } from "../utils/postman";
 import { executeRequestWithScripts } from "../utils/requestPipeline";
+import { substituteAll } from "../utils/dynamicVars";
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 15);
@@ -168,6 +169,7 @@ interface RequestState {
   setGraphqlVariables: (v: string) => void;
   setPreScript: (s: string) => void;
   setTestScript: (s: string) => void;
+  setTags: (tags: string[]) => void;
 
   sendRequest: () => Promise<void>;
   cancelRequest: () => void;
@@ -498,6 +500,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
     setGraphqlVariables: (graphqlVariables) => set((s) => ({ ...updateActiveTab(s, { graphqlVariables }), ...syncDerived({ ...s, ...updateActiveTab(s, { graphqlVariables }) } as RequestState) })),
     setPreScript: (preScript) => set((s) => ({ ...updateActiveTab(s, { preScript }), ...syncDerived({ ...s, ...updateActiveTab(s, { preScript }) } as RequestState) })),
     setTestScript: (testScript) => set((s) => ({ ...updateActiveTab(s, { testScript }), ...syncDerived({ ...s, ...updateActiveTab(s, { testScript }) } as RequestState) })),
+    setTags: (tags) => set((s) => ({ ...updateActiveTab(s, { tags }), ...syncDerived({ ...s, ...updateActiveTab(s, { tags }) } as RequestState) })),
 
     sendRequest: async () => {
       const state = get();
@@ -781,6 +784,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
         auth,
         pre_script: req.preScript,
         test_script: req.testScript,
+        tags: req.tags,
         created_at: req.createdAt,
         updated_at: now,
       };
@@ -818,6 +822,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
         collectionId,
         preScript: req.pre_script,
         testScript: req.test_script,
+        tags: req.tags,
         protocol: "http",
         createdAt: req.created_at,
       };
@@ -1006,7 +1011,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
           }
         }
       }
-      const sub = (str: string) => str.replace(/\{\{(\w+)\}\}/g, (_, key) => envVars[key] ?? `{{${key}}}`);
+      const sub = (str: string) => substituteAll(str, (key) => envVars[key]);
 
       try {
         set((s) => ({
@@ -1097,8 +1102,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
           }
         }
       }
-      const sub = (str: string) =>
-        str.replace(/\{\{(\w+)\}\}/g, (_, key) => envVars[key] ?? `{{${key}}}`);
+      const sub = (str: string) => substituteAll(str, (key) => envVars[key]);
 
       try {
         set((s) => ({

@@ -8,6 +8,7 @@ import type {
 } from "../types";
 import { resolveAuth } from "./auth";
 import { runScript } from "./scriptRunner";
+import { substituteAll } from "./dynamicVars";
 
 /** Defaults pulled from the request store / settings panel. */
 export interface PipelineDefaults {
@@ -46,9 +47,7 @@ export function makeSubstitute(
   transientVars: Record<string, string>
 ): (s: string) => string {
   return (str) =>
-    str.replace(/\{\{(\w+)\}\}/g, (_, key) =>
-      transientVars[key] ?? envVars[key] ?? `{{${key}}}`
-    );
+    substituteAll(str, (key) => transientVars[key] ?? envVars[key]);
 }
 
 /**

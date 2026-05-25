@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, XCircle, Copy, FileDown, Check, Code2, Timer, Cable, Radio, ShieldCheck, ShieldAlert, Globe, Lock, ArrowRightCircle } from "lucide-react";
+import { Send, XCircle, Copy, FileDown, Check, Code2, Timer, Cable, Radio, ShieldCheck, ShieldAlert, Globe, Lock, ArrowRightCircle, Tag, X } from "lucide-react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { useRequestStore } from "../store/useRequestStore";
 import { KeyValueEditor } from "./KeyValueEditor";
@@ -7,6 +7,7 @@ import { CodegenModal } from "./CodegenModal";
 import { AuthEditor } from "./AuthEditor";
 import { exportCurl, parseCurl } from "../utils/curl";
 import { describeInherited } from "../utils/auth";
+import { tagColor } from "../utils/tagColor";
 import type { HttpMethod } from "../types";
 
 const METHODS: HttpMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
@@ -48,6 +49,7 @@ export function RequestPanel() {
     setGraphqlVariables,
     setPreScript,
     setTestScript,
+    setTags,
     sendRequest,
     cancelRequest,
     defaultTimeoutMs,
@@ -59,6 +61,21 @@ export function RequestPanel() {
   const [curlInput, setCurlInput] = useState("");
   const [curlCopied, setCurlCopied] = useState(false);
   const [showCodegen, setShowCodegen] = useState(false);
+  const [tagInput, setTagInput] = useState("");
+
+  const addTag = (raw: string) => {
+    const t = raw.trim();
+    if (!t) return;
+    const existing = activeRequest?.tags ?? [];
+    if (existing.includes(t)) return;
+    setTags([...existing, t]);
+    setTagInput("");
+  };
+
+  const removeTag = (t: string) => {
+    const existing = activeRequest?.tags ?? [];
+    setTags(existing.filter((x) => x !== t));
+  };
 
   useEffect(() => {
     urlRef.current?.focus();
@@ -444,6 +461,57 @@ export function RequestPanel() {
               />
               <p className="text-[11px] text-text-tertiary mt-1">
                 Leave empty to use the global default.
+              </p>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-1.5 text-[11px] font-medium text-text-secondary uppercase tracking-wider mb-1.5">
+                <Tag size={11} />
+                Tags
+              </label>
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {(activeRequest.tags ?? []).map((t) => {
+                  const c = tagColor(t);
+                  return (
+                    <span
+                      key={t}
+                      className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full ${c.bg} ${c.text}`}
+                    >
+                      {t}
+                      <button
+                        type="button"
+                        onClick={() => removeTag(t)}
+                        className="hover:opacity-70"
+                        title={`Remove tag "${t}"`}
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  );
+                })}
+                {(activeRequest.tags ?? []).length === 0 && (
+                  <span className="text-[11px] text-text-tertiary">No tags</span>
+                )}
+              </div>
+              <input
+                type="text"
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === ",") {
+                    e.preventDefault();
+                    addTag(tagInput);
+                  } else if (e.key === "Backspace" && !tagInput) {
+                    const tags = activeRequest.tags ?? [];
+                    if (tags.length > 0) removeTag(tags[tags.length - 1]);
+                  }
+                }}
+                placeholder="Add tag and press Enter (e.g. auth, v2, broken)"
+                className="input-apple w-full text-[12px]"
+              />
+              <p className="text-[11px] text-text-tertiary mt-1">
+                Tags help you filter and color-code requests in the sidebar. Persisted with the
+                collection on save.
               </p>
             </div>
 
