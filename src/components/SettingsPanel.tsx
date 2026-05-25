@@ -1,10 +1,12 @@
 import { useState } from "react";
-import { X, Settings as SettingsIcon } from "lucide-react";
+import { X, Settings as SettingsIcon, ShieldCheck, ShieldAlert } from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
 
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const defaultTimeoutMs = useRequestStore((s) => s.defaultTimeoutMs);
   const setDefaultTimeoutMs = useRequestStore((s) => s.setDefaultTimeoutMs);
+  const verifyTlsDefault = useRequestStore((s) => s.verifyTlsDefault);
+  const setVerifyTlsDefault = useRequestStore((s) => s.setVerifyTlsDefault);
   const [value, setValue] = useState(String(defaultTimeoutMs));
   const [saved, setSaved] = useState(false);
 
@@ -54,6 +56,47 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             </div>
             <p className="text-[11px] text-text-tertiary mt-1">
               Applied when a request does not override the timeout itself.
+            </p>
+          </div>
+
+          <div>
+            <label className="text-[12px] font-medium text-text-secondary block mb-1.5">
+              TLS certificate verification
+            </label>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setVerifyTlsDefault(!verifyTlsDefault)}
+                className={`relative inline-flex h-[22px] w-[38px] shrink-0 cursor-pointer rounded-full border transition-colors ${
+                  verifyTlsDefault
+                    ? "bg-accent border-accent"
+                    : "bg-surface-secondary border-border"
+                }`}
+                role="switch"
+                aria-checked={verifyTlsDefault}
+              >
+                <span
+                  className={`inline-block h-[18px] w-[18px] transform rounded-full bg-white shadow-sm transition-transform ${
+                    verifyTlsDefault ? "translate-x-[18px]" : "translate-x-[2px]"
+                  } translate-y-[1px]`}
+                />
+              </button>
+              <div className="flex items-center gap-1.5 text-[12px]">
+                {verifyTlsDefault ? (
+                  <>
+                    <ShieldCheck size={14} className="text-success" />
+                    <span className="text-text-primary">Verify certificates (recommended)</span>
+                  </>
+                ) : (
+                  <>
+                    <ShieldAlert size={14} className="text-warning" />
+                    <span className="text-warning">Skip verification — vulnerable to MITM</span>
+                  </>
+                )}
+              </div>
+            </div>
+            <p className="text-[11px] text-text-tertiary mt-1">
+              Default for new requests. Individual requests can override this in the Settings tab.
             </p>
           </div>
         </div>

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, XCircle, Copy, FileDown, Check, Code2, Timer, Cable } from "lucide-react";
+import { Send, XCircle, Copy, FileDown, Check, Code2, Timer, Cable, ShieldCheck, ShieldAlert } from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
 import { KeyValueEditor } from "./KeyValueEditor";
 import { CodegenModal } from "./CodegenModal";
@@ -35,12 +35,14 @@ export function RequestPanel() {
     setAuth,
     setName,
     setTimeoutMs,
+    setVerifyTls,
     setProtocol,
     setGraphqlQuery,
     setGraphqlVariables,
     sendRequest,
     cancelRequest,
     defaultTimeoutMs,
+    verifyTlsDefault,
   } = useRequestStore();
 
   const urlRef = useRef<HTMLInputElement>(null);
@@ -448,6 +450,40 @@ export function RequestPanel() {
               <p className="text-[11px] text-text-tertiary mt-1">
                 Leave empty to use the global default.
               </p>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-1.5 text-[11px] font-medium text-text-secondary uppercase tracking-wider mb-1.5">
+                <ShieldCheck size={11} />
+                TLS verification
+              </label>
+              <select
+                value={
+                  activeRequest.verifyTls === undefined
+                    ? "default"
+                    : activeRequest.verifyTls
+                    ? "on"
+                    : "off"
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "default") setVerifyTls(undefined);
+                  else setVerifyTls(v === "on");
+                }}
+                className="input-apple w-48 text-[12px]"
+              >
+                <option value="default">
+                  Use default ({verifyTlsDefault ? "verify" : "skip"})
+                </option>
+                <option value="on">Verify certificates</option>
+                <option value="off">Skip verification (insecure)</option>
+              </select>
+              {activeRequest.verifyTls === false && (
+                <p className="text-[11px] text-warning mt-1 flex items-center gap-1">
+                  <ShieldAlert size={11} />
+                  This request skips TLS verification.
+                </p>
+              )}
             </div>
           </div>
         )}

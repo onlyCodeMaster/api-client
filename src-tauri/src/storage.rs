@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+use crate::secrets;
+
 const APP_DIR_NAME: &str = "com.apiclient.dev";
 
 pub fn app_data_dir() -> Result<PathBuf, String> {
@@ -127,12 +129,163 @@ pub struct WindowState {
     pub sidebar_tab: Option<String>,
 }
 
+// === Secret redaction / hydration helpers ===
+//
+// Auth credentials and environment variables flagged `is_secret` are stored on disk
+// with their value blanked out, and the real value lives in the OS keychain. This
+// keeps collection/environment JSON files safe to sync or back up while still
+// allowing the request to actually authenticate at send time.
+
+const AUTH_BEARER: &str = "bearer_token";
+const AUTH_BASIC_PWD: &str = "basic_password";
+const AUTH_API_KEY_VALUE: &str = "api_key_value";
+
+fn sanitize_auth(auth: &mut Option<AuthConfig>, scope_id: &str) {
+    let Some(a) = auth.as_mut() else { return };
+    // For each secret field: if the user provided a value, persist it to the
+    // keychain; if they cleared the field, delete the keychain entry so the
+    // clear actually takes effect. Without the delete branch, hydrate_auth
+    // would silently restore the old value on the next load.
+    if let Some(t) = a.bearer_token.as_deref() {
+        if !t.is_empty() {
+            let _ = secrets::store_auth_secret(scope_id, AUTH_BEARER, t);
+        } else {
+            let _ = secrets::delete_auth_secret(scope_id, AUTH_BEARER);
+        }
+        a.bearer_token = Some(String::new());
+    }
+    if let Some(p) = a.basic_password.as_deref() {
+        if !p.is_empty() {
+            let _ = secrets::store_auth_secret(scope_id, AUTH_BASIC_PWD, p);
+        } else {
+            let _ = secrets::delete_auth_secret(scope_id, AUTH_BASIC_PWD);
+        }
+        a.basic_password = Some(String::new());
+    }
+    if let Some(v) = a.api_key_value.as_deref() {
+        if !v.is_empty() {
+            let _ = secrets::store_auth_secret(scope_id, AUTH_API_KEY_VALUE, v);
+        } else {
+            let _ = secrets::delete_auth_secret(scope_id, AUTH_API_KEY_VALUE);
+        }
+        a.api_key_value = Some(String::new());
+    }
+}
+
+fn hydrate_auth(auth: &mut Option<AuthConfig>, scope_id: &str) {
+    let Some(a) = auth.as_mut() else { return };
+    if a.bearer_token.as_deref().map_or(true, str::is_empty) {
+        if let Ok(Some(v)) = secrets::get_auth_secret(scope_id, AUTH_BEARER) {
+            a.bearer_token = Some(v);
+        }
+    }
+    if a.basic_password.as_deref().map_or(true, str::is_empty) {
+        if let Ok(Some(v)) = secrets::get_auth_secret(scope_id, AUTH_BASIC_PWD) {
+            a.basic_password = Some(v);
+        }
+    }
+    if a.api_key_value.as_deref().map_or(true, str::is_empty) {
+        if let Ok(Some(v)) = secrets::get_auth_secret(scope_id, AUTH_API_KEY_VALUE) {
+            a.api_key_value = Some(v);
+        }
+    }
+}
+
+fn purge_auth(auth: &Option<AuthConfig>, scope_id: &str) {
+    if auth.is_some() {
+        let _ = secrets::delete_auth_secret(scope_id, AUTH_BEARER);
+        let _ = secrets::delete_auth_secret(scope_id, AUTH_BASIC_PWD);
+        let _ = secrets::delete_auth_secret(scope_id, AUTH_API_KEY_VALUE);
+    }
+}
+
+fn visit_collection_auths<F: FnMut(&mut Option<AuthConfig>, &str)>(
+    collection: &mut CollectionFile,
+    f: &mut F,
+) {
+    let col_id = collection.id.clone();
+    f(&mut collection.auth, &col_id);
+    for req in &mut collection.requests {
+        let req_id = req.id.clone();
+        f(&mut req.auth, &req_id);
+    }
+    for folder in &mut collection.folders {
+        visit_folder_auths(folder, f);
+    }
+}
+
+fn visit_folder_auths<F: FnMut(&mut Option<AuthConfig>, &str)>(
+    folder: &mut CollectionFolder,
+    f: &mut F,
+) {
+    for req in &mut folder.requests {
+        let req_id = req.id.clone();
+        f(&mut req.auth, &req_id);
+    }
+    for sub in &mut folder.folders {
+        visit_folder_auths(sub, f);
+    }
+}
+
+fn read_collection_auths<F: FnMut(&Option<AuthConfig>, &str)>(
+    collection: &CollectionFile,
+    f: &mut F,
+) {
+    f(&collection.auth, &collection.id);
+    for req in &collection.requests {
+        f(&req.auth, &req.id);
+    }
+    for folder in &collection.folders {
+        read_folder_auths(folder, f);
+    }
+}
+
+fn read_folder_auths<F: FnMut(&Option<AuthConfig>, &str)>(
+    folder: &CollectionFolder,
+    f: &mut F,
+) {
+    for req in &folder.requests {
+        f(&req.auth, &req.id);
+    }
+    for sub in &folder.folders {
+        read_folder_auths(sub, f);
+    }
+}
+
+fn sanitize_environment(env: &mut EnvironmentFile) {
+    for var in &mut env.variables {
+        if var.is_secret {
+            // Mirror sanitize_auth: a non-empty value means "store/update",
+            // an empty value means "the user cleared this, drop it from the
+            // keychain so hydrate_environment doesn't resurrect it".
+            if !var.value.is_empty() {
+                let _ = secrets::store_env_secret(&env.id, &var.key, &var.value);
+            } else {
+                let _ = secrets::delete_env_secret(&env.id, &var.key);
+            }
+            var.value = String::new();
+        }
+    }
+}
+
+fn hydrate_environment(env: &mut EnvironmentFile) {
+    for var in &mut env.variables {
+        if var.is_secret && var.value.is_empty() {
+            if let Ok(Some(v)) = secrets::get_env_secret(&env.id, &var.key) {
+                var.value = v;
+            }
+        }
+    }
+}
+
 // === Collection CRUD ===
 
 pub fn save_collection(collection: &CollectionFile) -> Result<(), String> {
     let dir = collections_dir()?;
     let file_path = dir.join(format!("{}.json", collection.id));
-    let json = serde_json::to_string_pretty(collection)
+    let mut to_save = collection.clone();
+    visit_collection_auths(&mut to_save, &mut sanitize_auth);
+    let json = serde_json::to_string_pretty(&to_save)
         .map_err(|e| format!("Failed to serialize collection: {}", e))?;
     fs::write(&file_path, json)
         .map_err(|e| format!("Failed to write collection file: {}", e))?;
@@ -144,8 +297,10 @@ pub fn load_collection(id: &str) -> Result<CollectionFile, String> {
     let file_path = dir.join(format!("{}.json", id));
     let content = fs::read_to_string(&file_path)
         .map_err(|e| format!("Failed to read collection file: {}", e))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse collection: {}", e))
+    let mut collection: CollectionFile = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse collection: {}", e))?;
+    visit_collection_auths(&mut collection, &mut hydrate_auth);
+    Ok(collection)
 }
 
 pub fn list_collections() -> Result<Vec<CollectionFile>, String> {
@@ -161,7 +316,8 @@ pub fn list_collections() -> Result<Vec<CollectionFile>, String> {
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
             let content = fs::read_to_string(&path)
                 .map_err(|e| format!("Failed to read file: {}", e))?;
-            if let Ok(collection) = serde_json::from_str::<CollectionFile>(&content) {
+            if let Ok(mut collection) = serde_json::from_str::<CollectionFile>(&content) {
+                visit_collection_auths(&mut collection, &mut hydrate_auth);
                 collections.push(collection);
             }
         }
@@ -174,6 +330,10 @@ pub fn list_collections() -> Result<Vec<CollectionFile>, String> {
 pub fn delete_collection(id: &str) -> Result<(), String> {
     let dir = collections_dir()?;
     let file_path = dir.join(format!("{}.json", id));
+    // Best-effort: purge any secrets that belonged to this collection before deleting.
+    if let Ok(collection) = load_collection(id) {
+        read_collection_auths(&collection, &mut purge_auth);
+    }
     if file_path.exists() {
         fs::remove_file(&file_path)
             .map_err(|e| format!("Failed to delete collection: {}", e))?;
@@ -186,7 +346,9 @@ pub fn delete_collection(id: &str) -> Result<(), String> {
 pub fn save_environment(env: &EnvironmentFile) -> Result<(), String> {
     let dir = environments_dir()?;
     let file_path = dir.join(format!("{}.json", env.id));
-    let json = serde_json::to_string_pretty(env)
+    let mut to_save = env.clone();
+    sanitize_environment(&mut to_save);
+    let json = serde_json::to_string_pretty(&to_save)
         .map_err(|e| format!("Failed to serialize environment: {}", e))?;
     fs::write(&file_path, json)
         .map_err(|e| format!("Failed to write environment file: {}", e))?;
@@ -198,8 +360,10 @@ pub fn load_environment(id: &str) -> Result<EnvironmentFile, String> {
     let file_path = dir.join(format!("{}.json", id));
     let content = fs::read_to_string(&file_path)
         .map_err(|e| format!("Failed to read environment file: {}", e))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse environment: {}", e))
+    let mut env: EnvironmentFile = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse environment: {}", e))?;
+    hydrate_environment(&mut env);
+    Ok(env)
 }
 
 pub fn list_environments() -> Result<Vec<EnvironmentFile>, String> {
@@ -215,7 +379,8 @@ pub fn list_environments() -> Result<Vec<EnvironmentFile>, String> {
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
             let content = fs::read_to_string(&path)
                 .map_err(|e| format!("Failed to read file: {}", e))?;
-            if let Ok(env) = serde_json::from_str::<EnvironmentFile>(&content) {
+            if let Ok(mut env) = serde_json::from_str::<EnvironmentFile>(&content) {
+                hydrate_environment(&mut env);
                 environments.push(env);
             }
         }
@@ -228,6 +393,14 @@ pub fn list_environments() -> Result<Vec<EnvironmentFile>, String> {
 pub fn delete_environment(id: &str) -> Result<(), String> {
     let dir = environments_dir()?;
     let file_path = dir.join(format!("{}.json", id));
+    // Best-effort: purge any keychain entries belonging to this environment.
+    if let Ok(env) = load_environment(id) {
+        for var in &env.variables {
+            if var.is_secret {
+                let _ = secrets::delete_env_secret(&env.id, &var.key);
+            }
+        }
+    }
     if file_path.exists() {
         fs::remove_file(&file_path)
             .map_err(|e| format!("Failed to delete environment: {}", e))?;
