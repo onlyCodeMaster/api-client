@@ -4,6 +4,7 @@ pub mod secrets;
 pub mod storage;
 
 use futures_util::{SinkExt, StreamExt};
+use reqwest::cookie::Jar;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::multipart;
 use serde::{Deserialize, Serialize};
@@ -13,8 +14,12 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::{HeaderName as WsHeaderName, HeaderValue as WsHeaderValue};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
+
+use crate::db::CookieEntry;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct KeyValue {
@@ -37,6 +42,10 @@ pub struct RequestPayload {
     pub form_data: Option<Vec<KeyValue>>,
     pub timeout_ms: Option<u64>,
     pub request_id: Option<String>,
+    /// When `false`, skip TLS certificate verification for this request.
+    /// When `None` or `Some(true)`, verify normally (the safe default).
+    #[serde(default)]
+    pub verify_tls: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -61,6 +70,86 @@ impl ActiveRequests {
     }
 }
 
+/// Shared cookie jar used by every HTTP client and persisted to SQLite.
+pub struct AppCookies {
+    pub jar: Arc<Jar>,
+}
+
+impl AppCookies {
+    pub fn new() -> Self {
+        Self {
+            jar: Arc::new(Jar::default()),
+        }
+    }
+
+    /// Hydrate the jar from cookies already persisted in SQLite.
+    pub fn preload_from_db(&self, db: &db::Database) {
+        let Ok(all) = db.get_all_cookies() else { return };
+        for c in all {
+            let scheme = if c.secure { "https" } else { "http" };
+            let path = if c.path.is_empty() { "/" } else { &c.path };
+            let url_str = format!("{}://{}{}", scheme, c.domain, path);
+            let Ok(url) = url::Url::parse(&url_str) else { continue };
+            let mut s = format!("{}={}; Domain={}; Path={}", c.name, c.value, c.domain, path);
+            if c.secure {
+                s.push_str("; Secure");
+            }
+            if c.http_only {
+                s.push_str("; HttpOnly");
+            }
+            self.jar.add_cookie_str(&s, &url);
+        }
+    }
+}
+
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+/// Parse every Set-Cookie header on the response and persist each to SQLite.
+/// The reqwest jar has already absorbed these for in-memory cookie behavior;
+/// this just gives us cross-restart persistence and visibility in the UI.
+fn persist_set_cookies(
+    db: &db::Database,
+    request_url: &url::Url,
+    headers: &reqwest::header::HeaderMap,
+) {
+    let default_domain = request_url.host_str().unwrap_or("");
+    for set_cookie in headers.get_all(reqwest::header::SET_COOKIE).iter() {
+        let Ok(s) = set_cookie.to_str() else { continue };
+        let Ok(parsed) = cookie::Cookie::parse(s.to_string()) else { continue };
+        let name = parsed.name().to_string();
+        let value = parsed.value().to_string();
+        let domain = parsed
+            .domain()
+            .map(|d| d.trim_start_matches('.').to_string())
+            .unwrap_or_else(|| default_domain.to_string());
+        let path = parsed.path().unwrap_or("/").to_string();
+        let secure = parsed.secure().unwrap_or(false);
+        let http_only = parsed.http_only().unwrap_or(false);
+        let expires = parsed
+            .expires()
+            .and_then(|e| e.datetime())
+            .map(|d| d.unix_timestamp() * 1000);
+
+        // Use (domain, path, name) as a stable id so refreshing a cookie
+        // updates the existing row rather than inserting a duplicate.
+        let id = format!("{}|{}|{}", domain, path, name);
+        let entry = CookieEntry {
+            id,
+            domain,
+            name,
+            value,
+            path,
+            expires,
+            secure,
+            http_only,
+            created_at: now_ms(),
+        };
+        let _ = db.save_cookie(&entry);
+    }
+}
+
 #[tauri::command]
 async fn cancel_request(
     active_requests: State<'_, Arc<ActiveRequests>>,
@@ -76,12 +165,18 @@ async fn cancel_request(
 #[tauri::command]
 async fn send_request(
     active_requests: State<'_, Arc<ActiveRequests>>,
+    cookies: State<'_, Arc<AppCookies>>,
+    db: State<'_, db::Database>,
     payload: RequestPayload,
 ) -> Result<ResponseData, String> {
     let timeout = Duration::from_millis(payload.timeout_ms.unwrap_or(30000));
+    // Default is the safe behavior: verify TLS. Only skip when the frontend
+    // explicitly opts out (per-request or via the global setting).
+    let verify_tls = payload.verify_tls.unwrap_or(true);
 
     let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_certs(!verify_tls)
+        .cookie_provider(cookies.jar.clone())
         .timeout(timeout)
         .build()
         .map_err(|e| format!("Failed to create client: {}", e))?;
@@ -171,6 +266,12 @@ async fn send_request(
         .unwrap_or("Unknown")
         .to_string();
 
+    // Persist any Set-Cookie headers from this response so the cookie jar UI
+    // and future sessions see them.
+    if let Ok(request_url) = url::Url::parse(&payload.url) {
+        persist_set_cookies(&db, &request_url, response.headers());
+    }
+
     let mut resp_headers = HashMap::new();
     for (key, value) in response.headers().iter() {
         if let Ok(v) = value.to_str() {
@@ -231,7 +332,7 @@ async fn ws_connect(
 ) -> Result<(), String> {
     let WsConnectPayload {
         url,
-        headers: _headers,
+        headers,
         request_id,
     } = payload;
 
@@ -243,11 +344,30 @@ async fn ws_connect(
         }
     }
 
-    // Validate the URL early for a friendlier error message; tokio-tungstenite
-    // accepts a &str directly via IntoClientRequest.
+    // Validate the URL early for a friendlier error message.
     url::Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
 
-    let (ws_stream, _resp) = tokio_tungstenite::connect_async(url.as_str())
+    // Build the handshake request so caller-supplied headers (e.g. Authorization,
+    // Sec-WebSocket-Protocol) actually reach the server.
+    let mut request = url
+        .as_str()
+        .into_client_request()
+        .map_err(|e| format!("Invalid WebSocket request: {}", e))?;
+    {
+        let req_headers = request.headers_mut();
+        for h in &headers {
+            if !h.enabled || h.key.is_empty() {
+                continue;
+            }
+            let name = WsHeaderName::from_bytes(h.key.as_bytes())
+                .map_err(|e| format!("Invalid WS header name '{}': {}", h.key, e))?;
+            let value = WsHeaderValue::from_bytes(h.value.as_bytes())
+                .map_err(|e| format!("Invalid WS header value '{}': {}", h.value, e))?;
+            req_headers.insert(name, value);
+        }
+    }
+
+    let (ws_stream, _resp) = tokio_tungstenite::connect_async(request)
         .await
         .map_err(|e| format!("WebSocket connection failed: {}", e))?;
 
@@ -380,6 +500,8 @@ pub fn run() {
     let database = db::Database::new().expect("Failed to initialize database");
     let active_requests = Arc::new(ActiveRequests::new());
     let ws_connections = Arc::new(WsConnections::default());
+    let cookies = Arc::new(AppCookies::new());
+    cookies.preload_from_db(&database);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -387,6 +509,7 @@ pub fn run() {
         .manage(database)
         .manage(active_requests)
         .manage(ws_connections)
+        .manage(cookies)
         .invoke_handler(tauri::generate_handler![
             send_request,
             cancel_request,

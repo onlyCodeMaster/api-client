@@ -107,6 +107,8 @@ interface RequestState {
 
   // Settings
   defaultTimeoutMs: number;
+  /** Default TLS verification policy when a request doesn't override it. */
+  verifyTlsDefault: boolean;
 
   // Computed-like accessors (read from active tab)
   // Derived: activeRequest / response / loading / error
@@ -138,6 +140,7 @@ interface RequestState {
   setAuth: (auth: AuthConfig) => void;
   setName: (name: string) => void;
   setTimeoutMs: (ms: number | undefined) => void;
+  setVerifyTls: (verify: boolean | undefined) => void;
   setProtocol: (protocol: "http" | "websocket") => void;
   setGraphqlQuery: (q: string) => void;
   setGraphqlVariables: (v: string) => void;
@@ -181,6 +184,7 @@ interface RequestState {
 
   // Settings
   setDefaultTimeoutMs: (ms: number) => Promise<void>;
+  setVerifyTlsDefault: (verify: boolean) => Promise<void>;
 
   // WebSocket
   wsConnect: () => Promise<void>;
@@ -243,6 +247,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
 
     cookies: [],
     defaultTimeoutMs: 30000,
+    verifyTlsDefault: true,
 
     activeRequest: initialReq,
     activeRequestId: initialReq.id,
@@ -267,12 +272,19 @@ export const useRequestStore = create<RequestState>((set, get) => {
           }
         } catch {}
 
+        let verifyTlsDefault = true;
+        try {
+          const stored = await invoke<string | null>("get_setting", { key: "verify_tls_default" });
+          if (stored === "false") verifyTlsDefault = false;
+        } catch {}
+
         set({
           workspace,
           history,
           collections,
           environments,
           defaultTimeoutMs,
+          verifyTlsDefault,
           initialized: true,
         });
       } catch (err) {
@@ -385,6 +397,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
     setAuth: (auth) => set((s) => ({ ...updateActiveTab(s, { auth }), ...syncDerived({ ...s, ...updateActiveTab(s, { auth }) } as RequestState) })),
     setName: (name) => set((s) => ({ ...updateActiveTab(s, { name }), ...syncDerived({ ...s, ...updateActiveTab(s, { name }) } as RequestState) })),
     setTimeoutMs: (timeoutMs) => set((s) => ({ ...updateActiveTab(s, { timeoutMs }), ...syncDerived({ ...s, ...updateActiveTab(s, { timeoutMs }) } as RequestState) })),
+    setVerifyTls: (verifyTls) => set((s) => ({ ...updateActiveTab(s, { verifyTls }), ...syncDerived({ ...s, ...updateActiveTab(s, { verifyTls }) } as RequestState) })),
     setProtocol: (protocol) => set((s) => ({ ...updateActiveTab(s, { protocol }), ...syncDerived({ ...s, ...updateActiveTab(s, { protocol }) } as RequestState) })),
     setGraphqlQuery: (graphqlQuery) => set((s) => ({ ...updateActiveTab(s, { graphqlQuery }), ...syncDerived({ ...s, ...updateActiveTab(s, { graphqlQuery }) } as RequestState) })),
     setGraphqlVariables: (graphqlVariables) => set((s) => ({ ...updateActiveTab(s, { graphqlVariables }), ...syncDerived({ ...s, ...updateActiveTab(s, { graphqlVariables }) } as RequestState) })),
@@ -497,6 +510,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
           form_data: formData,
           timeout_ms: req.timeoutMs ?? get().defaultTimeoutMs,
           request_id: req.id,
+          verify_tls: req.verifyTls ?? get().verifyTlsDefault,
         };
 
         const response = await invoke<ResponseData>("send_request", { payload });
@@ -815,6 +829,15 @@ export const useRequestStore = create<RequestState>((set, get) => {
         console.error("Failed to persist default timeout:", err);
       }
       set({ defaultTimeoutMs: ms });
+    },
+
+    setVerifyTlsDefault: async (verify) => {
+      try {
+        await invoke("set_setting", { key: "verify_tls_default", value: verify ? "true" : "false" });
+      } catch (err) {
+        console.error("Failed to persist verify-tls default:", err);
+      }
+      set({ verifyTlsDefault: verify });
     },
 
     // === WebSocket ===

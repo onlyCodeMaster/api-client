@@ -38,6 +38,13 @@ export interface RequestItem {
   auth?: AuthConfig;
   /** Per-request timeout in milliseconds. Falls back to global default if undefined. */
   timeoutMs?: number;
+  /**
+   * Per-request TLS verification override.
+   *  - `undefined` (default): fall back to the global `verifyTlsDefault` setting.
+   *  - `true`: verify TLS certificates (recommended).
+   *  - `false`: skip verification (useful for self-signed certs in dev).
+   */
+  verifyTls?: boolean;
   /** Protocol selector: HTTP request or WebSocket connection. */
   protocol?: Protocol;
   /** GraphQL query and variables when bodyType === "graphql". */
