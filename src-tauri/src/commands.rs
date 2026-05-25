@@ -1,9 +1,11 @@
+use std::sync::Arc;
 use tauri::State;
 use crate::db::{Database, HistoryEntry, SettingEntry, CookieEntry, RecentEntry};
 use crate::storage::{
     CollectionFile, EnvironmentFile, WorkspaceFile,
 };
 use crate::secrets;
+use crate::AppCookies;
 
 // === History Commands ===
 
@@ -72,13 +74,27 @@ pub fn get_all_cookies(db: State<Database>) -> Result<Vec<CookieEntry>, String> 
 }
 
 #[tauri::command]
-pub fn delete_cookie(db: State<Database>, id: String) -> Result<(), String> {
-    db.delete_cookie(&id)
+pub fn delete_cookie(
+    db: State<Database>,
+    cookies: State<Arc<AppCookies>>,
+    id: String,
+) -> Result<(), String> {
+    db.delete_cookie(&id)?;
+    // SQLite is now the source of truth — rebuild the in-memory jar so the
+    // deleted cookie isn't sent on the next request.
+    cookies.rebuild_from_db(&db);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn clear_cookies_by_domain(db: State<Database>, domain: String) -> Result<(), String> {
-    db.clear_cookies_by_domain(&domain)
+pub fn clear_cookies_by_domain(
+    db: State<Database>,
+    cookies: State<Arc<AppCookies>>,
+    domain: String,
+) -> Result<(), String> {
+    db.clear_cookies_by_domain(&domain)?;
+    cookies.rebuild_from_db(&db);
+    Ok(())
 }
 
 // === Recent Opened Commands ===
