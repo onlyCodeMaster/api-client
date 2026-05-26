@@ -86,7 +86,12 @@ export function Sidebar() {
     { kind: "global" } | { kind: "collection"; collectionId: string } | null
   >(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
+  const [dark, setDark] = useState<boolean>(() => {
+    const saved = localStorage.getItem("theme");
+    if (saved === "dark") return true;
+    if (saved === "light") return false;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  });
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
   const toggleDark = () => {
@@ -96,13 +101,12 @@ export function Sidebar() {
     localStorage.setItem("theme", next ? "dark" : "light");
   };
 
+  // Keep <html class="dark"> in sync with the resolved theme. Initial state
+  // is computed from localStorage / the OS preference in the useState lazy
+  // initializer above, so this effect only synchronizes the DOM (no setState).
   useEffect(() => {
-    const saved = localStorage.getItem("theme");
-    if (saved === "dark" || (!saved && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
-      setDark(true);
-      document.documentElement.classList.add("dark");
-    }
-  }, []);
+    document.documentElement.classList.toggle("dark", dark);
+  }, [dark]);
 
   // Close the environment dropdown when clicking outside of it
   useEffect(() => {

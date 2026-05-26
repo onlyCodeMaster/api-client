@@ -78,11 +78,11 @@ function parseBlock(block: string, now: number): CollectionRequest | null {
   let method = "";
   let url = "";
   const headers: KeyValue[] = [];
-  let bodyLines: string[] = [];
+  const bodyLines: string[] = [];
 
   let phase: "preamble" | "headers" | "body" = "preamble";
 
-  for (let raw of lines) {
+  for (const raw of lines) {
     const line = raw.replace(/\r$/, "");
     if (phase === "preamble") {
       if (/^###/.test(line)) {

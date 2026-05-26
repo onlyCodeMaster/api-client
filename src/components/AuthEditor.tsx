@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, Loader2, AlertTriangle } from "lucide-react";
 import type { AuthConfig } from "../types";
@@ -229,12 +229,20 @@ function OAuth2Editor({
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [fetchOk, setFetchOk] = useState(false);
+  // Drive "expired" state off a tick that updates once a minute, instead of
+  // calling Date.now() in render (which violates react-hooks purity and
+  // produces non-deterministic renders).
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
   const grant = value.oauth2_grant_type || "client_credentials";
   const clientAuth = value.oauth2_client_auth || "basic";
 
   const hasToken = !!value.oauth2_access_token;
   const expiresAt = value.oauth2_token_expires_at;
-  const isExpired = expiresAt != null && expiresAt < Date.now();
+  const isExpired = expiresAt != null && expiresAt < now;
   const tokenStatus = !hasToken
     ? null
     : isExpired

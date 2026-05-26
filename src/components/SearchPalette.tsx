@@ -178,9 +178,13 @@ export function SearchPalette({ onClose }: Props) {
       .map((x) => x.r);
   }, [all, query]);
 
-  useEffect(() => {
+  // Reset highlighted row when the query changes. Uses the React-recommended
+  // "compare previous value during render" pattern to avoid an extra render.
+  const [prevQuery, setPrevQuery] = useState(query);
+  if (query !== prevQuery) {
+    setPrevQuery(query);
     setActiveIdx(0);
-  }, [query]);
+  }
 
   useEffect(() => {
     if (!listRef.current) return;

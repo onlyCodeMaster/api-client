@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { X } from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
 import { VariablesEditor } from "./VariablesEditor";
@@ -25,21 +25,33 @@ export function VariableScopeModal({ scope, onClose }: Props) {
   const setGlobalVariables = useRequestStore((s) => s.setGlobalVariables);
   const setCollectionVariables = useRequestStore((s) => s.setCollectionVariables);
 
-  const [draft, setDraft] = useState<EnvVariable[]>([]);
-
   const collection =
     scope?.kind === "collection"
       ? collections.find((c) => c.id === scope.collectionId) ?? null
       : null;
 
-  useEffect(() => {
-    if (!scope) return;
-    if (scope.kind === "global") {
-      setDraft(workspace?.variables ?? []);
-    } else if (collection) {
-      setDraft(collection.variables ?? []);
-    }
-  }, [scope?.kind, scope?.kind === "collection" ? scope.collectionId : null, workspace?.id, collection?.id]);
+  // The "source of truth" variable list for the currently selected scope.
+  const sourceVars: EnvVariable[] =
+    scope?.kind === "global"
+      ? workspace?.variables ?? []
+      : collection?.variables ?? [];
+
+  const [draft, setDraft] = useState<EnvVariable[]>(sourceVars);
+
+  // Reset the draft when the open scope or its source variables change. Uses
+  // React's recommended "compare previous value during render" pattern instead
+  // of useEffect to avoid a render-then-render cascade.
+  const scopeKey =
+    scope?.kind === "global"
+      ? `global:${workspace?.id ?? ""}`
+      : scope?.kind === "collection"
+      ? `collection:${collection?.id ?? ""}`
+      : "none";
+  const [prevScopeKey, setPrevScopeKey] = useState(scopeKey);
+  if (scopeKey !== prevScopeKey) {
+    setPrevScopeKey(scopeKey);
+    setDraft(sourceVars);
+  }
 
   if (!scope) return null;
   if (scope.kind === "collection" && !collection) return null;

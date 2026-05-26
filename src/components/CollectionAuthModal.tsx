@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { X } from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
 import { AuthEditor } from "./AuthEditor";
@@ -21,11 +21,18 @@ export function CollectionAuthModal({ collectionId, onClose }: Props) {
   const setCollectionAuth = useRequestStore((s) => s.setCollectionAuth);
   const collection = collections.find((c) => c.id === collectionId) || null;
 
-  const [draft, setDraft] = useState<AuthConfig>({ auth_type: "none" });
+  const [draft, setDraft] = useState<AuthConfig>(
+    () => collection?.auth || { auth_type: "none" },
+  );
 
-  useEffect(() => {
-    if (collection) setDraft(collection.auth || { auth_type: "none" });
-  }, [collection?.id]);
+  // Reset the draft when the editor opens against a different collection.
+  // Uses the React-recommended "compare previous value during render" pattern
+  // to avoid a useEffect that would only mirror the new collection's state.
+  const [prevCollectionId, setPrevCollectionId] = useState(collection?.id);
+  if (collection?.id !== prevCollectionId) {
+    setPrevCollectionId(collection?.id);
+    setDraft(collection?.auth || { auth_type: "none" });
+  }
 
   if (!collectionId || !collection) return null;
 

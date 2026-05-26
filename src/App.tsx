@@ -47,12 +47,17 @@ function App() {
   );
 
   // Reflect workspace switches (`switchWorkspace` resets these) into local state.
-  useEffect(() => {
+  // Uses React's documented "reset state when a prop changes" pattern (compare
+  // previous value during render) instead of an effect to avoid cascading
+  // renders. See https://react.dev/reference/react/useState#storing-information-from-previous-renders
+  const [prevWorkspaceId, setPrevWorkspaceId] = useState(workspace?.id);
+  if (workspace?.id !== prevWorkspaceId) {
+    setPrevWorkspaceId(workspace?.id);
     setSidebarWidth(workspace?.window_state?.sidebar_width ?? DEFAULT_SIDEBAR_WIDTH);
     setReqPanelPct(
       workspace?.window_state?.request_panel_height ?? DEFAULT_REQUEST_PANEL_PCT,
     );
-  }, [workspace?.id]);
+  }
 
   useEffect(() => {
     initialize();

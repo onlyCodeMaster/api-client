@@ -102,6 +102,27 @@ export function RequestPanel() {
     urlRef.current?.focus();
   }, [activeRequest?.id]);
 
+  const collections = useRequestStore((s) => s.collections);
+  const environments = useRequestStore((s) => s.environments);
+  const workspace = useRequestStore((s) => s.workspace);
+
+  /** Variable lookup table used by the preview tooltip. Mirrors what
+   *  `requestPipeline` builds at send time so the preview matches what
+   *  the user will actually send (modulo transient script overrides which
+   *  aren't known until pre-scripts run). */
+  const scopedVars = useMemo(
+    () =>
+      activeRequest
+        ? buildScopedVars({
+            workspace,
+            collections,
+            environments,
+            request: activeRequest,
+          })
+        : {},
+    [workspace, collections, environments, activeRequest],
+  );
+
   if (!activeRequest) return null;
   const isWs = activeRequest.protocol === "websocket";
   const isSse = activeRequest.protocol === "sse";
@@ -128,25 +149,7 @@ export function RequestPanel() {
   const paramCount = activeRequest.params.filter((p) => p.key).length;
   const headerCount = activeRequest.headers.filter((h) => h.key).length;
   const currentAuth = activeRequest.auth || { auth_type: "none" as const };
-  const collections = useRequestStore((s) => s.collections);
-  const environments = useRequestStore((s) => s.environments);
-  const workspace = useRequestStore((s) => s.workspace);
   const inheritedDescription = describeInherited(activeRequest, collections);
-
-  /** Variable lookup table used by the preview tooltip. Mirrors what
-   *  `requestPipeline` builds at send time so the preview matches what
-   *  the user will actually send (modulo transient script overrides which
-   *  aren't known until pre-scripts run). */
-  const scopedVars = useMemo(
-    () =>
-      buildScopedVars({
-        workspace,
-        collections,
-        environments,
-        request: activeRequest,
-      }),
-    [workspace, collections, environments, activeRequest],
-  );
 
   return (
     <div className="flex flex-col h-full">

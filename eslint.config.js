@@ -31,27 +31,23 @@ export default tseslint.config(
         "warn",
         { allowConstantExport: true },
       ],
-      // The codebase pre-dates lint enforcement; tolerate the most common
-      // legacy patterns so this PR can ship a green baseline. Each can be
-      // re-enabled in a focused follow-up once we have time to clean up.
+      // Pre-existing repo conventions we keep open-ended on purpose:
+      // `any` is used pervasively in storage-layer JSON glue and would take
+      // a much larger refactor to type properly; empty object types appear
+      // in TS-generated Tauri command shells.
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-vars": [
-        "warn",
+        "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
       "@typescript-eslint/no-empty-object-type": "off",
-      "no-empty": ["warn", { allowEmptyCatch: true }],
-      "no-useless-escape": "warn",
-      "prefer-const": "warn",
-      // react-hooks v6 ships new rules that flag patterns deeply embedded
-      // in the existing codebase (workspace switching effects, OAuth token
-      // expiry render math, etc.). Downgrade to warn so CI stays green
-      // while individual surfaces get refactored in follow-up PRs.
-      "react-hooks/set-state-in-effect": "warn",
-      "react-hooks/purity": "warn",
-      "react-hooks/rules-of-hooks": "warn",
-      "react-hooks/preserve-manual-memoization": "warn",
-      "react-hooks/exhaustive-deps": "warn",
+      "no-empty": ["error", { allowEmptyCatch: true }],
+      "no-useless-escape": "error",
+      "prefer-const": "error",
+      // react-hooks rules enforced at error level. The `set-state-in-effect`
+      // rule has a single inline disable on `MockServerPanel` for the
+      // canonical async-fetch pattern; that disable is intentional and
+      // documented in a comment next to the directive.
     },
   },
   {
