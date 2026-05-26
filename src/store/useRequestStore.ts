@@ -10,6 +10,7 @@ import type {
   CollectionRequest,
   HistoryEntry,
   Environment,
+  EnvVariable,
   Workspace,
   AuthConfig,
   CookieEntry,
@@ -22,6 +23,7 @@ import type {
 import { postmanToCollection } from "../utils/postman";
 import { executeRequestWithScripts } from "../utils/requestPipeline";
 import { substituteAll } from "../utils/dynamicVars";
+import { buildScopedVars } from "../utils/variableScope";
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 15);
@@ -199,6 +201,10 @@ interface RequestState {
   importCollections: (cols: Collection[]) => Promise<void>;
   updateCollection: (col: Collection) => Promise<void>;
   setCollectionAuth: (collectionId: string, auth: AuthConfig | undefined) => Promise<void>;
+  /** Overwrite the variable list on a collection. Used by the variable scope editor. */
+  setCollectionVariables: (collectionId: string, variables: EnvVariable[]) => Promise<void>;
+  /** Overwrite the workspace-global variable list. */
+  setGlobalVariables: (variables: EnvVariable[]) => Promise<void>;
   refreshCollections: () => Promise<void>;
 
   // Environments
@@ -529,19 +535,26 @@ export const useRequestStore = create<RequestState>((set, get) => {
         }),
       }));
 
-      // Build variable map from the active environment. Pre/post scripts may
-      // mutate this; if anything changes we persist the environment back so
-      // the change sticks across requests / restarts.
-      const envVars: Record<string, string> = {};
+      // Build variable map from the full scope hierarchy: global → collection
+      // → folder(s) → environment. Pre/post scripts may mutate this map; if
+      // anything changes we persist back to the active environment so the
+      // change sticks across requests / restarts. (Scripts can only mutate
+      // the environment layer — global/collection/folder vars require
+      // explicit user edits via their UIs.)
+      const envVars = buildScopedVars({
+        workspace: state.workspace,
+        collections: state.collections,
+        environments: state.environments,
+        request: req,
+      });
+      // Snapshot the baseline so we can later attribute script mutations
+      // back to the env layer (and not mistake a global/collection var for
+      // a new env var).
+      const baseline = { ...envVars };
       const activeEnvId = state.workspace?.active_environment_id;
       const activeEnv = activeEnvId
         ? state.environments.find((e) => e.id === activeEnvId)
         : undefined;
-      if (activeEnv) {
-        for (const v of activeEnv.variables) {
-          if (v.enabled && v.key) envVars[v.key] = v.value;
-        }
-      }
       const transientVars: Record<string, string> = {};
 
       let result: Awaited<ReturnType<typeof executeRequestWithScripts>>;
@@ -572,26 +585,33 @@ export const useRequestStore = create<RequestState>((set, get) => {
         return;
       }
 
-      // Persist environment if any script mutated it.
+      // Persist script-induced mutations to the env layer only. Script writes
+      // are diffed against the pre-script `baseline`, so changes coming from
+      // the global / collection / folder layers don't leak into env. Deletions
+      // are only honored for keys that originally lived in env (we can't
+      // delete from lower scopes through a script).
       if (activeEnv) {
-        const original: Record<string, string> = {};
-        for (const v of activeEnv.variables) {
-          if (v.enabled && v.key) original[v.key] = v.value;
+        const changes: Record<string, string> = {};
+        for (const [k, v] of Object.entries(envVars)) {
+          if (baseline[k] !== v) changes[k] = v;
         }
-        const changed =
-          Object.keys(envVars).length !== Object.keys(original).length ||
-          Object.entries(envVars).some(([k, v]) => original[k] !== v);
-        if (changed) {
+        const envKeys = new Set(
+          activeEnv.variables.filter((v) => v.enabled && v.key).map((v) => v.key)
+        );
+        const deletions = Object.keys(baseline).filter(
+          (k) => !(k in envVars) && envKeys.has(k)
+        );
+        if (Object.keys(changes).length > 0 || deletions.length > 0) {
           const nextVars = activeEnv.variables
-            .filter((v) => !v.enabled || !v.key || v.key in envVars)
+            .filter((v) => !v.enabled || !v.key || !deletions.includes(v.key))
             .map((v) =>
-              v.enabled && v.key && v.key in envVars
-                ? { ...v, value: envVars[v.key] }
+              v.enabled && v.key && v.key in changes
+                ? { ...v, value: changes[v.key] }
                 : v
             );
-          for (const k of Object.keys(envVars)) {
+          for (const k of Object.keys(changes)) {
             if (!activeEnv.variables.some((v) => v.key === k)) {
-              nextVars.push({ key: k, value: envVars[k], enabled: true, is_secret: false });
+              nextVars.push({ key: k, value: changes[k], enabled: true, is_secret: false });
             }
           }
           // Fire-and-forget so a save failure doesn't mask the response.
@@ -908,6 +928,25 @@ export const useRequestStore = create<RequestState>((set, get) => {
       await get().updateCollection({ ...col, auth });
     },
 
+    setCollectionVariables: async (collectionId, variables) => {
+      const { collections } = get();
+      const col = collections.find((c) => c.id === collectionId);
+      if (!col) return;
+      await get().updateCollection({ ...col, variables });
+    },
+
+    setGlobalVariables: async (variables) => {
+      const { workspace } = get();
+      if (!workspace) return;
+      const updated = { ...workspace, variables, updated_at: Date.now() };
+      set({ workspace: updated });
+      try {
+        await invoke("save_workspace", { workspace: updated });
+      } catch (err) {
+        console.error("Failed to persist global variables:", err);
+      }
+    },
+
     refreshCollections: async () => {
       const collections = await invoke<Collection[]>("list_collections");
       set({ collections });
@@ -1000,17 +1039,13 @@ export const useRequestStore = create<RequestState>((set, get) => {
       if (!req) return;
       const reqId = req.id;
 
-      // Variable substitution for URL
-      const envVars: Record<string, string> = {};
-      const activeEnvId = state.workspace?.active_environment_id;
-      if (activeEnvId) {
-        const activeEnv = state.environments.find((e) => e.id === activeEnvId);
-        if (activeEnv) {
-          for (const v of activeEnv.variables) {
-            if (v.enabled && v.key) envVars[v.key] = v.value;
-          }
-        }
-      }
+      // Variable substitution honors the full scope hierarchy.
+      const envVars = buildScopedVars({
+        workspace: state.workspace,
+        collections: state.collections,
+        environments: state.environments,
+        request: req,
+      });
       const sub = (str: string) => substituteAll(str, (key) => envVars[key]);
 
       try {
@@ -1090,18 +1125,14 @@ export const useRequestStore = create<RequestState>((set, get) => {
       if (!req) return;
       const reqId = req.id;
 
-      // Variable substitution mirrors the WS path: only env vars; SSE has no
-      // request body so there's nothing else to substitute.
-      const envVars: Record<string, string> = {};
-      const activeEnvId = state.workspace?.active_environment_id;
-      if (activeEnvId) {
-        const activeEnv = state.environments.find((e) => e.id === activeEnvId);
-        if (activeEnv) {
-          for (const v of activeEnv.variables) {
-            if (v.enabled && v.key) envVars[v.key] = v.value;
-          }
-        }
-      }
+      // Variable substitution honors the full scope hierarchy. SSE has no
+      // request body so there's nothing else to substitute beyond URL/headers.
+      const envVars = buildScopedVars({
+        workspace: state.workspace,
+        collections: state.collections,
+        environments: state.environments,
+        request: req,
+      });
       const sub = (str: string) => substituteAll(str, (key) => envVars[key]);
 
       try {

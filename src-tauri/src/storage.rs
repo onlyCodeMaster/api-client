@@ -77,6 +77,10 @@ pub struct CollectionFolder {
     /// fall back to this before walking up to the collection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthConfig>,
+    /// Folder-scoped variables. Override collection / global vars but are
+    /// overridden by environment / transient vars during substitution.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variables: Vec<EnvVariable>,
     pub requests: Vec<CollectionRequest>,
     pub folders: Vec<CollectionFolder>,
 }
@@ -87,6 +91,10 @@ pub struct CollectionFile {
     pub name: String,
     pub description: String,
     pub auth: Option<AuthConfig>,
+    /// Collection-scoped variables. Sit above global vars and below folder /
+    /// environment / transient vars in the substitution precedence chain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variables: Vec<EnvVariable>,
     pub requests: Vec<CollectionRequest>,
     pub folders: Vec<CollectionFolder>,
     pub created_at: i64,
@@ -133,6 +141,10 @@ pub struct WorkspaceFile {
     pub active_collection_id: Option<String>,
     pub active_request_id: Option<String>,
     pub window_state: Option<WindowState>,
+    /// Workspace-global variables. Sit at the bottom of the substitution
+    /// precedence chain — overridden by every other scope.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variables: Vec<EnvVariable>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -296,6 +308,41 @@ fn hydrate_environment(env: &mut EnvironmentFile) {
     }
 }
 
+/// Generic sanitize/hydrate/purge for any scope-bound `Vec<EnvVariable>`
+/// (global / collection / folder). Mirrors `sanitize_environment` semantics:
+/// a non-empty secret value means "store/update", empty means "drop from
+/// keychain so hydrate doesn't resurrect it".
+fn sanitize_scope_vars(scope: &str, scope_id: &str, vars: &mut [EnvVariable]) {
+    for var in vars.iter_mut() {
+        if var.is_secret {
+            if !var.value.is_empty() {
+                let _ = secrets::store_scope_var_secret(scope, scope_id, &var.key, &var.value);
+            } else {
+                let _ = secrets::delete_scope_var_secret(scope, scope_id, &var.key);
+            }
+            var.value = String::new();
+        }
+    }
+}
+
+fn hydrate_scope_vars(scope: &str, scope_id: &str, vars: &mut [EnvVariable]) {
+    for var in vars.iter_mut() {
+        if var.is_secret && var.value.is_empty() {
+            if let Ok(Some(v)) = secrets::get_scope_var_secret(scope, scope_id, &var.key) {
+                var.value = v;
+            }
+        }
+    }
+}
+
+fn purge_scope_vars(scope: &str, scope_id: &str, vars: &[EnvVariable]) {
+    for var in vars.iter() {
+        if var.is_secret {
+            let _ = secrets::delete_scope_var_secret(scope, scope_id, &var.key);
+        }
+    }
+}
+
 // === Collection CRUD ===
 
 pub fn save_collection(collection: &CollectionFile) -> Result<(), String> {
@@ -303,11 +350,34 @@ pub fn save_collection(collection: &CollectionFile) -> Result<(), String> {
     let file_path = dir.join(format!("{}.json", collection.id));
     let mut to_save = collection.clone();
     visit_collection_auths(&mut to_save, &mut sanitize_auth);
+    sanitize_scope_vars("collection", &to_save.id, &mut to_save.variables);
+    sanitize_folder_vars(&mut to_save.folders);
     let json = serde_json::to_string_pretty(&to_save)
         .map_err(|e| format!("Failed to serialize collection: {}", e))?;
     fs::write(&file_path, json)
         .map_err(|e| format!("Failed to write collection file: {}", e))?;
     Ok(())
+}
+
+fn sanitize_folder_vars(folders: &mut [CollectionFolder]) {
+    for folder in folders.iter_mut() {
+        sanitize_scope_vars("folder", &folder.id, &mut folder.variables);
+        sanitize_folder_vars(&mut folder.folders);
+    }
+}
+
+fn hydrate_folder_vars(folders: &mut [CollectionFolder]) {
+    for folder in folders.iter_mut() {
+        hydrate_scope_vars("folder", &folder.id, &mut folder.variables);
+        hydrate_folder_vars(&mut folder.folders);
+    }
+}
+
+fn purge_folder_vars(folders: &[CollectionFolder]) {
+    for folder in folders.iter() {
+        purge_scope_vars("folder", &folder.id, &folder.variables);
+        purge_folder_vars(&folder.folders);
+    }
 }
 
 pub fn load_collection(id: &str) -> Result<CollectionFile, String> {
@@ -318,6 +388,8 @@ pub fn load_collection(id: &str) -> Result<CollectionFile, String> {
     let mut collection: CollectionFile = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse collection: {}", e))?;
     visit_collection_auths(&mut collection, &mut hydrate_auth);
+    hydrate_scope_vars("collection", &collection.id, &mut collection.variables);
+    hydrate_folder_vars(&mut collection.folders);
     Ok(collection)
 }
 
@@ -336,6 +408,8 @@ pub fn list_collections() -> Result<Vec<CollectionFile>, String> {
                 .map_err(|e| format!("Failed to read file: {}", e))?;
             if let Ok(mut collection) = serde_json::from_str::<CollectionFile>(&content) {
                 visit_collection_auths(&mut collection, &mut hydrate_auth);
+                hydrate_scope_vars("collection", &collection.id, &mut collection.variables);
+                hydrate_folder_vars(&mut collection.folders);
                 collections.push(collection);
             }
         }
@@ -351,6 +425,8 @@ pub fn delete_collection(id: &str) -> Result<(), String> {
     // Best-effort: purge any secrets that belonged to this collection before deleting.
     if let Ok(collection) = load_collection(id) {
         read_collection_auths(&collection, &mut purge_auth);
+        purge_scope_vars("collection", &collection.id, &collection.variables);
+        purge_folder_vars(&collection.folders);
     }
     if file_path.exists() {
         fs::remove_file(&file_path)
@@ -431,7 +507,9 @@ pub fn delete_environment(id: &str) -> Result<(), String> {
 pub fn save_workspace(workspace: &WorkspaceFile) -> Result<(), String> {
     let dir = workspace_dir()?;
     let file_path = dir.join(format!("{}.json", workspace.id));
-    let json = serde_json::to_string_pretty(workspace)
+    let mut to_save = workspace.clone();
+    sanitize_scope_vars("workspace", &to_save.id, &mut to_save.variables);
+    let json = serde_json::to_string_pretty(&to_save)
         .map_err(|e| format!("Failed to serialize workspace: {}", e))?;
     fs::write(&file_path, json)
         .map_err(|e| format!("Failed to write workspace file: {}", e))?;
@@ -443,8 +521,10 @@ pub fn load_workspace(id: &str) -> Result<WorkspaceFile, String> {
     let file_path = dir.join(format!("{}.json", id));
     let content = fs::read_to_string(&file_path)
         .map_err(|e| format!("Failed to read workspace file: {}", e))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse workspace: {}", e))
+    let mut workspace: WorkspaceFile = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse workspace: {}", e))?;
+    hydrate_scope_vars("workspace", &workspace.id, &mut workspace.variables);
+    Ok(workspace)
 }
 
 pub fn load_default_workspace() -> Result<WorkspaceFile, String> {
@@ -457,7 +537,8 @@ pub fn load_default_workspace() -> Result<WorkspaceFile, String> {
             if path.extension().and_then(|s| s.to_str()) == Some("json") {
                 let content = fs::read_to_string(&path).ok();
                 if let Some(content) = content {
-                    if let Ok(ws) = serde_json::from_str::<WorkspaceFile>(&content) {
+                    if let Ok(mut ws) = serde_json::from_str::<WorkspaceFile>(&content) {
+                        hydrate_scope_vars("workspace", &ws.id, &mut ws.variables);
                         return Ok(ws);
                     }
                 }
@@ -474,6 +555,7 @@ pub fn load_default_workspace() -> Result<WorkspaceFile, String> {
         active_collection_id: None,
         active_request_id: None,
         window_state: None,
+        variables: Vec::new(),
         created_at: now,
         updated_at: now,
     };

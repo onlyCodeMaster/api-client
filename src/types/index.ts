@@ -163,6 +163,8 @@ export interface CollectionFolder {
   name: string;
   /** Folder-level auth override. Requests in this folder with auth_type "inherit" fall back to this. */
   auth?: AuthConfig;
+  /** Folder-scoped variables. Override collection/global vars during substitution. */
+  variables?: EnvVariable[];
   requests: CollectionRequest[];
   folders: CollectionFolder[];
 }
@@ -192,6 +194,8 @@ export interface Collection {
   name: string;
   description: string;
   auth?: AuthConfig;
+  /** Collection-scoped variables. Override global vars; overridden by folder/env/transient. */
+  variables?: EnvVariable[];
   requests: CollectionRequest[];
   folders: CollectionFolder[];
   created_at: number;
@@ -228,6 +232,8 @@ export interface Workspace {
   active_collection_id?: string;
   active_request_id?: string;
   window_state?: WindowState;
+  /** Workspace-global variables. Lowest precedence in the variable hierarchy. */
+  variables?: EnvVariable[];
   created_at: number;
   updated_at: number;
 }

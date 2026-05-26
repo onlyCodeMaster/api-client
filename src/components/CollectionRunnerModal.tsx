@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import { Play, X, Square, CheckCircle2, XCircle } from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
 import { executeRequestWithScripts } from "../utils/requestPipeline";
+import { buildScopedVars } from "../utils/variableScope";
 import type {
   Collection,
   CollectionRequest,
@@ -121,22 +122,9 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
     }
     const effectiveIterations = Math.max(iterations, dataRows.length || iterations);
 
-    // Build initial environment vars.
-    const activeEnvId = workspace?.active_environment_id;
-    const activeEnv = activeEnvId
-      ? environments.find((e) => e.id === activeEnvId)
-      : undefined;
-
     for (let iter = 0; iter < effectiveIterations; iter++) {
       if (cancelRef.current) break;
 
-      // Fresh env for each iteration.
-      const envVars: Record<string, string> = {};
-      if (activeEnv) {
-        for (const v of activeEnv.variables) {
-          if (v.enabled && v.key) envVars[v.key] = v.value;
-        }
-      }
       // Merge data row for this iteration.
       const dataRow = dataRows[iter] ?? {};
       const transientVars: Record<string, string> = { ...dataRow };
@@ -145,6 +133,16 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
         if (cancelRef.current) break;
 
         const requestItem = colReqToRequestItem(req, collectionId);
+        // Build per-request scope chain: each request may live in a
+        // different folder, so resolve fresh inside the loop. The runner
+        // intentionally drops script-induced env mutations between
+        // iterations (each iteration gets a clean slate).
+        const envVars = buildScopedVars({
+          workspace,
+          collections,
+          environments,
+          request: requestItem,
+        });
         const result = await executeRequestWithScripts({
           request: requestItem,
           collections,
