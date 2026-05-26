@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Plus,
   Clock,
@@ -66,6 +67,7 @@ const METHOD_BADGE: Record<string, string> = {
 };
 
 export function Sidebar() {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<"history" | "collections">("history");
   const [searchQuery, setSearchQuery] = useState("");
   const [showNewCollection, setShowNewCollection] = useState(false);
@@ -252,28 +254,28 @@ export function Sidebar() {
             <button
               onClick={() => setShowCookies(true)}
               className="relative z-10 w-7 h-7 flex items-center justify-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10 active:scale-95 transition-all cursor-pointer"
-              title="Cookies"
+              title={t("sidebar.cookies")}
             >
               <Cookie size={14} className="text-text-secondary" />
             </button>
             <button
               onClick={() => setShowMockServer(true)}
               className="relative z-10 w-7 h-7 flex items-center justify-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10 active:scale-95 transition-all cursor-pointer"
-              title="Mock Server"
+              title={t("sidebar.mock_server")}
             >
               <Server size={14} className="text-text-secondary" />
             </button>
             <button
               onClick={() => setShowSettings(true)}
               className="relative z-10 w-7 h-7 flex items-center justify-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10 active:scale-95 transition-all cursor-pointer"
-              title="Settings"
+              title={t("settings.settings")}
             >
               <SettingsIcon size={14} className="text-text-secondary" />
             </button>
             <button
               onClick={toggleDark}
               className="relative z-10 w-7 h-7 flex items-center justify-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10 active:scale-95 transition-all cursor-pointer"
-              title={dark ? "Light mode" : "Dark mode"}
+              title={t(dark ? "sidebar.light_mode" : "sidebar.dark_mode")}
             >
               {dark ? <Sun size={14} className="text-text-secondary" /> : <Moon size={14} className="text-text-secondary" />}
             </button>
@@ -284,7 +286,7 @@ export function Sidebar() {
                 createNewRequest();
               }}
               className="relative z-10 w-7 h-7 flex items-center justify-center rounded-lg bg-accent/10 hover:bg-accent/20 active:scale-95 transition-all cursor-pointer"
-              title="New Request"
+              title={t("sidebar.new_request")}
             >
               <Plus size={15} className="text-accent" strokeWidth={2.2} />
             </button>
@@ -304,7 +306,7 @@ export function Sidebar() {
           >
             <span className="flex items-center gap-1.5 truncate">
               <Globe size={12} className="text-accent shrink-0" />
-              <span className="truncate">{activeEnv ? activeEnv.name : "No environment"}</span>
+              <span className="truncate">{activeEnv ? activeEnv.name : t("sidebar.no_active_environment")}</span>
             </span>
             <ChevronDown size={11} className="text-text-tertiary shrink-0" />
           </button>
@@ -317,7 +319,7 @@ export function Sidebar() {
                 }}
                 className={`block w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-secondary transition-colors ${!activeEnv ? "text-accent" : "text-text-secondary"}`}
               >
-                No environment
+                {t("sidebar.no_active_environment")}
               </button>
               {environments.map((env) => (
                 <button
@@ -338,7 +340,7 @@ export function Sidebar() {
                 }}
                 className="block w-full text-left px-3 py-1.5 text-[12px] text-accent hover:bg-accent/10 transition-colors border-t border-border-light"
               >
-                Manage environments…
+                {t("sidebar.manage_environments")}
               </button>
               <button
                 onClick={() => {
@@ -348,7 +350,7 @@ export function Sidebar() {
                 className="block w-full text-left px-3 py-1.5 text-[12px] text-accent hover:bg-accent/10 transition-colors"
                 title="Workspace-wide variables, available to every request regardless of active environment"
               >
-                Global variables…
+                {t("sidebar.global_variables")}
               </button>
             </div>
           )}
@@ -360,13 +362,13 @@ export function Sidebar() {
             onClick={() => setActiveTab("history")}
             className={`segment flex-1 ${activeTab === "history" ? "segment-active" : ""}`}
           >
-            History
+            {t("sidebar.history")}
           </button>
           <button
             onClick={() => setActiveTab("collections")}
             className={`segment flex-1 ${activeTab === "collections" ? "segment-active" : ""}`}
           >
-            Collections
+            {t("sidebar.collections")}
           </button>
         </div>
       </div>
@@ -382,7 +384,7 @@ export function Sidebar() {
                   type="text"
                   value={searchQuery}
                   onChange={(e) => handleSearch(e.target.value)}
-                  placeholder="Search history..."
+                  placeholder={t("common.search") + "…"}
                   className="input-apple w-full text-[12px] py-[5px] pl-8 pr-7"
                 />
                 {searchQuery && (

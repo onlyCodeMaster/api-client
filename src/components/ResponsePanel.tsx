@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { Copy, Check, ArrowUpRight, Search, X, Download, AlertTriangle, FileQuestion, GitCompare, ListTree, FileCode2, Filter } from "lucide-react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
@@ -135,6 +136,7 @@ function hexDump(base64: string, maxBytes = 4096): string {
 }
 
 export function ResponsePanel() {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<ResponseTab>("body");
   const [copied, setCopied] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
@@ -303,7 +305,7 @@ export function ResponsePanel() {
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center">
           <ArrowUpRight size={32} className="mx-auto text-text-tertiary/50 mb-3" strokeWidth={1.5} />
-          <p className="text-text-tertiary text-[13px]">Send a request to see the response</p>
+          <p className="text-text-tertiary text-[13px]">{t("response.no_response")}</p>
           <p className="text-text-tertiary/70 text-[11px] mt-1.5">
             Press <kbd className="px-1.5 py-0.5 bg-surface-secondary rounded-md text-text-secondary text-[10px] font-mono">⏎</kbd> to send
           </p>
@@ -329,13 +331,13 @@ export function ResponsePanel() {
               onClick={() => setActiveTab("body")}
               className={`segment ${activeTab === "body" ? "segment-active" : ""}`}
             >
-              Body
+              {t("response.body")}
             </button>
             <button
               onClick={() => setActiveTab("headers")}
               className={`segment ${activeTab === "headers" ? "segment-active" : ""}`}
             >
-              Headers
+              {t("response.headers")}
               <span className="ml-1 text-[10px] text-text-tertiary">
                 {Object.keys(response.headers).length}
               </span>
@@ -345,7 +347,7 @@ export function ResponsePanel() {
                 onClick={() => setActiveTab("tests")}
                 className={`segment ${activeTab === "tests" ? "segment-active" : ""}`}
               >
-                Tests
+                {t("response.tests")}
                 {tests && tests.length > 0 && (
                   <span
                     className={`ml-1 text-[10px] ${
@@ -385,7 +387,7 @@ export function ResponsePanel() {
           <button
             onClick={() => setSearchOpen((s) => !s)}
             className={`ml-1.5 w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${searchOpen ? "bg-accent/15" : "hover:bg-black/5"}`}
-            title="Search in response"
+            title={t("response.search_placeholder")}
           >
             <Search size={14} className={searchOpen ? "text-accent" : "text-text-tertiary"} />
           </button>
@@ -407,7 +409,7 @@ export function ResponsePanel() {
           <button
             onClick={saveResponseToDisk}
             className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-black/5 active:bg-black/8 transition-colors"
-            title="Save response to file"
+            title={t("response.save_to_file")}
           >
             {savedFlash ? <Check size={14} className="text-success" /> : <Download size={14} className="text-text-tertiary" />}
           </button>
@@ -451,7 +453,7 @@ export function ResponsePanel() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search in response body..."
+              placeholder={t("response.search_placeholder")}
               autoFocus
               className="input-apple w-full text-[12px] py-[5px] pl-8 pr-7"
             />

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Check, Plus, Pencil, Trash2, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useRequestStore } from "../store/useRequestStore";
 
 /**
@@ -11,6 +12,7 @@ import { useRequestStore } from "../store/useRequestStore";
  * workspace leaks across.
  */
 export function WorkspaceSwitcher() {
+  const { t } = useTranslation();
   const workspace = useRequestStore((s) => s.workspace);
   const workspaces = useRequestStore((s) => s.workspaces);
   const switchWorkspace = useRequestStore((s) => s.switchWorkspace);
@@ -80,12 +82,10 @@ export function WorkspaceSwitcher() {
 
   const handleDelete = async (id: string, name: string) => {
     if (workspaces.length <= 1) {
-      setError("Cannot delete the last remaining workspace.");
+      setError(t("workspace.cannot_delete_last"));
       return;
     }
-    const ok = window.confirm(
-      `Delete workspace "${name}"?\n\nAll collections, environments, and history in this workspace will be permanently removed.`
-    );
+    const ok = window.confirm(t("workspace.delete_confirm", { name }));
     if (!ok) return;
     try {
       await deleteWorkspace(id);
@@ -99,12 +99,12 @@ export function WorkspaceSwitcher() {
       <button
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center justify-between gap-1.5 px-2.5 py-1.5 bg-surface-secondary hover:bg-surface-secondary/70 rounded-lg text-[12px] text-text-secondary transition-colors"
-        title="Switch workspace"
+        title={t("workspace.switch")}
       >
         <span className="flex items-center gap-1.5 truncate">
           <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
           <span className="truncate font-medium text-text-primary">
-            {workspace?.name ?? "No workspace"}
+            {workspace?.name ?? t("errors.no_workspace")}
           </span>
         </span>
         <ChevronDown size={11} className="text-text-tertiary shrink-0" />
@@ -141,7 +141,7 @@ export function WorkspaceSwitcher() {
                       <button
                         onClick={commitRename}
                         className="w-6 h-6 flex items-center justify-center rounded hover:bg-black/5 dark:hover:bg-white/10"
-                        title="Save"
+                        title={t("common.save")}
                       >
                         <Check size={12} className="text-accent" />
                       </button>
@@ -151,7 +151,7 @@ export function WorkspaceSwitcher() {
                           setRenameValue("");
                         }}
                         className="w-6 h-6 flex items-center justify-center rounded hover:bg-black/5 dark:hover:bg-white/10"
-                        title="Cancel"
+                        title={t("common.cancel")}
                       >
                         <X size={12} className="text-text-tertiary" />
                       </button>
@@ -171,7 +171,7 @@ export function WorkspaceSwitcher() {
                       <button
                         onClick={() => startRename(w.id, w.name)}
                         className="w-6 h-6 flex items-center justify-center rounded hover:bg-black/5 dark:hover:bg-white/10 opacity-0 group-hover:opacity-100"
-                        title="Rename"
+                        title={t("common.rename")}
                       >
                         <Pencil size={11} className="text-text-tertiary" />
                       </button>
@@ -181,8 +181,8 @@ export function WorkspaceSwitcher() {
                         className="w-6 h-6 flex items-center justify-center rounded hover:bg-error/10 disabled:opacity-30 disabled:cursor-not-allowed"
                         title={
                           workspaces.length <= 1
-                            ? "Cannot delete the last workspace"
-                            : "Delete workspace"
+                            ? t("workspace.cannot_delete_last")
+                            : t("workspace.delete_workspace")
                         }
                       >
                         <Trash2 size={11} className="text-error" />
@@ -207,14 +207,14 @@ export function WorkspaceSwitcher() {
                     setNewName("");
                   }
                 }}
-                placeholder="Workspace name"
+                placeholder={t("workspace.workspace")}
                 className="input-apple flex-1 text-[12px] py-0.5"
               />
               <button
                 onClick={handleCreate}
                 disabled={!newName.trim()}
                 className="w-6 h-6 flex items-center justify-center rounded hover:bg-accent/10 disabled:opacity-30"
-                title="Create"
+                title={t("common.new")}
               >
                 <Check size={12} className="text-accent" />
               </button>
@@ -224,7 +224,7 @@ export function WorkspaceSwitcher() {
                   setNewName("");
                 }}
                 className="w-6 h-6 flex items-center justify-center rounded hover:bg-black/5 dark:hover:bg-white/10"
-                title="Cancel"
+                title={t("common.cancel")}
               >
                 <X size={12} className="text-text-tertiary" />
               </button>
@@ -235,7 +235,7 @@ export function WorkspaceSwitcher() {
               className="w-full flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-accent hover:bg-accent/10 transition-colors border-t border-border-light"
             >
               <Plus size={12} />
-              New workspace
+              {t("workspace.new_workspace")}
             </button>
           )}
 

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { Send, XCircle, Copy, FileDown, Check, Code2, Timer, Cable, Radio, ShieldCheck, ShieldAlert, Globe, Lock, ArrowRightCircle, Tag, X } from "lucide-react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { useTranslation } from "react-i18next";
 import { useRequestStore } from "../store/useRequestStore";
 import { KeyValueEditor } from "./KeyValueEditor";
 import { CodegenModal } from "./CodegenModal";
@@ -27,6 +28,7 @@ const METHOD_COLORS: Record<HttpMethod, string> = {
 type RequestTab = "params" | "headers" | "body" | "auth" | "pre" | "tests" | "settings";
 
 export function RequestPanel() {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<RequestTab>("params");
   const {
     activeRequest,
@@ -93,17 +95,17 @@ export function RequestPanel() {
   const isStreaming = isWs || isSse;
 
   const tabs: { id: RequestTab; label: string }[] = [
-    { id: "params", label: "Params" },
-    { id: "headers", label: "Headers" },
+    { id: "params", label: t("request.params") },
+    { id: "headers", label: t("request.headers") },
     ...(isStreaming
       ? []
       : ([
-          { id: "body" as const, label: "Body" },
-          { id: "auth" as const, label: "Auth" },
-          { id: "pre" as const, label: "Pre-request" },
-          { id: "tests" as const, label: "Tests" },
+          { id: "body" as const, label: t("request.body") },
+          { id: "auth" as const, label: t("request.auth") },
+          { id: "pre" as const, label: t("request.pre_request") },
+          { id: "tests" as const, label: t("request.tests") },
         ])),
-    { id: "settings", label: "Settings" },
+    { id: "settings", label: t("request.settings") },
   ];
 
   const paramCount = activeRequest.params.filter((p) => p.key).length;
@@ -138,7 +140,7 @@ export function RequestPanel() {
           value={activeRequest.name}
           onChange={(e) => setName(e.target.value)}
           className="text-[13px] text-text-secondary bg-transparent border-0 outline-none flex-1 px-0 py-0.5 placeholder-text-tertiary focus:text-text-primary transition-colors"
-          placeholder="Request name..."
+          placeholder={t("request.name_placeholder")}
         />
         <div className="segmented-control">
           <button
@@ -265,10 +267,10 @@ export function RequestPanel() {
           }}
           placeholder={
             isWs
-              ? "wss://echo.websocket.events"
+              ? t("request.ws_url_placeholder")
               : isSse
-                ? "https://example.com/events"
-                : "https://api.example.com/endpoint"
+                ? t("request.sse_url_placeholder")
+                : t("request.url_placeholder")
           }
           className="input-apple flex-1"
         />
@@ -282,7 +284,7 @@ export function RequestPanel() {
               className="px-4 py-2 bg-error text-white font-medium rounded-apple text-[13px] hover:bg-error/90 active:scale-[0.97] transition-all shadow-apple-sm flex items-center gap-1.5"
             >
               <XCircle size={14} />
-              Cancel
+              {t("request.cancel")}
             </button>
           ) : (
             <button
@@ -291,7 +293,7 @@ export function RequestPanel() {
               className="btn-send flex items-center gap-1.5"
             >
               <Send size={14} />
-              Send
+              {t("request.send")}
             </button>
           )
         )}

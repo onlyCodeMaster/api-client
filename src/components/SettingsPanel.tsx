@@ -1,14 +1,20 @@
 import { useState } from "react";
 import { X, Settings as SettingsIcon, ShieldCheck, ShieldAlert } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useRequestStore } from "../store/useRequestStore";
+import { setLocale, SUPPORTED_LOCALES, type Locale } from "../i18n";
 
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
+  const { t, i18n } = useTranslation();
   const defaultTimeoutMs = useRequestStore((s) => s.defaultTimeoutMs);
   const setDefaultTimeoutMs = useRequestStore((s) => s.setDefaultTimeoutMs);
   const verifyTlsDefault = useRequestStore((s) => s.verifyTlsDefault);
   const setVerifyTlsDefault = useRequestStore((s) => s.setVerifyTlsDefault);
   const [value, setValue] = useState(String(defaultTimeoutMs));
   const [saved, setSaved] = useState(false);
+  // Drive the dropdown straight off i18next so it stays in sync when the
+  // user changes language elsewhere in the future.
+  const currentLocale = (i18n.language?.split("-")[0] ?? "en") as Locale;
 
   const save = async () => {
     const n = parseInt(value, 10);
@@ -24,7 +30,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         <div className="flex items-center justify-between px-5 py-4 border-b border-border-light">
           <div className="flex items-center gap-2">
             <SettingsIcon size={18} className="text-accent" />
-            <h2 className="text-[15px] font-semibold text-text-primary">Settings</h2>
+            <h2 className="text-[15px] font-semibold text-text-primary">{t("settings.settings")}</h2>
           </div>
           <button
             onClick={onClose}
@@ -37,7 +43,26 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         <div className="p-5 space-y-4">
           <div>
             <label className="text-[12px] font-medium text-text-secondary block mb-1.5">
-              Default request timeout (ms)
+              {t("settings.language")}
+            </label>
+            <select
+              value={currentLocale}
+              onChange={(e) => setLocale(e.target.value as Locale)}
+              className="input-apple w-full text-[12px]"
+            >
+              {SUPPORTED_LOCALES.map((loc) => (
+                <option key={loc} value={loc}>
+                  {loc === "en"
+                    ? t("settings.language_english")
+                    : t("settings.language_chinese")}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-[12px] font-medium text-text-secondary block mb-1.5">
+              {t("settings.default_timeout")}
             </label>
             <div className="flex items-center gap-2">
               <input
@@ -51,17 +76,14 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                 onClick={save}
                 className="px-3 py-1.5 bg-accent text-white text-[12px] rounded-apple hover:bg-accent-hover active:scale-[0.97] transition-all"
               >
-                {saved ? "Saved" : "Save"}
+                {saved ? t("common.copied") : t("common.save")}
               </button>
             </div>
-            <p className="text-[11px] text-text-tertiary mt-1">
-              Applied when a request does not override the timeout itself.
-            </p>
           </div>
 
           <div>
             <label className="text-[12px] font-medium text-text-secondary block mb-1.5">
-              TLS certificate verification
+              {t("settings.verify_tls_default")}
             </label>
             <div className="flex items-center gap-3">
               <button
@@ -85,19 +107,16 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                 {verifyTlsDefault ? (
                   <>
                     <ShieldCheck size={14} className="text-success" />
-                    <span className="text-text-primary">Verify certificates (recommended)</span>
+                    <span className="text-text-primary">{t("settings.tls_on")}</span>
                   </>
                 ) : (
                   <>
                     <ShieldAlert size={14} className="text-warning" />
-                    <span className="text-warning">Skip verification — vulnerable to MITM</span>
+                    <span className="text-warning">{t("settings.tls_off")}</span>
                   </>
                 )}
               </div>
             </div>
-            <p className="text-[11px] text-text-tertiary mt-1">
-              Default for new requests. Individual requests can override this in the Settings tab.
-            </p>
           </div>
         </div>
       </div>
