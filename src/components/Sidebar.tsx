@@ -36,6 +36,7 @@ import { CollectionRunnerModal } from "./CollectionRunnerModal";
 import { VariableScopeModal } from "./VariableScopeModal";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { MockServerPanel } from "./MockServerPanel";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { tagColor } from "../utils/tagColor";
 
 /** Heuristic format sniffers used by `handleImportFile`. */
@@ -79,6 +80,8 @@ export function Sidebar() {
   const [renamingCollection, setRenamingCollection] = useState<string | null>(null);
   const [renamingRequest, setRenamingRequest] = useState<{ colId: string; reqId: string } | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [deletingCollection, setDeletingCollection] = useState<{ id: string; name: string } | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const [showEnvDropdown, setShowEnvDropdown] = useState(false);
   const [envSearch, setEnvSearch] = useState("");
   const [editingAuthCollectionId, setEditingAuthCollectionId] = useState<string | null>(null);
@@ -229,7 +232,7 @@ export function Sidebar() {
         }
       }
     } catch (err) {
-      alert(`Failed to import collection: ${String(err)}`);
+      setImportError(String(err));
     } finally {
       e.target.value = "";
     }
@@ -628,12 +631,10 @@ export function Sidebar() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (confirm(`Delete collection "${collection.name}"?`)) {
-                          deleteCollection(collection.id);
-                        }
+                        setDeletingCollection({ id: collection.id, name: collection.name });
                       }}
                       className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-error/10 rounded-md transition-all"
-                      title="Delete collection"
+                      title={t("common.delete")}
                     >
                       <Trash2 size={11} className="text-error/70" />
                     </button>
@@ -763,6 +764,31 @@ export function Sidebar() {
         />
       )}
       <VariableScopeModal scope={variableScope} onClose={() => setVariableScope(null)} />
+      <ConfirmDialog
+        open={deletingCollection !== null}
+        title={t("sidebar.delete_collection_title")}
+        message={
+          deletingCollection
+            ? t("sidebar.delete_collection_message", { name: deletingCollection.name })
+            : ""
+        }
+        onConfirm={() => {
+          if (deletingCollection) {
+            deleteCollection(deletingCollection.id);
+          }
+          setDeletingCollection(null);
+        }}
+        onCancel={() => setDeletingCollection(null)}
+      />
+      <ConfirmDialog
+        open={importError !== null}
+        title={t("sidebar.import_failed_title")}
+        message={importError ? t("sidebar.import_failed_message", { error: importError }) : ""}
+        confirmLabel={t("common.ok")}
+        variant="primary"
+        onConfirm={() => setImportError(null)}
+        onCancel={() => setImportError(null)}
+      />
     </div>
   );
 }

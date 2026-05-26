@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useRequestStore } from "../store/useRequestStore";
 
 /**
@@ -7,6 +8,7 @@ import { useRequestStore } from "../store/useRequestStore";
  * configured for SSE. Connect / disconnect, see live frames, filter, clear.
  */
 export function SsePanel() {
+  const { t } = useTranslation();
   const activeRequest = useRequestStore((s) => s.activeRequest);
   const sseConnected = useRequestStore((s) => s.sseConnected);
   const sseEvents = useRequestStore((s) => s.sseEvents);
@@ -51,16 +53,16 @@ export function SsePanel() {
           className={`w-2 h-2 rounded-full ${connected ? "bg-success" : "bg-text-tertiary"}`}
         />
         <span className="text-[12px] text-text-secondary">
-          {connected ? "Connected" : "Disconnected"}
+          {connected ? t("sse.connected") : t("sse.disconnected")}
         </span>
         <span className="text-[11px] text-text-tertiary">
-          {messageCount} event{messageCount === 1 ? "" : "s"}
+          {t("sse.event_count", { count: messageCount })}
         </span>
         <input
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter events…"
+          placeholder={t("sse.filter_placeholder")}
           className="input-apple flex-1 !py-1 !text-[11px] max-w-xs"
         />
         <label className="text-[11px] text-text-tertiary flex items-center gap-1 select-none">
@@ -69,7 +71,7 @@ export function SsePanel() {
             checked={autoScroll}
             onChange={(e) => setAutoScroll(e.target.checked)}
           />
-          Follow
+          {t("sse.follow")}
         </label>
         <div className="ml-auto flex items-center gap-2">
           <button
@@ -81,7 +83,7 @@ export function SsePanel() {
               }));
             }}
             className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-black/5 active:bg-black/8 transition-colors"
-            title="Clear event log"
+            title={t("sse.clear_log")}
           >
             <Trash2 size={14} className="text-text-tertiary" />
           </button>
@@ -91,14 +93,14 @@ export function SsePanel() {
               disabled={!activeRequest.url}
               className="btn-send !py-1 !px-3 !text-[12px]"
             >
-              Connect
+              {t("sse.connect")}
             </button>
           ) : (
             <button
               onClick={() => sseClose()}
               className="px-3 py-1 bg-error text-white font-medium rounded-apple text-[12px] hover:bg-error/90 active:scale-[0.97] transition-all"
             >
-              Disconnect
+              {t("sse.disconnect")}
             </button>
           )}
         </div>
@@ -113,9 +115,7 @@ export function SsePanel() {
       <div ref={logRef} className="flex-1 overflow-auto p-3 space-y-1 bg-surface-secondary/40">
         {filtered.length === 0 && (
           <div className="text-center py-12 text-[12px] text-text-tertiary">
-            {connected
-              ? "Waiting for events from the server…"
-              : "Not connected. Hit Connect to start streaming."}
+            {connected ? t("sse.waiting") : t("sse.not_connected")}
           </div>
         )}
         {filtered.map((e) => {
@@ -151,7 +151,7 @@ export function SsePanel() {
               )}
               {!isErr && !isMsg && !e.data && !e.error && (
                 <div className="mt-1 opacity-60">
-                  ({e.kind === "open" ? "stream open" : e.kind === "close" ? "stream closed" : e.kind})
+                  ({e.kind === "open" ? t("sse.stream_open") : e.kind === "close" ? t("sse.stream_closed") : e.kind})
                 </div>
               )}
             </div>

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { X, Plus } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useRequestStore } from "../store/useRequestStore";
 import type { HttpMethod } from "../types";
 
@@ -14,6 +15,7 @@ const METHOD_COLORS: Record<HttpMethod, string> = {
 };
 
 export function TabBar() {
+  const { t } = useTranslation();
   const tabs = useRequestStore((s) => s.tabs);
   const activeTabId = useRequestStore((s) => s.activeTabId);
   const loadings = useRequestStore((s) => s.loadings);
@@ -56,7 +58,7 @@ export function TabBar() {
             <span className={`text-[10px] font-semibold shrink-0 ${METHOD_COLORS[tab.method]}`}>
               {tab.protocol === "websocket" ? "WS" : tab.method}
             </span>
-            <span className="text-[12px] truncate flex-1">{tab.name || "New Request"}</span>
+            <span className="text-[12px] truncate flex-1">{tab.name || t("tab.placeholder_name")}</span>
             {isLoading && (
               <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0 animate-pulse" />
             )}
@@ -66,7 +68,7 @@ export function TabBar() {
                 closeTab(tab.id);
               }}
               className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-black/5 rounded transition-all shrink-0"
-              title="Close tab"
+              title={t("tab.close")}
             >
               <X size={11} className="text-text-tertiary" />
             </button>
@@ -76,7 +78,7 @@ export function TabBar() {
       <button
         onClick={createNewRequest}
         className="ml-1 w-7 h-7 flex items-center justify-center rounded-md hover:bg-black/5 transition-colors shrink-0"
-        title="New tab (Cmd+T)"
+        title={t("tab.new_tab")}
       >
         <Plus size={14} className="text-text-tertiary" />
       </button>

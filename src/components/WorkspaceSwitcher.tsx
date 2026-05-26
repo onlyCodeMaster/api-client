@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Check, Plus, Pencil, Trash2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useRequestStore } from "../store/useRequestStore";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 /**
  * Workspace selector that lives at the top of the sidebar.
@@ -26,6 +27,7 @@ export function WorkspaceSwitcher() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
   // Click-outside to dismiss.
@@ -80,13 +82,18 @@ export function WorkspaceSwitcher() {
     setRenameValue("");
   };
 
-  const handleDelete = async (id: string, name: string) => {
+  const handleDelete = (id: string, name: string) => {
     if (workspaces.length <= 1) {
       setError(t("workspace.cannot_delete_last"));
       return;
     }
-    const ok = window.confirm(t("workspace.delete_confirm", { name }));
-    if (!ok) return;
+    setPendingDelete({ id, name });
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    const { id } = pendingDelete;
+    setPendingDelete(null);
     try {
       await deleteWorkspace(id);
     } catch (err) {
@@ -246,6 +253,15 @@ export function WorkspaceSwitcher() {
           )}
         </div>
       )}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={t("workspace.delete_workspace")}
+        message={
+          pendingDelete ? t("workspace.delete_confirm", { name: pendingDelete.name }) : ""
+        }
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }
