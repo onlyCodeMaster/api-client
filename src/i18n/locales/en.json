@@ -19,7 +19,8 @@
     "edit": "Edit",
     "yes": "Yes",
     "no": "No",
-    "untitled": "Untitled"
+    "untitled": "Untitled",
+    "clear": "Clear"
   },
   "sidebar": {
     "collections": "Collections",
@@ -140,7 +141,24 @@
     "secret_on": "Secret \u2014 stored in OS keychain, never written to disk",
     "secret_off": "Plain text \u2014 stored in the environment file",
     "badge_secret": "SEC",
-    "badge_text": "Aa"
+    "badge_text": "Aa",
+    "duplicate_env_tooltip": "Duplicate environment",
+    "export_env_tooltip": "Export environment as JSON",
+    "import_env_tooltip": "Import environment from JSON",
+    "search_placeholder": "Filter environments\u2026",
+    "no_search_results": "No environments match this filter.",
+    "import_error_invalid_json": "Couldn't parse the file as JSON.",
+    "import_error_unrecognised": "Unrecognised format. Expected a native export or a Postman environment.",
+    "import_error_empty": "No environments found in the imported file."
+  },
+  "variable_preview": {
+    "title": "Preview resolved value",
+    "has_unresolved": "Some variables are unresolved",
+    "resolved_value": "Resolved value",
+    "empty": "(empty)",
+    "variables_n": "Variables ({{count}})",
+    "unknown_dynamic": "(unknown dynamic)",
+    "undefined": "(undefined)"
   },
   "variable_scope": {
     "global_title": "Global variables",

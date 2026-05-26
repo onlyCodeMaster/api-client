@@ -19,7 +19,8 @@
     "edit": "编辑",
     "yes": "是",
     "no": "否",
-    "untitled": "未命名"
+    "untitled": "未命名",
+    "clear": "清除"
   },
   "sidebar": {
     "collections": "集合",
@@ -140,7 +141,24 @@
     "secret_on": "机密 — 仅存在系统 Keychain，不会写入磁盘",
     "secret_off": "明文 — 会写入环境文件",
     "badge_secret": "SEC",
-    "badge_text": "Aa"
+    "badge_text": "Aa",
+    "duplicate_env_tooltip": "复制环境",
+    "export_env_tooltip": "导出环境为 JSON",
+    "import_env_tooltip": "从 JSON 导入环境",
+    "search_placeholder": "筛选环境…",
+    "no_search_results": "没有匹配的环境。",
+    "import_error_invalid_json": "无法解析为 JSON。",
+    "import_error_unrecognised": "不认识的格式。需要原生导出或 Postman 环境文件。",
+    "import_error_empty": "导入文件中未发现环境。"
+  },
+  "variable_preview": {
+    "title": "预览解析后的值",
+    "has_unresolved": "存在未解析的变量",
+    "resolved_value": "解析后的值",
+    "empty": "(空)",
+    "variables_n": "变量 ({{count}})",
+    "unknown_dynamic": "(未知动态变量)",
+    "undefined": "(未定义)"
   },
   "variable_scope": {
     "global_title": "全局变量",

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Plus,
@@ -80,6 +80,7 @@ export function Sidebar() {
   const [renamingRequest, setRenamingRequest] = useState<{ colId: string; reqId: string } | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [showEnvDropdown, setShowEnvDropdown] = useState(false);
+  const [envSearch, setEnvSearch] = useState("");
   const [editingAuthCollectionId, setEditingAuthCollectionId] = useState<string | null>(null);
   const [runnerCollectionId, setRunnerCollectionId] = useState<string | null>(null);
   const [variableScope, setVariableScope] = useState<
@@ -318,34 +319,16 @@ export function Sidebar() {
             // Decoupled from the trigger's width so longer env names + the
             // variable-count badge fit without truncating. Caps at 360px and
             // 70vh so it never overflows the viewport when many envs exist.
-            <div className="absolute top-full left-0 mt-1 w-[280px] max-w-[360px] max-h-[70vh] overflow-y-auto bg-surface rounded-apple shadow-apple-lg border border-border-light z-30">
-              <button
-                onClick={() => {
-                  setActiveEnvironment(null);
-                  setShowEnvDropdown(false);
-                }}
-                className={`block w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-secondary transition-colors ${!activeEnv ? "text-accent" : "text-text-secondary"}`}
-              >
-                {t("sidebar.no_active_environment")}
-              </button>
-              {environments.map((env) => (
-                <button
-                  key={env.id}
-                  onClick={() => {
-                    setActiveEnvironment(env.id);
-                    setShowEnvDropdown(false);
-                  }}
-                  title={env.name}
-                  className={`flex items-center w-full px-3 py-1.5 text-[12px] hover:bg-surface-secondary transition-colors ${env.id === activeEnv?.id ? "text-accent" : "text-text-primary"}`}
-                >
-                  <span className="flex-1 min-w-0 truncate text-left">
-                    {env.name}
-                  </span>
-                  <span className="ml-2 shrink-0 text-[10px] text-text-tertiary tabular-nums">
-                    {env.variables.length}
-                  </span>
-                </button>
-              ))}
+            <EnvDropdown
+              environments={environments}
+              activeEnvId={activeEnv?.id ?? null}
+              search={envSearch}
+              onSearchChange={setEnvSearch}
+              onSelect={(id) => {
+                setActiveEnvironment(id);
+                setShowEnvDropdown(false);
+              }}
+            >
               <button
                 onClick={() => {
                   setShowEnvPanel(true);
@@ -365,7 +348,7 @@ export function Sidebar() {
               >
                 {t("sidebar.global_variables")}
               </button>
-            </div>
+            </EnvDropdown>
           )}
         </div>
 
@@ -780,6 +763,101 @@ export function Sidebar() {
         />
       )}
       <VariableScopeModal scope={variableScope} onClose={() => setVariableScope(null)} />
+    </div>
+  );
+}
+
+/**
+ * Pop-over list of environments shown under the sidebar env selector.
+ * Extracted into its own component so the search-filter state has a clear
+ * home and the parent `Sidebar` body stays readable. Children are appended
+ * after the list (used for the "Manage environments" / "Global vars" links).
+ */
+function EnvDropdown({
+  environments,
+  activeEnvId,
+  search,
+  onSearchChange,
+  onSelect,
+  children,
+}: {
+  environments: ReturnType<typeof useRequestStore.getState>["environments"];
+  activeEnvId: string | null;
+  search: string;
+  onSearchChange: (v: string) => void;
+  onSelect: (id: string | null) => void;
+  children?: React.ReactNode;
+}) {
+  const { t } = useTranslation();
+
+  // Same threshold as the EnvironmentPanel — keep the dropdown clean when
+  // the user only has a handful of environments.
+  const showSearch = environments.length > 5;
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return environments;
+    return environments.filter((e) => e.name.toLowerCase().includes(q));
+  }, [environments, search]);
+
+  return (
+    <div className="absolute top-full left-0 mt-1 w-[280px] max-w-[360px] max-h-[70vh] overflow-y-auto bg-surface rounded-apple shadow-apple-lg border border-border-light z-30">
+      {showSearch && (
+        <div className="sticky top-0 bg-surface border-b border-border-light p-1.5 z-10">
+          <div className="relative">
+            <Search
+              size={11}
+              className="absolute left-2 top-1/2 -translate-y-1/2 text-text-tertiary pointer-events-none"
+            />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder={t("env.search_placeholder")}
+              className="input-apple w-full text-[11px] py-1 pl-6 pr-6"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => onSearchChange("")}
+                className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-surface-secondary"
+                title={t("common.clear")}
+              >
+                <X size={10} className="text-text-tertiary" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      <button
+        onClick={() => onSelect(null)}
+        className={`block w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-secondary transition-colors ${
+          !activeEnvId ? "text-accent" : "text-text-secondary"
+        }`}
+      >
+        {t("sidebar.no_active_environment")}
+      </button>
+      {environments.length > 0 && filtered.length === 0 && (
+        <p className="text-[11px] text-text-tertiary italic px-3 py-2">
+          {t("env.no_search_results")}
+        </p>
+      )}
+      {filtered.map((env) => (
+        <button
+          key={env.id}
+          onClick={() => onSelect(env.id)}
+          title={env.name}
+          className={`flex items-center w-full px-3 py-1.5 text-[12px] hover:bg-surface-secondary transition-colors ${
+            env.id === activeEnvId ? "text-accent" : "text-text-primary"
+          }`}
+        >
+          <span className="flex-1 min-w-0 truncate text-left">{env.name}</span>
+          <span className="ml-2 shrink-0 text-[10px] text-text-tertiary tabular-nums">
+            {env.variables.length}
+          </span>
+        </button>
+      ))}
+      {children}
     </div>
   );
 }

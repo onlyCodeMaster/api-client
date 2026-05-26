@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { X, Globe, Folder } from "lucide-react";
@@ -40,6 +40,25 @@ export function VariableScopeModal({ scope, onClose }: Props) {
       : collection?.variables ?? [];
 
   const [draft, setDraft] = useState<EnvVariable[]>(sourceVars);
+
+  // Inline preview scope:
+  //  - Global scope previews against just its own draft (nothing else is
+  //    lower in the hierarchy).
+  //  - Collection scope previews against (global ⊕ draft); folder / env
+  //    scopes would shadow these at send time, but we don't have a
+  //    specific request context here so the lowest meaningful layer wins.
+  const previewVars = useMemo<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    if (scope?.kind === "collection") {
+      for (const v of workspace?.variables ?? []) {
+        if (v.enabled && v.key) out[v.key] = v.value;
+      }
+    }
+    for (const v of draft) {
+      if (v.enabled && v.key) out[v.key] = v.value;
+    }
+    return out;
+  }, [scope?.kind, workspace?.variables, draft]);
 
   // Reset the draft when the open scope or its source variables change. Uses
   // React's recommended "compare previous value during render" pattern instead
@@ -124,6 +143,7 @@ export function VariableScopeModal({ scope, onClose }: Props) {
                 ? t("variable_scope.empty_global")
                 : t("variable_scope.empty_collection")
             }
+            previewVars={previewVars}
           />
         </div>
 
