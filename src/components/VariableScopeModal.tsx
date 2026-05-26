@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
+import { X, Globe, Folder } from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
 import { VariablesEditor } from "./VariablesEditor";
 import type { EnvVariable } from "../types";
@@ -20,6 +22,7 @@ interface Props {
  * via UI in this PR — the backend supports it for future work.
  */
 export function VariableScopeModal({ scope, onClose }: Props) {
+  const { t } = useTranslation();
   const workspace = useRequestStore((s) => s.workspace);
   const collections = useRequestStore((s) => s.collections);
   const setGlobalVariables = useRequestStore((s) => s.setGlobalVariables);
@@ -57,11 +60,13 @@ export function VariableScopeModal({ scope, onClose }: Props) {
   if (scope.kind === "collection" && !collection) return null;
 
   const title =
-    scope.kind === "global" ? "Global variables" : `Variables — ${collection?.name}`;
+    scope.kind === "global"
+      ? t("variable_scope.global_title")
+      : t("variable_scope.collection_title", { name: collection?.name ?? "" });
   const description =
     scope.kind === "global"
-      ? "Workspace-wide variables. Override-able by collection, folder, and environment scopes (in that order)."
-      : "Collection-scoped variables. Override global vars; overridden by folder and environment vars.";
+      ? t("variable_scope.global_description")
+      : t("variable_scope.collection_description");
 
   const save = async () => {
     // Drop fully-blank rows on save so the file doesn't accumulate noise.
@@ -74,56 +79,70 @@ export function VariableScopeModal({ scope, onClose }: Props) {
     onClose();
   };
 
-  return (
+  // Portal to <body> so we escape the sidebar's `backdrop-blur-xl`
+  // containing block (see EnvironmentPanel for the same fix).
+  return createPortal(
     <div
       className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-center justify-center"
       onClick={onClose}
     >
       <div
-        className="bg-bg-elevated border border-border rounded-apple-lg shadow-xl w-[640px] max-w-[90vw] max-h-[80vh] flex flex-col"
+        className="bg-surface rounded-apple-lg shadow-apple-lg w-[1024px] max-w-[92vw] h-[85vh] max-h-[85vh] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border-light shrink-0">
-          <div>
-            <h2 className="text-[13px] font-semibold text-text-primary">{title}</h2>
-            <p className="text-[11px] text-text-tertiary mt-0.5">{description}</p>
+        <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-border-light shrink-0">
+          <div className="flex items-start gap-2 min-w-0">
+            {scope.kind === "global" ? (
+              <Globe size={18} className="text-accent shrink-0 mt-0.5" />
+            ) : (
+              <Folder size={18} className="text-accent shrink-0 mt-0.5" />
+            )}
+            <div className="min-w-0">
+              <h2 className="text-[15px] font-semibold text-text-primary truncate">
+                {title}
+              </h2>
+              <p className="text-[12px] text-text-tertiary mt-0.5">
+                {description}
+              </p>
+            </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1 hover:bg-black/5 dark:hover:bg-white/10 rounded-md transition-colors"
-            title="Close"
+            className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-surface-secondary transition-colors shrink-0"
+            title={t("common.close")}
           >
-            <X size={14} className="text-text-tertiary" />
+            <X size={16} className="text-text-tertiary" />
           </button>
         </div>
 
-        <div className="p-4 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto px-5 py-4">
           <VariablesEditor
             value={draft}
             onChange={setDraft}
             emptyHint={
               scope.kind === "global"
-                ? "No global variables yet. Add one to define a value available to every request."
-                : "No collection-scoped variables yet."
+                ? t("variable_scope.empty_global")
+                : t("variable_scope.empty_collection")
             }
           />
         </div>
 
-        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border-light shrink-0">
+        <div className="flex items-center justify-end gap-2 px-5 py-3 bg-surface-secondary/40 border-t border-border-light shrink-0">
           <button
             onClick={onClose}
             className="px-3 py-1.5 text-[12px] text-text-secondary hover:bg-black/5 dark:hover:bg-white/10 rounded-md transition-colors"
           >
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             onClick={save}
             className="px-3 py-1.5 text-[12px] bg-accent text-white rounded-md hover:bg-accent-hover transition-colors"
           >
-            Save
+            {t("common.save")}
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

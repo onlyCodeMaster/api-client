@@ -315,7 +315,10 @@ export function Sidebar() {
             <ChevronDown size={11} className="text-text-tertiary shrink-0" />
           </button>
           {showEnvDropdown && (
-            <div className="absolute top-full left-0 right-0 mt-1 bg-surface rounded-apple shadow-apple-lg border border-border-light z-30 overflow-hidden">
+            // Decoupled from the trigger's width so longer env names + the
+            // variable-count badge fit without truncating. Caps at 360px and
+            // 70vh so it never overflows the viewport when many envs exist.
+            <div className="absolute top-full left-0 mt-1 w-[280px] max-w-[360px] max-h-[70vh] overflow-y-auto bg-surface rounded-apple shadow-apple-lg border border-border-light z-30">
               <button
                 onClick={() => {
                   setActiveEnvironment(null);
@@ -332,9 +335,15 @@ export function Sidebar() {
                     setActiveEnvironment(env.id);
                     setShowEnvDropdown(false);
                   }}
-                  className={`block w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-secondary transition-colors ${env.id === activeEnv?.id ? "text-accent" : "text-text-primary"}`}
+                  title={env.name}
+                  className={`flex items-center w-full px-3 py-1.5 text-[12px] hover:bg-surface-secondary transition-colors ${env.id === activeEnv?.id ? "text-accent" : "text-text-primary"}`}
                 >
-                  {env.name}
+                  <span className="flex-1 min-w-0 truncate text-left">
+                    {env.name}
+                  </span>
+                  <span className="ml-2 shrink-0 text-[10px] text-text-tertiary tabular-nums">
+                    {env.variables.length}
+                  </span>
                 </button>
               ))}
               <button
@@ -352,7 +361,7 @@ export function Sidebar() {
                   setShowEnvDropdown(false);
                 }}
                 className="block w-full text-left px-3 py-1.5 text-[12px] text-accent hover:bg-accent/10 transition-colors"
-                title="Workspace-wide variables, available to every request regardless of active environment"
+                title={t("sidebar.global_variables_tooltip")}
               >
                 {t("sidebar.global_variables")}
               </button>
