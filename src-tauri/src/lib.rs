@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod db;
+pub mod mock_server;
 pub mod oauth2;
 pub mod secrets;
 pub mod sse;
@@ -795,6 +796,7 @@ pub fn run() {
     let sse_connections = Arc::new(sse::SseConnections::default());
     let cookies = Arc::new(AppCookies::new());
     let cached_bodies = Arc::new(CachedBodies::new());
+    let mock_server = Arc::new(mock_server::MockServerState::new());
     cookies.preload_from_db(&database);
 
     tauri::Builder::default()
@@ -806,6 +808,7 @@ pub fn run() {
         .manage(sse_connections)
         .manage(cookies)
         .manage(cached_bodies)
+        .manage(mock_server)
         .invoke_handler(tauri::generate_handler![
             send_request,
             cancel_request,
@@ -865,6 +868,13 @@ pub fn run() {
             commands::store_auth_secret,
             commands::get_auth_secret,
             commands::delete_auth_secret,
+            // Mock Server
+            commands::mock_server_start,
+            commands::mock_server_stop,
+            commands::mock_server_status,
+            commands::list_mock_routes,
+            commands::save_mock_route,
+            commands::delete_mock_route,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

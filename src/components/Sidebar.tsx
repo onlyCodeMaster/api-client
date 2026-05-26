@@ -19,6 +19,7 @@ import {
   KeyRound,
   Play,
   Braces,
+  Server,
 } from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
 import { EnvironmentPanel } from "./EnvironmentPanel";
@@ -33,6 +34,7 @@ import { CollectionAuthModal } from "./CollectionAuthModal";
 import { CollectionRunnerModal } from "./CollectionRunnerModal";
 import { VariableScopeModal } from "./VariableScopeModal";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
+import { MockServerPanel } from "./MockServerPanel";
 import { tagColor } from "../utils/tagColor";
 
 /** Heuristic format sniffers used by `handleImportFile`. */
@@ -71,6 +73,7 @@ export function Sidebar() {
   const [showEnvPanel, setShowEnvPanel] = useState(false);
   const [showCookies, setShowCookies] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showMockServer, setShowMockServer] = useState(false);
   const [renamingCollection, setRenamingCollection] = useState<string | null>(null);
   const [renamingRequest, setRenamingRequest] = useState<{ colId: string; reqId: string } | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -252,6 +255,13 @@ export function Sidebar() {
               title="Cookies"
             >
               <Cookie size={14} className="text-text-secondary" />
+            </button>
+            <button
+              onClick={() => setShowMockServer(true)}
+              className="relative z-10 w-7 h-7 flex items-center justify-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10 active:scale-95 transition-all cursor-pointer"
+              title="Mock Server"
+            >
+              <Server size={14} className="text-text-secondary" />
             </button>
             <button
               onClick={() => setShowSettings(true)}
@@ -743,6 +753,7 @@ export function Sidebar() {
       {showEnvPanel && <EnvironmentPanel onClose={() => setShowEnvPanel(false)} />}
       {showCookies && <CookiesPanel onClose={() => setShowCookies(false)} />}
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
+      {showMockServer && <MockServerPanel onClose={() => setShowMockServer(false)} />}
       <CollectionAuthModal
         collectionId={editingAuthCollectionId}
         onClose={() => setEditingAuthCollectionId(null)}
