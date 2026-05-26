@@ -206,6 +206,27 @@ export function removeRequest(
   };
 }
 
+/** Rename a request anywhere in the tree by id. No-op if not found.
+ *  Also bumps the request's `updated_at` so collection persistence sees it
+ *  as dirty. */
+export function renameRequest(
+  collection: Collection,
+  requestId: string,
+  name: string,
+): Collection {
+  const now = Date.now();
+  const rename = (r: CollectionRequest): CollectionRequest =>
+    r.id === requestId ? { ...r, name, updated_at: now } : r;
+  return {
+    ...collection,
+    requests: collection.requests.map(rename),
+    folders: mapFolders(collection.folders, (f) => ({
+      ...f,
+      requests: f.requests.map(rename),
+    })),
+  };
+}
+
 /** Pop a request from the tree, returning the new collection and the
  *  popped node. Returns `null` if the request isn't found. */
 export function takeRequest(

@@ -29,6 +29,8 @@ import {
   addFolderTo,
   removeFolder,
   renameFolder as renameFolderInTree,
+  removeRequest as removeRequestFromTree,
+  renameRequest as renameRequestInTree,
   moveRequest,
   moveFolder,
   reorderFoldersInContainer,
@@ -1020,11 +1022,11 @@ export const useRequestStore = create<RequestState>((set, get) => {
       const { collections } = get();
       const col = collections.find((c) => c.id === collectionId);
       if (!col) return;
-      const updated = {
-        ...col,
-        requests: col.requests.filter((r) => r.id !== requestId),
-        updated_at: Date.now(),
-      };
+      // Walk the whole tree — requests can live inside nested folders
+      // since the folder UI shipped. The earlier root-only filter silently
+      // succeeded for nested requests.
+      const next = removeRequestFromTree(col, requestId);
+      const updated = { ...next, updated_at: Date.now() };
       await invoke("save_collection", { collection: updated });
       set((state) => ({ collections: state.collections.map((c) => (c.id === collectionId ? updated : c)) }));
     },
@@ -1033,11 +1035,9 @@ export const useRequestStore = create<RequestState>((set, get) => {
       const { collections } = get();
       const col = collections.find((c) => c.id === collectionId);
       if (!col) return;
-      const updated = {
-        ...col,
-        requests: col.requests.map((r) => (r.id === requestId ? { ...r, name, updated_at: Date.now() } : r)),
-        updated_at: Date.now(),
-      };
+      // Walk the tree for the same reason as deleteRequestFromCollection.
+      const next = renameRequestInTree(col, requestId, name);
+      const updated = { ...next, updated_at: Date.now() };
       await invoke("save_collection", { collection: updated });
       set((state) => ({ collections: state.collections.map((c) => (c.id === collectionId ? updated : c)) }));
     },
