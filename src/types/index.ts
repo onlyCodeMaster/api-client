@@ -19,15 +19,35 @@ export interface AuthConfig {
    *   This is the default for requests created under a collection.
    * - `"none"`: explicitly disable authentication for this scope, even if
    *   the parent has auth configured.
-   * - `"bearer" | "basic" | "api_key"`: concrete schemes.
+   * - `"bearer" | "basic" | "api_key" | "oauth2"`: concrete schemes.
    */
-  auth_type: "inherit" | "none" | "bearer" | "basic" | "api_key";
+  auth_type: "inherit" | "none" | "bearer" | "basic" | "api_key" | "oauth2";
   bearer_token?: string;
   basic_username?: string;
   basic_password?: string;
   api_key_key?: string;
   api_key_value?: string;
   api_key_in?: "header" | "query";
+
+  // OAuth2 — populated only when auth_type === "oauth2".
+  /** Grant type. Only non-interactive grants are supported here. */
+  oauth2_grant_type?: "client_credentials" | "password";
+  oauth2_token_url?: string;
+  oauth2_client_id?: string;
+  /** Stored in keychain (never written to collection JSON in plaintext). */
+  oauth2_client_secret?: string;
+  /** Space-separated scope list. */
+  oauth2_scope?: string;
+  /** Where to send the client credentials. Defaults to "basic". */
+  oauth2_client_auth?: "basic" | "body";
+  /** Required for grant_type=password. */
+  oauth2_username?: string;
+  /** Required for grant_type=password. Stored in keychain. */
+  oauth2_password?: string;
+  /** Cached access token from the most recent Fetch Token. Stored in keychain. */
+  oauth2_access_token?: string;
+  /** Unix millis when the cached token stops being valid. */
+  oauth2_token_expires_at?: number;
 }
 
 export type BodyType = "none" | "json" | "text" | "xml" | "form-data" | "graphql";

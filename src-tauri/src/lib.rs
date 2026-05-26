@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod db;
+pub mod oauth2;
 pub mod secrets;
 pub mod sse;
 pub mod storage;
@@ -721,6 +722,16 @@ async fn sse_close(
     Ok(())
 }
 
+/// Fetch an OAuth2 access token using the supplied configuration. Runs in
+/// the backend so providers that block CORS or self-signed dev IdPs still
+/// work, and so the client secret never has to leave Rust into JS context.
+#[tauri::command]
+async fn oauth2_fetch_token(
+    request: oauth2::OAuth2FetchRequest,
+) -> Result<oauth2::OAuth2FetchResponse, String> {
+    oauth2::fetch_token(request).await
+}
+
 /// Write a response body to disk. Two modes:
 ///
 /// 1. **Truncated body**: when the response was too big to send over IPC in
@@ -804,6 +815,7 @@ pub fn run() {
             ws_close,
             sse_connect,
             sse_close,
+            oauth2_fetch_token,
             // History
             commands::save_history,
             commands::get_history,
