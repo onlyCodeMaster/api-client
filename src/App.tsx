@@ -10,6 +10,7 @@ import { SearchPalette } from "./components/SearchPalette";
 import { SaveToCollectionModal } from "./components/SaveToCollectionModal";
 import { Splitter } from "./components/Splitter";
 import { useRequestStore } from "./store/useRequestStore";
+import i18n from "./i18n";
 
 const DEFAULT_SIDEBAR_WIDTH = 256;
 const DEFAULT_REQUEST_PANEL_PCT = 48;
@@ -38,6 +39,11 @@ function App() {
   const setWindowState = useRequestStore((s) => s.setWindowState);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [savePickerOpen, setSavePickerOpen] = useState(false);
+  // Backend error from an in-place ⌘S save. When set, we open the
+  // SaveToCollectionModal with the error pre-populated so the user sees
+  // exactly what went wrong instead of silently believing the save
+  // succeeded.
+  const [saveErrorMessage, setSaveErrorMessage] = useState<string | null>(null);
 
   // Local mirror of the persisted layout numbers so dragging is smooth.
   // Persistence happens on drag end via setWindowState.
@@ -167,7 +173,23 @@ function App() {
       const { activeRequest: req, saveActiveRequest } = useRequestStore.getState();
       if (!req) return;
       if (req.collectionId) {
-        void saveActiveRequest();
+        // Await + catch so a backend save failure isn't silently swallowed
+        // as an unhandled promise rejection. On error we re-open the picker
+        // with the error message pre-populated so the user can pick a
+        // different destination or just see what went wrong.
+        saveActiveRequest()
+          .then((ok) => {
+            if (!ok) {
+              setSaveErrorMessage(i18n.t("save_collection.stale_collection"));
+              setSavePickerOpen(true);
+            }
+          })
+          .catch((err) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error("Failed to save request:", err);
+            setSaveErrorMessage(msg);
+            setSavePickerOpen(true);
+          });
       } else {
         setSavePickerOpen(true);
       }
@@ -249,7 +271,17 @@ function App() {
       </div>
       {paletteOpen && <SearchPalette onClose={() => setPaletteOpen(false)} />}
       {savePickerOpen && (
-        <SaveToCollectionModal onClose={() => setSavePickerOpen(false)} />
+        <SaveToCollectionModal
+          initialError={saveErrorMessage}
+          onClose={() => {
+            setSavePickerOpen(false);
+            setSaveErrorMessage(null);
+          }}
+          onSaved={() => {
+            setSavePickerOpen(false);
+            setSaveErrorMessage(null);
+          }}
+        />
       )}
     </div>
   );

@@ -87,7 +87,8 @@
     "name_placeholder": "我的请求",
     "destination": "目标位置",
     "no_collections": "还没有任何集合，请先在侧边栏新建一个。",
-    "error_no_target": "请先选择目标位置。"
+    "error_no_target": "请先选择目标位置。",
+    "stale_collection": "该请求原属的集合已不存在，请在下方重新选择保存位置。"
   },
   "workspace": {
     "workspace": "工作区",

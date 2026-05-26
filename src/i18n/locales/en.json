@@ -87,7 +87,8 @@
     "name_placeholder": "My request",
     "destination": "Destination",
     "no_collections": "You don't have any collections yet. Create one from the sidebar first.",
-    "error_no_target": "Pick a destination first."
+    "error_no_target": "Pick a destination first.",
+    "stale_collection": "This request's original collection no longer exists. Pick a new destination below."
   },
   "workspace": {
     "workspace": "Workspace",
