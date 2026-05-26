@@ -20,9 +20,13 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          - { os-name: macOS (Universal), runner: macos-latest, args: "--target universal-apple-darwin" }
-          - { os-name: Linux (x86_64),    runner: ubuntu-latest, args: "" }
-          - { os-name: Windows (x86_64),  runner: windows-latest, args: "" }
+          # macOS: ship two arch-specific bundles so Apple Silicon users
+          # get a native arm64 build (smaller download, no Rosetta) and
+          # Intel Macs still get a compatible x86_64 build.
+          - { os-name: macOS (Apple Silicon), runner: macos-14,     rust-target: aarch64-apple-darwin, args: "--target aarch64-apple-darwin" }
+          - { os-name: macOS (Intel),         runner: macos-13,     rust-target: x86_64-apple-darwin,  args: "--target x86_64-apple-darwin" }
+          - { os-name: Linux (x86_64),        runner: ubuntu-22.04, rust-target: "",                    args: "" }
+          - { os-name: Windows (x86_64),      runner: windows-latest, rust-target: "",                  args: "" }
     steps:
       - uses: actions/checkout@v4
 
@@ -35,10 +39,10 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform.runner == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.platform.rust-target }}
 
       - name: Install Linux build dependencies
-        if: matrix.platform.runner == 'ubuntu-latest'
+        if: startsWith(matrix.platform.runner, 'ubuntu')
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
