@@ -32,6 +32,7 @@ import { httpFileToCollection } from "../utils/http-file";
 import { CollectionAuthModal } from "./CollectionAuthModal";
 import { CollectionRunnerModal } from "./CollectionRunnerModal";
 import { VariableScopeModal } from "./VariableScopeModal";
+import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { tagColor } from "../utils/tagColor";
 
 /** Heuristic format sniffers used by `handleImportFile`. */
@@ -278,6 +279,11 @@ export function Sidebar() {
               <Plus size={15} className="text-accent" strokeWidth={2.2} />
             </button>
           </div>
+        </div>
+
+        {/* Workspace switcher */}
+        <div className="mb-2">
+          <WorkspaceSwitcher />
         </div>
 
         {/* Environment selector */}

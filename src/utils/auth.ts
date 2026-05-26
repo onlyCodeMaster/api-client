@@ -119,6 +119,8 @@ function labelFor(a: AuthConfig): string {
       return "Basic";
     case "api_key":
       return "API Key";
+    case "oauth2":
+      return "OAuth 2";
     case "none":
       return "No auth";
     case "inherit":

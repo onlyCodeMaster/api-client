@@ -851,6 +851,10 @@ pub fn run() {
             commands::save_workspace,
             commands::load_workspace,
             commands::load_default_workspace,
+            commands::list_workspaces,
+            commands::create_workspace,
+            commands::delete_workspace,
+            commands::migrate_legacy_to_workspace,
             // Secrets (keychain)
             commands::store_secret,
             commands::get_secret,

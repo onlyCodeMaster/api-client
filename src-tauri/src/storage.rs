@@ -99,6 +99,10 @@ pub struct CollectionFile {
     pub folders: Vec<CollectionFolder>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Workspace this collection belongs to. `None` on legacy files; the
+    /// app assigns the default workspace on first load via `migrate_legacy_to_workspace`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -158,6 +162,10 @@ pub struct EnvironmentFile {
     pub variables: Vec<EnvVariable>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Workspace this environment belongs to. `None` on legacy files; the
+    /// app assigns the default workspace on first load via `migrate_legacy_to_workspace`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
 }
 
 // === Workspace Types ===
@@ -467,7 +475,18 @@ pub fn load_collection(id: &str) -> Result<CollectionFile, String> {
     Ok(collection)
 }
 
-pub fn list_collections() -> Result<Vec<CollectionFile>, String> {
+/// List collections, optionally filtered by workspace.
+///
+/// When `workspace_id` is `Some`, returns only collections whose
+/// `workspace_id` matches AND collections with `workspace_id == None`
+/// (legacy files predating multi-workspace; they're treated as "unassigned"
+/// and shown in every workspace until migration assigns them). Callers should
+/// run `migrate_legacy_to_workspace` once at startup to assign them to the
+/// default workspace.
+///
+/// When `workspace_id` is `None`, returns all collections (used by import /
+/// admin paths).
+pub fn list_collections(workspace_id: Option<&str>) -> Result<Vec<CollectionFile>, String> {
     let dir = collections_dir()?;
     let mut collections = Vec::new();
 
@@ -481,6 +500,13 @@ pub fn list_collections() -> Result<Vec<CollectionFile>, String> {
             let content = fs::read_to_string(&path)
                 .map_err(|e| format!("Failed to read file: {}", e))?;
             if let Ok(mut collection) = serde_json::from_str::<CollectionFile>(&content) {
+                if let Some(ws) = workspace_id {
+                    match collection.workspace_id.as_deref() {
+                        Some(c_ws) if c_ws == ws => {}
+                        None => {} // unassigned legacy — show in every workspace
+                        _ => continue,
+                    }
+                }
                 visit_collection_auths(&mut collection, &mut hydrate_auth);
                 hydrate_scope_vars("collection", &collection.id, &mut collection.variables);
                 hydrate_folder_vars(&mut collection.folders);
@@ -534,7 +560,9 @@ pub fn load_environment(id: &str) -> Result<EnvironmentFile, String> {
     Ok(env)
 }
 
-pub fn list_environments() -> Result<Vec<EnvironmentFile>, String> {
+/// List environments, optionally filtered by workspace. Filtering semantics
+/// mirror `list_collections`.
+pub fn list_environments(workspace_id: Option<&str>) -> Result<Vec<EnvironmentFile>, String> {
     let dir = environments_dir()?;
     let mut environments = Vec::new();
 
@@ -548,6 +576,13 @@ pub fn list_environments() -> Result<Vec<EnvironmentFile>, String> {
             let content = fs::read_to_string(&path)
                 .map_err(|e| format!("Failed to read file: {}", e))?;
             if let Ok(mut env) = serde_json::from_str::<EnvironmentFile>(&content) {
+                if let Some(ws) = workspace_id {
+                    match env.workspace_id.as_deref() {
+                        Some(e_ws) if e_ws == ws => {}
+                        None => {}
+                        _ => continue,
+                    }
+                }
                 hydrate_environment(&mut env);
                 environments.push(env);
             }
@@ -635,4 +670,119 @@ pub fn load_default_workspace() -> Result<WorkspaceFile, String> {
     };
     save_workspace(&workspace)?;
     Ok(workspace)
+}
+
+/// List every workspace file on disk, sorted by created_at ascending so the
+/// first-created workspace is consistently the "default" in the UI.
+pub fn list_workspaces() -> Result<Vec<WorkspaceFile>, String> {
+    let dir = workspace_dir()?;
+    let mut workspaces = Vec::new();
+
+    let entries = match fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(workspaces),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(ws) = serde_json::from_str::<WorkspaceFile>(&content) {
+                workspaces.push(ws);
+            }
+        }
+    }
+    workspaces.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    Ok(workspaces)
+}
+
+/// Create a new empty workspace and return it.
+pub fn create_workspace(name: &str) -> Result<WorkspaceFile, String> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let workspace = WorkspaceFile {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: name.to_string(),
+        active_environment_id: None,
+        active_collection_id: None,
+        active_request_id: None,
+        window_state: None,
+        variables: Vec::new(),
+        created_at: now,
+        updated_at: now,
+    };
+    save_workspace(&workspace)?;
+    Ok(workspace)
+}
+
+/// Delete a workspace and cascade-delete all collections and environments
+/// that belong to it. Returns the list of deleted collection IDs and
+/// environment IDs so the caller can also drop history rows tied to them.
+pub fn delete_workspace(id: &str) -> Result<DeletedWorkspaceArtifacts, String> {
+    // Refuse to delete the last workspace — there must always be at least one.
+    let all = list_workspaces()?;
+    if all.len() <= 1 {
+        return Err("Cannot delete the last remaining workspace.".to_string());
+    }
+
+    let mut deleted = DeletedWorkspaceArtifacts::default();
+
+    // Cascade collections.
+    for col in list_collections(Some(id))? {
+        if col.workspace_id.as_deref() == Some(id) {
+            delete_collection(&col.id)?;
+            deleted.collection_ids.push(col.id);
+        }
+    }
+    // Cascade environments.
+    for env in list_environments(Some(id))? {
+        if env.workspace_id.as_deref() == Some(id) {
+            delete_environment(&env.id)?;
+            deleted.environment_ids.push(env.id);
+        }
+    }
+
+    // Drop any workspace-global secrets from keychain before deleting the file.
+    if let Ok(ws) = load_workspace(id) {
+        purge_scope_vars("workspace", &ws.id, &ws.variables);
+    }
+
+    // Delete the workspace file itself.
+    let dir = workspace_dir()?;
+    let file_path = dir.join(format!("{}.json", id));
+    if file_path.exists() {
+        fs::remove_file(&file_path)
+            .map_err(|e| format!("Failed to delete workspace: {}", e))?;
+    }
+    Ok(deleted)
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct DeletedWorkspaceArtifacts {
+    pub collection_ids: Vec<String>,
+    pub environment_ids: Vec<String>,
+}
+
+/// One-shot migration: stamp every legacy collection / environment that has
+/// `workspace_id == None` with the given workspace id, re-saving the file.
+/// Idempotent — re-running is a no-op once everything is stamped.
+pub fn migrate_legacy_to_workspace(workspace_id: &str) -> Result<usize, String> {
+    let mut migrated = 0usize;
+
+    for mut col in list_collections(None)? {
+        if col.workspace_id.is_none() {
+            col.workspace_id = Some(workspace_id.to_string());
+            save_collection(&col)?;
+            migrated += 1;
+        }
+    }
+    for mut env in list_environments(None)? {
+        if env.workspace_id.is_none() {
+            env.workspace_id = Some(workspace_id.to_string());
+            save_environment(&env)?;
+            migrated += 1;
+        }
+    }
+    Ok(migrated)
 }

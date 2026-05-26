@@ -50,7 +50,11 @@ function createNewRequest(): RequestItem {
 }
 
 // Convert RequestItem <-> HistoryEntry for SQLite persistence
-function requestToHistoryEntry(req: RequestItem, response?: ResponseData | null): HistoryEntry {
+function requestToHistoryEntry(
+  req: RequestItem,
+  response?: ResponseData | null,
+  workspaceId?: string
+): HistoryEntry {
   const now = Date.now();
   return {
     id: req.id,
@@ -65,6 +69,7 @@ function requestToHistoryEntry(req: RequestItem, response?: ResponseData | null)
     response_time_ms: response?.time_ms,
     created_at: req.createdAt,
     updated_at: now,
+    workspace_id: workspaceId,
   };
 }
 
@@ -97,6 +102,8 @@ interface RequestState {
   collections: Collection[];
   environments: Environment[];
   workspace: Workspace | null;
+  /** All available workspaces. Always non-empty after `initialize`. */
+  workspaces: Workspace[];
   history: RequestItem[];
   initialized: boolean;
 
@@ -240,6 +247,17 @@ interface RequestState {
 
   // Workspace
   saveWorkspaceState: () => Promise<void>;
+
+  /** Switch the active workspace; loads its collections / environments / history. */
+  switchWorkspace: (workspaceId: string) => Promise<void>;
+  /** Create a new empty workspace and switch to it. */
+  createWorkspace: (name: string) => Promise<Workspace>;
+  /** Rename an existing workspace. */
+  renameWorkspace: (id: string, name: string) => Promise<void>;
+  /** Cascade-delete a workspace, its collections, environments, and history. */
+  deleteWorkspace: (id: string) => Promise<void>;
+  /** Refresh the workspaces list from disk. */
+  refreshWorkspaces: () => Promise<void>;
 }
 
 function activeTab(state: RequestState): RequestItem | null {
@@ -298,6 +316,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
     collections: [],
     environments: [],
     workspace: null,
+    workspaces: [],
     history: [],
     initialized: false,
 
@@ -330,10 +349,23 @@ export const useRequestStore = create<RequestState>((set, get) => {
     initialize: async () => {
       try {
         const workspace = await invoke<Workspace>("load_default_workspace");
-        const historyEntries = await invoke<HistoryEntry[]>("get_history", { limit: 50, offset: 0 });
+        // One-shot legacy migration: stamp every pre-multi-workspace artifact
+        // with the default workspace id so it appears in exactly one workspace.
+        try {
+          await invoke<number>("migrate_legacy_to_workspace", { workspaceId: workspace.id });
+        } catch (err) {
+          console.warn("Legacy workspace migration skipped:", err);
+        }
+        const workspaces = await invoke<Workspace[]>("list_workspaces");
+        const wsId = workspace.id;
+        const historyEntries = await invoke<HistoryEntry[]>("get_history", {
+          workspaceId: wsId,
+          limit: 50,
+          offset: 0,
+        });
         const history = historyEntries.map(historyEntryToRequest);
-        const collections = await invoke<Collection[]>("list_collections");
-        const environments = await invoke<Environment[]>("list_environments");
+        const collections = await invoke<Collection[]>("list_collections", { workspaceId: wsId });
+        const environments = await invoke<Environment[]>("list_environments", { workspaceId: wsId });
 
         let defaultTimeoutMs = 30000;
         try {
@@ -352,6 +384,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
 
         set({
           workspace,
+          workspaces,
           history,
           collections,
           environments,
@@ -694,7 +727,8 @@ export const useRequestStore = create<RequestState>((set, get) => {
     },
 
     addToHistory: (request, response) => {
-      const entry = requestToHistoryEntry(request, response);
+      const { workspace } = get();
+      const entry = requestToHistoryEntry(request, response, workspace?.id);
       invoke("save_history", { entry }).catch((err) => console.error("Failed to save history:", err));
       set((state) => {
         const exists = state.history.find((r) => r.id === request.id);
@@ -728,7 +762,11 @@ export const useRequestStore = create<RequestState>((set, get) => {
 
     searchHistory: async (query) => {
       try {
-        const entries = await invoke<HistoryEntry[]>("search_history", { query });
+        const { workspace } = get();
+        const entries = await invoke<HistoryEntry[]>("search_history", {
+          workspaceId: workspace?.id,
+          query,
+        });
         const history = entries.map(historyEntryToRequest);
         set({ history });
       } catch (err) {
@@ -751,6 +789,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
 
     addCollection: async (name) => {
       const now = Date.now();
+      const { workspace } = get();
       const collection: Collection = {
         id: generateId(),
         name,
@@ -759,6 +798,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
         folders: [],
         created_at: now,
         updated_at: now,
+        workspace_id: workspace?.id,
       };
       await invoke("save_collection", { collection });
       set((state) => ({ collections: [...state.collections, collection] }));
@@ -948,7 +988,10 @@ export const useRequestStore = create<RequestState>((set, get) => {
     },
 
     refreshCollections: async () => {
-      const collections = await invoke<Collection[]>("list_collections");
+      const { workspace } = get();
+      const collections = await invoke<Collection[]>("list_collections", {
+        workspaceId: workspace?.id,
+      });
       set({ collections });
     },
 
@@ -956,12 +999,14 @@ export const useRequestStore = create<RequestState>((set, get) => {
 
     addEnvironment: async (name) => {
       const now = Date.now();
+      const { workspace } = get();
       const env: Environment = {
         id: generateId(),
         name,
         variables: [],
         created_at: now,
         updated_at: now,
+        workspace_id: workspace?.id,
       };
       await invoke("save_environment", { env });
       set((state) => ({ environments: [...state.environments, env] }));
@@ -979,7 +1024,10 @@ export const useRequestStore = create<RequestState>((set, get) => {
     },
 
     refreshEnvironments: async () => {
-      const environments = await invoke<Environment[]>("list_environments");
+      const { workspace } = get();
+      const environments = await invoke<Environment[]>("list_environments", {
+        workspaceId: workspace?.id,
+      });
       set({ environments });
     },
 
@@ -1210,6 +1258,115 @@ export const useRequestStore = create<RequestState>((set, get) => {
       invoke("save_workspace", { workspace: updated }).catch((err) =>
         console.error("Failed to save workspace:", err)
       );
+    },
+
+    switchWorkspace: async (workspaceId) => {
+      const { workspaces, workspace: current } = get();
+      if (current?.id === workspaceId) return;
+      const target = workspaces.find((w) => w.id === workspaceId);
+      if (!target) {
+        console.error("Cannot switch to unknown workspace:", workspaceId);
+        return;
+      }
+
+      // Cancel any in-flight requests and close any open streams from the old
+      // workspace's tabs — they're scoped to the previous workspace and
+      // shouldn't survive the switch.
+      const prev = get();
+      Object.entries(prev.loadings)
+        .filter(([, v]) => v)
+        .forEach(([id]) => invoke("cancel_request", { requestId: id }).catch(() => {}));
+      Object.entries(prev.wsConnected)
+        .filter(([, v]) => v)
+        .forEach(([id]) => invoke("ws_close", { requestId: id }).catch(() => {}));
+      Object.entries(prev.sseConnected)
+        .filter(([, v]) => v)
+        .forEach(([id]) => invoke("sse_close", { requestId: id }).catch(() => {}));
+
+      try {
+        const [collections, environments, historyEntries] = await Promise.all([
+          invoke<Collection[]>("list_collections", { workspaceId }),
+          invoke<Environment[]>("list_environments", { workspaceId }),
+          invoke<HistoryEntry[]>("get_history", {
+            workspaceId,
+            limit: 50,
+            offset: 0,
+          }),
+        ]);
+        const history = historyEntries.map(historyEntryToRequest);
+
+        // Start the new workspace with a single blank request tab so the user
+        // doesn't see references to the previous workspace's collections.
+        const fresh = createNewRequest();
+        set((s) => ({
+          workspace: target,
+          collections,
+          environments,
+          history,
+          tabs: [fresh],
+          activeTabId: fresh.id,
+          responses: {},
+          errors: {},
+          loadings: {},
+          testResults: {},
+          scriptLogs: {},
+          scriptError: {},
+          responseHistory: {},
+          wsConnected: {},
+          wsMessages: {},
+          sseConnected: {},
+          sseEvents: {},
+          ...syncDerived({
+            ...s,
+            tabs: [fresh],
+            activeTabId: fresh.id,
+            responses: {},
+            errors: {},
+            loadings: {},
+          }),
+        }));
+      } catch (err) {
+        console.error("Failed to switch workspace:", err);
+      }
+    },
+
+    createWorkspace: async (name) => {
+      const ws = await invoke<Workspace>("create_workspace", { name });
+      set((s) => ({ workspaces: [...s.workspaces, ws] }));
+      await get().switchWorkspace(ws.id);
+      return ws;
+    },
+
+    renameWorkspace: async (id, name) => {
+      const { workspaces, workspace } = get();
+      const target = workspaces.find((w) => w.id === id);
+      if (!target) return;
+      const updated: Workspace = { ...target, name, updated_at: Date.now() };
+      await invoke("save_workspace", { workspace: updated });
+      set((s) => ({
+        workspaces: s.workspaces.map((w) => (w.id === id ? updated : w)),
+        workspace: workspace?.id === id ? updated : s.workspace,
+      }));
+    },
+
+    deleteWorkspace: async (id) => {
+      const { workspaces, workspace } = get();
+      if (workspaces.length <= 1) {
+        throw new Error("Cannot delete the last remaining workspace.");
+      }
+      await invoke("delete_workspace", { id });
+      const remaining = workspaces.filter((w) => w.id !== id);
+      set({ workspaces: remaining });
+      if (workspace?.id === id) {
+        // Switch to whichever workspace is left, preferring the oldest.
+        const fallback = remaining[0];
+        await get().switchWorkspace(fallback.id);
+      }
+    },
+
+    refreshWorkspaces: async () => {
+      const workspaces = await invoke<Workspace[]>("list_workspaces");
+      set({ workspaces });
     },
   };
 });
