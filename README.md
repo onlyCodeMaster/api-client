@@ -1,5 +1,7 @@
 # API Client
 
+<p align="right"><b>English</b> · <a href="./README.zh-CN.md">简体中文</a></p>
+
 > A fast, native, Postman‑style API client — built with **Tauri 2 · React 18 · Rust**.
 
 A cross‑platform desktop app (macOS / Linux / Windows) for HTTP, WebSocket, Server‑Sent Events and GraphQL — in a small native binary instead of a half‑gigabyte Electron download. Collections live as plain JSON files (safe to commit/sync), secrets live in the OS keychain, and every request flows through a real Rust HTTP stack with a real cookie jar.
@@ -9,6 +11,7 @@ A cross‑platform desktop app (macOS / Linux / Windows) for HTTP, WebSocket, Se
 </p>
 
 <p align="center">
+  <a href="#about">About</a> ·
   <a href="#features">Features</a> ·
   <a href="#screenshots">Screenshots</a> ·
   <a href="#quick-start">Quick start</a> ·
@@ -19,6 +22,22 @@ A cross‑platform desktop app (macOS / Linux / Windows) for HTTP, WebSocket, Se
 </p>
 
 ---
+
+## About
+
+**API Client** is a desktop application for designing, executing, and organizing API requests during development. Think Postman or Insomnia, but smaller, native, and with the request engine written in Rust.
+
+| | |
+|---|---|
+| **Status** | Early development — `v0.1.0`, actively iterated on |
+| **Platforms** | macOS (Apple Silicon + Intel), Linux (x86_64), Windows (x86_64) |
+| **Built with** | [Tauri 2](https://v2.tauri.app/), React 18 + TypeScript, Rust (Tokio + reqwest), SQLite, Zustand, TailwindCSS, CodeMirror |
+| **Distribution** | Native installer per platform (no bundled Chromium / Node runtime) |
+| **Languages** | English · 简体中文 (in‑app + this README) |
+| **License** | Not yet specified |
+| **Source** | [github.com/zhuhedong/api-client](https://github.com/zhuhedong/api-client) |
+
+It is designed for engineers who want a Postman‑style workflow without the Postman‑sized footprint, and who want their collections to live as plain files they can read, grep, and commit.
 
 ## Why this project
 
