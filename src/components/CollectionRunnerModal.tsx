@@ -3,6 +3,7 @@ import { Play, X, Square, CheckCircle2, XCircle } from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
 import { executeRequestWithScripts } from "../utils/requestPipeline";
 import { buildScopedVars } from "../utils/variableScope";
+import { CodeEditor } from "./CodeEditor";
 import type {
   Collection,
   CollectionRequest,
@@ -226,14 +227,13 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
             <label className="text-[11px] text-text-secondary block mb-1">
               Data (JSON array, optional)
             </label>
-            <textarea
+            <CodeEditor
               value={dataJson}
-              onChange={(e) => setDataJson(e.target.value)}
-              disabled={running}
-              rows={2}
-              spellCheck={false}
+              onChange={setDataJson}
+              language="json"
+              height={80}
+              readOnly={running}
               placeholder={'[{"token":"abc"},{"token":"xyz"}]'}
-              className="w-full input-apple text-[11px] font-mono px-2 py-1.5 resize-none"
             />
           </div>
           <div className="flex items-center gap-2">

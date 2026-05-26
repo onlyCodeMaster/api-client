@@ -4,6 +4,7 @@ import { Play, Square, Plus, Trash2, Copy, RefreshCw } from "lucide-react";
 import type { KeyValue, MockRoute, MockServerStatus } from "../types";
 import { useRequestStore } from "../store/useRequestStore";
 import { KeyValueEditor } from "./KeyValueEditor";
+import { CodeEditor } from "./CodeEditor";
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 15);
@@ -438,11 +439,11 @@ function RouteEditor({ route, onChange, onDelete, onDuplicate }: RouteEditorProp
         <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
           Response body
         </span>
-        <textarea
+        <CodeEditor
           value={route.body}
-          onChange={(e) => onChange({ body: e.target.value })}
-          rows={10}
-          className="w-full rounded border border-neutral-300 px-2 py-1.5 font-mono text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
+          onChange={(v) => onChange({ body: v })}
+          language="json"
+          height={200}
           placeholder='{"hello": "world"}'
         />
       </div>
