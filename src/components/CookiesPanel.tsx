@@ -14,6 +14,12 @@ import { useRequestStore } from "../store/useRequestStore";
 import { ConfirmDialog } from "./ConfirmDialog";
 import type { CookieEntry } from "../types";
 
+/** Fixed-length dot mask for hidden cookie values. Picked to be wide enough
+ *  to look "filled" but not so wide it shifts layout. Crucially, this is a
+ *  constant — it must not be derived from the real value length, or the dot
+ *  count would leak the cookie length back to anyone over-the-shoulder. */
+const MASK_LENGTH = 12;
+
 /**
  * Cookies inspector. Mirrors the browser's cookie store UI: grouped by
  * domain, searchable, with per-cookie + per-domain + nuke-all delete
@@ -240,8 +246,20 @@ function CookieRow({
 }) {
   const { t, i18n } = useTranslation();
   // Per-row override of the panel-wide toggle so the user can peek at a
-  // single value without un-hiding everything else.
+  // single value without un-hiding everything else. The override only
+  // applies when the panel is hiding values — toggling it while the panel
+  // is showing everything would be invisible and would re-leak the value
+  // on the next "hide all".
   const [override, setOverride] = useState(false);
+  // Reset the override whenever the panel-level showValue flips. This stops
+  // a stale `override=true` from surviving a "show all → hide all" cycle.
+  // Uses the React-recommended "compare previous value during render"
+  // pattern (https://react.dev/learn/you-might-not-need-an-effect).
+  const [prevShowValue, setPrevShowValue] = useState(showValue);
+  if (showValue !== prevShowValue) {
+    setPrevShowValue(showValue);
+    setOverride(false);
+  }
   const visible = showValue || override;
 
   // Capture `Date.now()` once on mount instead of at every render. Re-running
@@ -275,12 +293,13 @@ function CookieRow({
           className={`font-mono break-all ${
             visible ? "text-text-secondary" : "text-text-tertiary tracking-wider"
           }`}
-          // When hidden, render a fixed dot run instead of the value so we
-          // don't leak length / shape. The `title` is suppressed in the
-          // same case to avoid leaking through the native tooltip.
+          // When hidden, render a fixed-length dot run (never derived from
+          // `cookie.value.length`) so we don't leak length / shape. The
+          // `title` is suppressed in the same case to avoid leaking through
+          // the native tooltip.
           title={visible ? cookie.value : undefined}
         >
-          {visible ? cookie.value : "•".repeat(Math.min(24, Math.max(8, cookie.value.length)))}
+          {visible ? cookie.value : "•".repeat(MASK_LENGTH)}
         </div>
         <div className="mt-0.5 flex items-center gap-1.5 flex-wrap text-[10px] text-text-tertiary">
           <span className="font-mono">{cookie.path}</span>
