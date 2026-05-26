@@ -50,7 +50,12 @@ export function MockServerPanel({ onClose }: { onClose: () => void }) {
     }
   }, [workspaceId, selectedId]);
 
+  // Data-fetching effect: `refresh` issues async invoke() calls and then
+  // calls setState with the result. This is the canonical effect-based fetch
+  // pattern; the cascading-render warning doesn't apply because the setState
+  // happens after the awaited fetch, not synchronously inside the effect body.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh();
   }, [refresh]);
 
@@ -335,9 +340,13 @@ function RouteEditor({ route, onChange, onDelete, onDuplicate }: RouteEditorProp
   const [headers, setHeaders] = useState<KeyValue[]>(hydrateHeaders(route.headers));
 
   // When the user picks a different route, re-hydrate from the new value.
-  useEffect(() => {
+  // Uses the React-recommended "compare previous value during render" pattern
+  // instead of useEffect to avoid a render-then-render cascade.
+  const [prevRouteId, setPrevRouteId] = useState(route.id);
+  if (route.id !== prevRouteId) {
+    setPrevRouteId(route.id);
     setHeaders(hydrateHeaders(route.headers));
-  }, [route.id]);
+  }
 
   const commitHeaders = (next: KeyValue[]) => {
     setHeaders(next);

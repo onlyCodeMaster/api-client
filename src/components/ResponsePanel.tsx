@@ -38,7 +38,7 @@ function highlightJson(json: string): React.ReactNode[] {
   const lines = json.split("\n");
   return lines.map((line, i) => {
     const parts: React.ReactNode[] = [];
-    let remaining = line;
+    const remaining = line;
     let key = 0;
 
     // Match JSON tokens
@@ -168,11 +168,11 @@ export function ResponsePanel() {
   const formattedBody = useMemo(() => {
     if (!response?.body || isBinary) return "";
     return isJson(response.body) ? tryFormatJson(response.body) : response.body;
-  }, [response?.body, isBinary]);
+  }, [response, isBinary]);
 
   const bodyIsJson = useMemo(
     () => (response && !isBinary ? isJson(response.body) : false),
-    [response?.body, isBinary]
+    [response, isBinary]
   );
 
   // Parsed JSON value for the tree view. Kept separate from `bodyIsJson`
@@ -185,7 +185,7 @@ export function ResponsePanel() {
     } catch {
       return undefined;
     }
-  }, [bodyIsJson, response?.body]);
+  }, [bodyIsJson, response]);
 
   // Result of applying the active JSONPath filter to the parsed JSON.
   // `error` is shown inline; `value` feeds both the tree view and (when
