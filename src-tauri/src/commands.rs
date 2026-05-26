@@ -204,6 +204,10 @@ pub fn delete_workspace(
 ) -> Result<crate::storage::DeletedWorkspaceArtifacts, String> {
     let artifacts = crate::storage::delete_workspace(&id)?;
     db.delete_workspace_history(&id)?;
+    // Drop mock routes tied to the workspace too — they reference the
+    // workspace by id, so leaving them orphaned would pollute the next
+    // workspace if its id ever collided (it won't, but cascade is cheap).
+    let _ = crate::mock_server::delete_workspace_routes(&id);
     Ok(artifacts)
 }
 
@@ -265,4 +269,58 @@ pub fn get_auth_secret(scope_id: String, auth_key: String) -> Result<Option<Stri
 #[tauri::command]
 pub fn delete_auth_secret(scope_id: String, auth_key: String) -> Result<(), String> {
     secrets::delete_auth_secret(&scope_id, &auth_key)
+}
+
+// === Mock Server Commands ===
+
+use crate::mock_server::{MockRoute, MockServerState, MockServerStatus};
+
+#[tauri::command]
+pub async fn mock_server_start(
+    state: State<'_, Arc<MockServerState>>,
+    workspace_id: String,
+    port: Option<u16>,
+) -> Result<u16, String> {
+    state.start(workspace_id, port.unwrap_or(0)).await
+}
+
+#[tauri::command]
+pub async fn mock_server_stop(state: State<'_, Arc<MockServerState>>) -> Result<(), String> {
+    state.stop().await
+}
+
+#[tauri::command]
+pub async fn mock_server_status(
+    state: State<'_, Arc<MockServerState>>,
+) -> Result<MockServerStatus, String> {
+    Ok(state.status().await)
+}
+
+#[tauri::command]
+pub fn list_mock_routes(workspace_id: String) -> Result<Vec<MockRoute>, String> {
+    crate::mock_server::load_routes(&workspace_id)
+}
+
+#[tauri::command]
+pub async fn save_mock_route(
+    state: State<'_, Arc<MockServerState>>,
+    workspace_id: String,
+    route: MockRoute,
+) -> Result<MockRoute, String> {
+    let saved = crate::mock_server::save_route(&workspace_id, route)?;
+    // Live-reload: if the currently running server is for this workspace,
+    // pick up the change without requiring a restart.
+    let _ = state.reload_routes().await;
+    Ok(saved)
+}
+
+#[tauri::command]
+pub async fn delete_mock_route(
+    state: State<'_, Arc<MockServerState>>,
+    workspace_id: String,
+    id: String,
+) -> Result<(), String> {
+    crate::mock_server::delete_route(&workspace_id, &id)?;
+    let _ = state.reload_routes().await;
+    Ok(())
 }

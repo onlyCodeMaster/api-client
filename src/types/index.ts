@@ -321,3 +321,25 @@ export interface SseEventRecord {
   /** Filled when `kind === "error"`. */
   error?: string;
 }
+
+// Mock Server
+export interface MockRoute {
+  id: string;
+  /** HTTP method to match — concrete method or "*" for any. */
+  method: string;
+  /** Path pattern. Supports `:param` placeholders matched per-segment. */
+  path: string;
+  status: number;
+  headers: KeyValue[];
+  body: string;
+  delay_ms?: number;
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface MockServerStatus {
+  running: boolean;
+  port?: number;
+  workspace_id?: string;
+}
