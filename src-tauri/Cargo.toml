@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "A Postman-like API Client"
 authors = ["you"]
 edition = "2021"
+license = "MIT"
 
 [lib]
 name = "api_client_lib"

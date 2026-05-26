@@ -1,6 +1,17 @@
 # API Client
 
-<p align="right"><b>English</b> · <a href="./README.zh-CN.md">简体中文</a></p>
+<p align="center">
+  <a href="./README.md"><img alt="README — English" src="https://img.shields.io/badge/README-English-2D74B5?style=for-the-badge&labelColor=1F1F1F" /></a>
+  <a href="./README.zh-CN.md"><img alt="README — 简体中文" src="https://img.shields.io/badge/README-简体中文-555555?style=for-the-badge&labelColor=1F1F1F" /></a>
+</p>
+
+<p align="center">
+  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-yellow.svg" /></a>
+  <img alt="Built with Tauri 2" src="https://img.shields.io/badge/built%20with-Tauri%202-24C8DB?logo=tauri&logoColor=white" />
+  <img alt="Frontend" src="https://img.shields.io/badge/frontend-React%2018%20%2B%20TypeScript-3178C6?logo=react&logoColor=white" />
+  <img alt="Backend" src="https://img.shields.io/badge/backend-Rust-DEA584?logo=rust&logoColor=white" />
+  <img alt="Platforms" src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-success" />
+</p>
 
 > A fast, native, Postman‑style API client — built with **Tauri 2 · React 18 · Rust**.
 
@@ -34,7 +45,7 @@ A cross‑platform desktop app (macOS / Linux / Windows) for HTTP, WebSocket, Se
 | **Built with** | [Tauri 2](https://v2.tauri.app/), React 18 + TypeScript, Rust (Tokio + reqwest), SQLite, Zustand, TailwindCSS, CodeMirror |
 | **Distribution** | Native installer per platform (no bundled Chromium / Node runtime) |
 | **Languages** | English · 简体中文 (in‑app + this README) |
-| **License** | Not yet specified |
+| **License** | [MIT](./LICENSE) |
 | **Source** | [github.com/zhuhedong/api-client](https://github.com/zhuhedong/api-client) |
 
 It is designed for engineers who want a Postman‑style workflow without the Postman‑sized footprint, and who want their collections to live as plain files they can read, grep, and commit.
@@ -355,4 +366,6 @@ PRs welcome. A few small ground rules:
 
 ## License
 
-Not yet specified.
+Released under the [MIT License](./LICENSE) — see the `LICENSE` file for the full text.
+
+Copyright (c) 2025 zhuhedong.

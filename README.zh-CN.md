@@ -1,6 +1,17 @@
 # API Client
 
-<p align="right"><a href="./README.md">English</a> · <b>简体中文</b></p>
+<p align="center">
+  <a href="./README.md"><img alt="README — English" src="https://img.shields.io/badge/README-English-555555?style=for-the-badge&labelColor=1F1F1F" /></a>
+  <a href="./README.zh-CN.md"><img alt="README — 简体中文" src="https://img.shields.io/badge/README-简体中文-D7263D?style=for-the-badge&labelColor=1F1F1F" /></a>
+</p>
+
+<p align="center">
+  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-yellow.svg" /></a>
+  <img alt="Built with Tauri 2" src="https://img.shields.io/badge/built%20with-Tauri%202-24C8DB?logo=tauri&logoColor=white" />
+  <img alt="Frontend" src="https://img.shields.io/badge/frontend-React%2018%20%2B%20TypeScript-3178C6?logo=react&logoColor=white" />
+  <img alt="Backend" src="https://img.shields.io/badge/backend-Rust-DEA584?logo=rust&logoColor=white" />
+  <img alt="Platforms" src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-success" />
+</p>
 
 > 一款快速、原生、Postman 风格的 API 客户端 —— 使用 **Tauri 2 · React 18 · Rust** 构建。
 
@@ -34,7 +45,7 @@
 | **技术栈** | [Tauri 2](https://v2.tauri.app/)、React 18 + TypeScript、Rust（Tokio + reqwest）、SQLite、Zustand、TailwindCSS、CodeMirror |
 | **分发方式** | 每个平台对应一个原生安装包（不打包 Chromium / Node 运行时） |
 | **多语言** | English · 简体中文（应用内 + 本 README） |
-| **协议** | 尚未指定 |
+| **协议** | [MIT](./LICENSE) |
 | **源码** | [github.com/zhuhedong/api-client](https://github.com/zhuhedong/api-client) |
 
 它面向希望保留 Postman 工作流、但不愿承受 Postman 体积的工程师，也面向希望把 collection 直接作为可读、可 grep、可提交的纯文件管理的人。
@@ -355,4 +366,6 @@ npm run test:e2e                   # Playwright 端到端（可选）
 
 ## 协议
 
-尚未指定。
+本项目以 [MIT License](./LICENSE) 发布 —— 完整条文见仓库根目录的 `LICENSE` 文件。
+
+Copyright (c) 2025 zhuhedong.
