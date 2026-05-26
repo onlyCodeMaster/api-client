@@ -490,6 +490,9 @@ export const useRequestStore = create<RequestState>((set, get) => {
           sseEvents: {},
           ...syncDerived({ ...s, tabs: [fresh], activeTabId: fresh.id, responses: {}, errors: {}, loadings: {} }),
         }));
+        // Persist the fresh-tab state too — otherwise the workspace file
+        // keeps the closed tab snapshot and the next launch restores it.
+        get().persistTabsState();
         return;
       }
       const idx = tabs.findIndex((t) => t.id === id);
@@ -596,27 +599,33 @@ export const useRequestStore = create<RequestState>((set, get) => {
       get().persistTabsState();
     },
 
-    setMethod: (method) => set((s) => ({ ...updateActiveTab(s, { method }), ...syncDerived({ ...s, ...updateActiveTab(s, { method }) } as RequestState) })),
-    setUrl: (url) => set((s) => ({ ...updateActiveTab(s, { url }), ...syncDerived({ ...s, ...updateActiveTab(s, { url }) } as RequestState) })),
-    setHeaders: (headers) => set((s) => ({ ...updateActiveTab(s, { headers }), ...syncDerived({ ...s, ...updateActiveTab(s, { headers }) } as RequestState) })),
-    setParams: (params) => set((s) => ({ ...updateActiveTab(s, { params }), ...syncDerived({ ...s, ...updateActiveTab(s, { params }) } as RequestState) })),
-    setBody: (body) => set((s) => ({ ...updateActiveTab(s, { body }), ...syncDerived({ ...s, ...updateActiveTab(s, { body }) } as RequestState) })),
-    setBodyType: (bodyType) => set((s) => ({ ...updateActiveTab(s, { bodyType }), ...syncDerived({ ...s, ...updateActiveTab(s, { bodyType }) } as RequestState) })),
-    setFormData: (formData) => set((s) => ({ ...updateActiveTab(s, { formData }), ...syncDerived({ ...s, ...updateActiveTab(s, { formData }) } as RequestState) })),
-    setAuth: (auth) => set((s) => ({ ...updateActiveTab(s, { auth }), ...syncDerived({ ...s, ...updateActiveTab(s, { auth }) } as RequestState) })),
-    setName: (name) => set((s) => ({ ...updateActiveTab(s, { name }), ...syncDerived({ ...s, ...updateActiveTab(s, { name }) } as RequestState) })),
-    setTimeoutMs: (timeoutMs) => set((s) => ({ ...updateActiveTab(s, { timeoutMs }), ...syncDerived({ ...s, ...updateActiveTab(s, { timeoutMs }) } as RequestState) })),
-    setVerifyTls: (verifyTls) => set((s) => ({ ...updateActiveTab(s, { verifyTls }), ...syncDerived({ ...s, ...updateActiveTab(s, { verifyTls }) } as RequestState) })),
-    setRedirectPolicy: (redirectPolicy) => set((s) => ({ ...updateActiveTab(s, { redirectPolicy }), ...syncDerived({ ...s, ...updateActiveTab(s, { redirectPolicy }) } as RequestState) })),
-    setMaxRedirects: (maxRedirects) => set((s) => ({ ...updateActiveTab(s, { maxRedirects }), ...syncDerived({ ...s, ...updateActiveTab(s, { maxRedirects }) } as RequestState) })),
-    setProxyUrl: (proxyUrl) => set((s) => ({ ...updateActiveTab(s, { proxyUrl }), ...syncDerived({ ...s, ...updateActiveTab(s, { proxyUrl }) } as RequestState) })),
-    setClientCert: (clientCert) => set((s) => ({ ...updateActiveTab(s, { clientCert }), ...syncDerived({ ...s, ...updateActiveTab(s, { clientCert }) } as RequestState) })),
-    setProtocol: (protocol) => set((s) => ({ ...updateActiveTab(s, { protocol }), ...syncDerived({ ...s, ...updateActiveTab(s, { protocol }) } as RequestState) })),
-    setGraphqlQuery: (graphqlQuery) => set((s) => ({ ...updateActiveTab(s, { graphqlQuery }), ...syncDerived({ ...s, ...updateActiveTab(s, { graphqlQuery }) } as RequestState) })),
-    setGraphqlVariables: (graphqlVariables) => set((s) => ({ ...updateActiveTab(s, { graphqlVariables }), ...syncDerived({ ...s, ...updateActiveTab(s, { graphqlVariables }) } as RequestState) })),
-    setPreScript: (preScript) => set((s) => ({ ...updateActiveTab(s, { preScript }), ...syncDerived({ ...s, ...updateActiveTab(s, { preScript }) } as RequestState) })),
-    setTestScript: (testScript) => set((s) => ({ ...updateActiveTab(s, { testScript }), ...syncDerived({ ...s, ...updateActiveTab(s, { testScript }) } as RequestState) })),
-    setTags: (tags) => set((s) => ({ ...updateActiveTab(s, { tags }), ...syncDerived({ ...s, ...updateActiveTab(s, { tags }) } as RequestState) })),
+    // All individual setters delegate to updateActiveRequest so the
+    // workspace persistence layer fires for every keystroke-driven change
+    // (debounced inside persistTabsState). Without this, edits typed into
+    // RequestPanel — URL, headers, body, scripts, … — would only be
+    // written to disk when the user happens to perform a structural tab
+    // action (open/close/switch), and a crash mid-edit would lose work.
+    setMethod: (method) => get().updateActiveRequest({ method }),
+    setUrl: (url) => get().updateActiveRequest({ url }),
+    setHeaders: (headers) => get().updateActiveRequest({ headers }),
+    setParams: (params) => get().updateActiveRequest({ params }),
+    setBody: (body) => get().updateActiveRequest({ body }),
+    setBodyType: (bodyType) => get().updateActiveRequest({ bodyType }),
+    setFormData: (formData) => get().updateActiveRequest({ formData }),
+    setAuth: (auth) => get().updateActiveRequest({ auth }),
+    setName: (name) => get().updateActiveRequest({ name }),
+    setTimeoutMs: (timeoutMs) => get().updateActiveRequest({ timeoutMs }),
+    setVerifyTls: (verifyTls) => get().updateActiveRequest({ verifyTls }),
+    setRedirectPolicy: (redirectPolicy) => get().updateActiveRequest({ redirectPolicy }),
+    setMaxRedirects: (maxRedirects) => get().updateActiveRequest({ maxRedirects }),
+    setProxyUrl: (proxyUrl) => get().updateActiveRequest({ proxyUrl }),
+    setClientCert: (clientCert) => get().updateActiveRequest({ clientCert }),
+    setProtocol: (protocol) => get().updateActiveRequest({ protocol }),
+    setGraphqlQuery: (graphqlQuery) => get().updateActiveRequest({ graphqlQuery }),
+    setGraphqlVariables: (graphqlVariables) => get().updateActiveRequest({ graphqlVariables }),
+    setPreScript: (preScript) => get().updateActiveRequest({ preScript }),
+    setTestScript: (testScript) => get().updateActiveRequest({ testScript }),
+    setTags: (tags) => get().updateActiveRequest({ tags }),
 
     sendRequest: async () => {
       const state = get();
