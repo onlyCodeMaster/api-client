@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { X, Settings as SettingsIcon, ShieldCheck, ShieldAlert } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useRequestStore } from "../store/useRequestStore";
@@ -24,9 +25,11 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     setTimeout(() => setSaved(false), 1500);
   };
 
-  return (
+  // Portal to <body> so we escape the sidebar's `backdrop-blur-xl`
+  // containing block (without it, the modal is clipped to the sidebar).
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
-      <div className="bg-surface rounded-apple-lg shadow-apple-lg w-[480px] flex flex-col overflow-hidden">
+      <div className="bg-surface rounded-apple-lg shadow-apple-lg w-[520px] max-w-[92vw] max-h-[85vh] flex flex-col overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-border-light">
           <div className="flex items-center gap-2">
             <SettingsIcon size={18} className="text-accent" />
@@ -120,6 +123,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
