@@ -15,6 +15,10 @@ import { signSigV4 } from "./sigv4";
 export interface PipelineDefaults {
   defaultTimeoutMs: number;
   verifyTlsDefault: boolean;
+  /** Per-request inline response body cap (bytes). The backend truncates
+   *  larger bodies and flags `body_truncated=true`. Optional so older
+   *  callers compile; the backend falls back to its 10 MiB default. */
+  maxBodyBytes?: number;
 }
 
 /** Everything needed to execute one request end-to-end. */
@@ -200,6 +204,11 @@ export async function buildSendPayload(
       req.clientCert && req.clientCert.path
         ? { path: req.clientCert.path, password: req.clientCert.password ?? null }
         : null,
+    // Per-request override wins; otherwise fall back to the global setting.
+    // Omitted entirely when neither is set so the Rust default applies.
+    ...(req.maxBodyBytes ?? defaults.maxBodyBytes
+      ? { max_body_bytes: req.maxBodyBytes ?? defaults.maxBodyBytes }
+      : {}),
   };
 
   return { finalUrl, headers, bodyStr, payload };

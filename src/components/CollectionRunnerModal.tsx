@@ -75,7 +75,7 @@ interface Props {
 
 export function CollectionRunnerModal({ collectionId, onClose }: Props) {
   const { t } = useTranslation();
-  const { collections, environments, workspace, defaultTimeoutMs, verifyTlsDefault } =
+  const { collections, environments, workspace, defaultTimeoutMs, verifyTlsDefault, maxBodyBytes } =
     useRequestStore();
 
   const col = collections.find((c) => c.id === collectionId);
@@ -152,7 +152,7 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
           collections,
           envVars,
           transientVars,
-          defaults: { defaultTimeoutMs, verifyTlsDefault },
+          defaults: { defaultTimeoutMs, verifyTlsDefault, maxBodyBytes },
         });
 
         const entry: RunResult = {

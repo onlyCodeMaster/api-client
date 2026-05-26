@@ -5,14 +5,28 @@ import { useTranslation } from "react-i18next";
 import { useRequestStore } from "../store/useRequestStore";
 import { setLocale, SUPPORTED_LOCALES, type Locale } from "../i18n";
 
+/** Bytes-per-MiB shortcut. The UI shows MiB to keep numbers readable
+ *  (10 MiB ≫ 10485760) and converts to/from bytes when persisting. */
+const MIB = 1024 * 1024;
+
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const { t, i18n } = useTranslation();
   const defaultTimeoutMs = useRequestStore((s) => s.defaultTimeoutMs);
   const setDefaultTimeoutMs = useRequestStore((s) => s.setDefaultTimeoutMs);
   const verifyTlsDefault = useRequestStore((s) => s.verifyTlsDefault);
   const setVerifyTlsDefault = useRequestStore((s) => s.setVerifyTlsDefault);
+  const maxBodyBytes = useRequestStore((s) => s.maxBodyBytes);
+  const setMaxBodyBytes = useRequestStore((s) => s.setMaxBodyBytes);
+  const maxHistoryBodyBytes = useRequestStore((s) => s.maxHistoryBodyBytes);
+  const setMaxHistoryBodyBytes = useRequestStore((s) => s.setMaxHistoryBodyBytes);
   const [value, setValue] = useState(String(defaultTimeoutMs));
+  const [maxBodyMiB, setMaxBodyMiB] = useState(String(Math.max(1, Math.round(maxBodyBytes / MIB))));
+  const [maxHistoryBodyKiB, setMaxHistoryBodyKiB] = useState(
+    String(Math.max(1, Math.round(maxHistoryBodyBytes / 1024)))
+  );
   const [saved, setSaved] = useState(false);
+  const [savedMaxBody, setSavedMaxBody] = useState(false);
+  const [savedHistBody, setSavedHistBody] = useState(false);
   // Drive the dropdown straight off i18next so it stays in sync when the
   // user changes language elsewhere in the future.
   const currentLocale = (i18n.language?.split("-")[0] ?? "en") as Locale;
@@ -23,6 +37,22 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     await setDefaultTimeoutMs(n);
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
+  };
+
+  const saveMaxBody = async () => {
+    const n = parseInt(maxBodyMiB, 10);
+    if (!Number.isFinite(n) || n <= 0 || n > 1024) return;
+    await setMaxBodyBytes(n * MIB);
+    setSavedMaxBody(true);
+    setTimeout(() => setSavedMaxBody(false), 1500);
+  };
+
+  const saveHistBody = async () => {
+    const n = parseInt(maxHistoryBodyKiB, 10);
+    if (!Number.isFinite(n) || n < 0 || n > 10240) return;
+    await setMaxHistoryBodyBytes(n * 1024);
+    setSavedHistBody(true);
+    setTimeout(() => setSavedHistBody(false), 1500);
   };
 
   // Portal to <body> so we escape the sidebar's `backdrop-blur-xl`
@@ -43,7 +73,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <div className="p-5 space-y-4">
+        <div className="p-5 space-y-4 overflow-y-auto">
           <div>
             <label className="text-[12px] font-medium text-text-secondary block mb-1.5">
               {t("settings.language")}
@@ -82,6 +112,58 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                 {saved ? t("common.saved") : t("common.save")}
               </button>
             </div>
+          </div>
+
+          <div>
+            <label className="text-[12px] font-medium text-text-secondary block mb-1.5">
+              {t("settings.max_body_bytes")}
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                value={maxBodyMiB}
+                onChange={(e) => setMaxBodyMiB(e.target.value)}
+                min={1}
+                max={1024}
+                className="input-apple flex-1 text-[12px]"
+              />
+              <span className="text-[11px] text-text-tertiary shrink-0 w-8">MiB</span>
+              <button
+                onClick={saveMaxBody}
+                className="px-3 py-1.5 bg-accent text-white text-[12px] rounded-apple hover:bg-accent-hover active:scale-[0.97] transition-all"
+              >
+                {savedMaxBody ? t("common.saved") : t("common.save")}
+              </button>
+            </div>
+            <p className="text-[11px] text-text-tertiary mt-1.5">
+              {t("settings.max_body_bytes_hint")}
+            </p>
+          </div>
+
+          <div>
+            <label className="text-[12px] font-medium text-text-secondary block mb-1.5">
+              {t("settings.max_history_body_bytes")}
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                value={maxHistoryBodyKiB}
+                onChange={(e) => setMaxHistoryBodyKiB(e.target.value)}
+                min={0}
+                max={10240}
+                className="input-apple flex-1 text-[12px]"
+              />
+              <span className="text-[11px] text-text-tertiary shrink-0 w-8">KiB</span>
+              <button
+                onClick={saveHistBody}
+                className="px-3 py-1.5 bg-accent text-white text-[12px] rounded-apple hover:bg-accent-hover active:scale-[0.97] transition-all"
+              >
+                {savedHistBody ? t("common.saved") : t("common.save")}
+              </button>
+            </div>
+            <p className="text-[11px] text-text-tertiary mt-1.5">
+              {t("settings.max_history_body_bytes_hint")}
+            </p>
           </div>
 
           <div>
