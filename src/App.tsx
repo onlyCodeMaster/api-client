@@ -7,6 +7,7 @@ import { TabBar } from "./components/TabBar";
 import { WsPanel } from "./components/WsPanel";
 import { SsePanel } from "./components/SsePanel";
 import { SearchPalette } from "./components/SearchPalette";
+import { SaveToCollectionModal } from "./components/SaveToCollectionModal";
 import { Splitter } from "./components/Splitter";
 import { useRequestStore } from "./store/useRequestStore";
 
@@ -36,6 +37,7 @@ function App() {
   const workspace = useRequestStore((s) => s.workspace);
   const setWindowState = useRequestStore((s) => s.setWindowState);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [savePickerOpen, setSavePickerOpen] = useState(false);
 
   // Local mirror of the persisted layout numbers so dragging is smooth.
   // Persistence happens on drag end via setWindowState.
@@ -157,6 +159,21 @@ function App() {
       return;
     }
 
+    // Cmd+S: save the active tab to its collection. If the tab already
+    // came from a collection we update it in place; otherwise we open the
+    // SaveToCollectionModal so the user can pick a destination.
+    if (isMeta && e.key === "s") {
+      e.preventDefault();
+      const { activeRequest: req, saveActiveRequest } = useRequestStore.getState();
+      if (!req) return;
+      if (req.collectionId) {
+        void saveActiveRequest();
+      } else {
+        setSavePickerOpen(true);
+      }
+      return;
+    }
+
     // Cmd+F: open the search palette (parity with Cmd+P / Cmd+K).
     if (isMeta && e.key === "f") {
       e.preventDefault();
@@ -231,6 +248,9 @@ function App() {
         </div>
       </div>
       {paletteOpen && <SearchPalette onClose={() => setPaletteOpen(false)} />}
+      {savePickerOpen && (
+        <SaveToCollectionModal onClose={() => setSavePickerOpen(false)} />
+      )}
     </div>
   );
 }
