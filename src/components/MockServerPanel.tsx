@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { Play, Square, Plus, Trash2, Copy, RefreshCw } from "lucide-react";
 import type { KeyValue, MockRoute, MockServerStatus } from "../types";
@@ -161,9 +162,11 @@ export function MockServerPanel({ onClose }: { onClose: () => void }) {
     navigator.clipboard?.writeText(url).catch(() => {});
   };
 
-  return (
+  // Portal to <body> so we escape the sidebar's `backdrop-blur-xl`
+  // containing block (without it, the modal is clipped to the sidebar).
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="flex h-[85vh] w-[1100px] max-w-[95vw] flex-col overflow-hidden rounded-apple-lg bg-white shadow-xl dark:bg-neutral-900">
+      <div className="flex h-[85vh] w-[1100px] max-w-[92vw] flex-col overflow-hidden rounded-apple-lg bg-white shadow-xl dark:bg-neutral-900">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-neutral-200 px-5 py-3 dark:border-neutral-800">
           <div>
@@ -306,7 +309,8 @@ export function MockServerPanel({ onClose }: { onClose: () => void }) {
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

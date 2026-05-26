@@ -1,116 +1,360 @@
 import { useEffect, useMemo, useState } from "react";
-import { X, Trash2, Cookie, Search } from "lucide-react";
+import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
+import {
+  X,
+  Trash2,
+  Cookie,
+  Search,
+  Eye,
+  EyeOff,
+  ShieldAlert,
+} from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
+import { ConfirmDialog } from "./ConfirmDialog";
+import type { CookieEntry } from "../types";
 
+/**
+ * Cookies inspector. Mirrors the browser's cookie store UI: grouped by
+ * domain, searchable, with per-cookie + per-domain + nuke-all delete
+ * actions and a confirmation dialog before any destructive operation.
+ *
+ * Why the portal: same containing-block bug as `EnvironmentPanel` \u2014 the
+ * sidebar's `backdrop-blur-xl` makes itself the containing block for
+ * descendant `position: fixed` elements, so without the portal this
+ * modal gets clipped to ~256px sidebar width.
+ */
 export function CookiesPanel({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation();
   const cookies = useRequestStore((s) => s.cookies);
   const refreshCookies = useRequestStore((s) => s.refreshCookies);
   const deleteCookie = useRequestStore((s) => s.deleteCookie);
   const clearCookiesByDomain = useRequestStore((s) => s.clearCookiesByDomain);
+
   const [query, setQuery] = useState("");
+  const [showValues, setShowValues] = useState(false);
+  // `null` => no confirmation pending. `"all"` => clear-all queued.
+  // Otherwise the queued domain string.
+  const [pendingClear, setPendingClear] = useState<string | "all" | null>(null);
 
   useEffect(() => {
     refreshCookies();
   }, [refreshCookies]);
 
   const grouped = useMemo(() => {
+    const q = query.trim().toLowerCase();
     const filtered = cookies.filter((c) => {
-      if (!query) return true;
-      const q = query.toLowerCase();
+      if (!q) return true;
       return (
         c.domain.toLowerCase().includes(q) ||
         c.name.toLowerCase().includes(q) ||
         c.value.toLowerCase().includes(q)
       );
     });
-    const byDomain: Record<string, typeof cookies> = {};
+    const byDomain: Record<string, CookieEntry[]> = {};
     for (const c of filtered) {
       (byDomain[c.domain] ??= []).push(c);
     }
-    return Object.entries(byDomain).sort(([a], [b]) => a.localeCompare(b));
+    // Stable sort: domains alphabetically, cookies within each by name.
+    return Object.entries(byDomain)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([domain, list]) => [
+        domain,
+        [...list].sort((a, b) => a.name.localeCompare(b.name)),
+      ] as const);
   }, [cookies, query]);
 
-  return (
+  const visibleCount = useMemo(
+    () => grouped.reduce((sum, [, list]) => sum + list.length, 0),
+    [grouped],
+  );
+
+  const handleConfirmClear = async () => {
+    if (!pendingClear) return;
+    if (pendingClear === "all") {
+      // No backend "clear all" command \u2014 loop the unique domains. We snap
+      // the list before iterating because each call refreshes the store.
+      const domains = Array.from(new Set(cookies.map((c) => c.domain)));
+      for (const d of domains) {
+        await clearCookiesByDomain(d);
+      }
+    } else {
+      await clearCookiesByDomain(pendingClear);
+    }
+    setPendingClear(null);
+  };
+
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
-      <div className="bg-surface rounded-apple-lg shadow-apple-lg w-[720px] max-h-[80vh] flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border-light">
-          <div className="flex items-center gap-2">
-            <Cookie size={18} className="text-accent" />
-            <h2 className="text-[15px] font-semibold text-text-primary">Cookies</h2>
-            <span className="text-[11px] text-text-tertiary">
-              {cookies.length} total
+      <div className="bg-surface rounded-apple-lg shadow-apple-lg w-[960px] max-w-[92vw] h-[80vh] max-h-[80vh] flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border-light shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <Cookie size={18} className="text-accent shrink-0" />
+            <h2 className="text-[15px] font-semibold text-text-primary">
+              {t("cookies.title")}
+            </h2>
+            <span className="text-[11px] text-text-tertiary tabular-nums">
+              {t("cookies.total_count", {
+                count: cookies.length,
+              })}
             </span>
+            {query && cookies.length > 0 && (
+              <span className="text-[11px] text-text-tertiary tabular-nums">
+                · {t("cookies.matching_count", { count: visibleCount })}
+              </span>
+            )}
           </div>
-          <button
-            onClick={onClose}
-            className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-surface-secondary transition-colors"
-          >
-            <X size={16} className="text-text-tertiary" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowValues((v) => !v)}
+              className="px-2 py-1 text-[11px] text-text-secondary rounded-md hover:bg-surface-secondary transition-colors flex items-center gap-1"
+              title={
+                showValues
+                  ? t("cookies.hide_values_tooltip")
+                  : t("cookies.show_values_tooltip")
+              }
+            >
+              {showValues ? <Eye size={11} /> : <EyeOff size={11} />}
+              {showValues ? t("cookies.values_shown") : t("cookies.values_hidden")}
+            </button>
+            <button
+              onClick={() => setPendingClear("all")}
+              disabled={cookies.length === 0}
+              className="px-2 py-1 text-[11px] text-error rounded-md hover:bg-error/10 transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
+            >
+              {t("cookies.clear_all")}
+            </button>
+            <button
+              onClick={onClose}
+              className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-surface-secondary transition-colors"
+              title={t("common.close")}
+            >
+              <X size={16} className="text-text-tertiary" />
+            </button>
+          </div>
         </div>
 
-        <div className="px-5 py-3 border-b border-border-light">
+        <div className="px-5 py-3 border-b border-border-light shrink-0">
           <div className="relative">
-            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-tertiary" />
+            <Search
+              size={13}
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-tertiary pointer-events-none"
+            />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search cookies by domain, name, value..."
-              className="input-apple w-full text-[12px] py-[5px] pl-8"
+              placeholder={t("cookies.search_placeholder")}
+              className="input-apple w-full text-[12px] py-[5px] pl-8 pr-8"
             />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-surface-secondary"
+                title={t("common.clear")}
+              >
+                <X size={11} className="text-text-tertiary" />
+              </button>
+            )}
           </div>
         </div>
 
         <div className="flex-1 overflow-auto px-5 py-3 space-y-3">
           {grouped.length === 0 && (
             <div className="text-center py-12 text-[12px] text-text-tertiary">
-              {cookies.length === 0 ? "No cookies stored" : "No matches"}
+              {cookies.length === 0
+                ? t("cookies.empty")
+                : t("cookies.no_matches")}
             </div>
           )}
           {grouped.map(([domain, list]) => (
             <div key={domain} className="bg-surface-secondary rounded-apple p-3">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[12px] font-semibold text-text-primary truncate">
-                  {domain}
-                </span>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span
+                    className="text-[12px] font-semibold text-text-primary truncate"
+                    title={domain}
+                  >
+                    {domain}
+                  </span>
+                  <span className="text-[11px] text-text-tertiary tabular-nums shrink-0">
+                    {t("cookies.cookie_count", { count: list.length })}
+                  </span>
+                </div>
                 <button
-                  onClick={() => clearCookiesByDomain(domain)}
-                  className="text-[11px] text-error hover:text-error/80 transition-colors"
+                  onClick={() => setPendingClear(domain)}
+                  className="text-[11px] text-error hover:text-error/80 transition-colors shrink-0"
                 >
-                  Clear domain
+                  {t("cookies.clear_domain")}
                 </button>
               </div>
               <div className="space-y-1">
                 {list.map((c) => (
-                  <div
+                  <CookieRow
                     key={c.id}
-                    className="group grid grid-cols-[1fr_2fr_auto] items-center gap-2 px-2 py-1.5 bg-surface rounded text-[11px]"
-                  >
-                    <span className="font-mono text-text-primary truncate">{c.name}</span>
-                    <span className="font-mono text-text-secondary truncate">{c.value}</span>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-text-tertiary">{c.path}</span>
-                      {c.secure && (
-                        <span className="text-success text-[10px]">secure</span>
-                      )}
-                      {c.http_only && (
-                        <span className="text-orange text-[10px]">http-only</span>
-                      )}
-                      <button
-                        onClick={() => deleteCookie(c.id)}
-                        className="opacity-0 group-hover:opacity-100 p-1 hover:bg-error/10 rounded transition-all"
-                      >
-                        <Trash2 size={11} className="text-error/70" />
-                      </button>
-                    </div>
-                  </div>
+                    cookie={c}
+                    showValue={showValues}
+                    onDelete={() => deleteCookie(c.id)}
+                  />
                 ))}
               </div>
             </div>
           ))}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={pendingClear !== null}
+        title={
+          pendingClear === "all"
+            ? t("cookies.confirm_clear_all_title")
+            : t("cookies.confirm_clear_domain_title")
+        }
+        message={
+          pendingClear === "all"
+            ? t("cookies.confirm_clear_all_message", { count: cookies.length })
+            : t("cookies.confirm_clear_domain_message", {
+                domain: pendingClear ?? "",
+              })
+        }
+        confirmLabel={t("cookies.clear_action")}
+        onConfirm={handleConfirmClear}
+        onCancel={() => setPendingClear(null)}
+      />
+    </div>,
+    document.body,
+  );
+}
+
+/** Single cookie row. Pulled out so the parent component reads as a list
+ *  composition and to keep the per-row toggles / formatting in one place. */
+function CookieRow({
+  cookie,
+  showValue,
+  onDelete,
+}: {
+  cookie: CookieEntry;
+  showValue: boolean;
+  onDelete: () => void;
+}) {
+  const { t, i18n } = useTranslation();
+  // Per-row override of the panel-wide toggle so the user can peek at a
+  // single value without un-hiding everything else.
+  const [override, setOverride] = useState(false);
+  const visible = showValue || override;
+
+  // Capture `Date.now()` once on mount instead of at every render. Re-running
+  // it on each render would (a) trip the react-hooks/purity rule and (b)
+  // produce spurious re-renders when nothing about the cookie changed.
+  // Cookie-expiry windows are minutes-to-years; a single snapshot is fine.
+  const [nowMs] = useState(() => Date.now());
+  const expiryLabel = useMemo(
+    () => formatExpiry(cookie.expires, nowMs, t, i18n.language),
+    [cookie.expires, nowMs, t, i18n.language],
+  );
+  const expired =
+    cookie.expires !== undefined &&
+    cookie.expires > 0 &&
+    cookie.expires * 1000 < nowMs;
+
+  return (
+    <div
+      className={`group grid grid-cols-[180px_minmax(0,1fr)_auto] items-start gap-2 px-2 py-1.5 bg-surface rounded text-[11px] ${
+        expired ? "opacity-60" : ""
+      }`}
+    >
+      <span
+        className="font-mono text-text-primary truncate"
+        title={cookie.name}
+      >
+        {cookie.name}
+      </span>
+      <div className="min-w-0">
+        <div
+          className={`font-mono break-all ${
+            visible ? "text-text-secondary" : "text-text-tertiary tracking-wider"
+          }`}
+          // When hidden, render a fixed dot run instead of the value so we
+          // don't leak length / shape. The `title` is suppressed in the
+          // same case to avoid leaking through the native tooltip.
+          title={visible ? cookie.value : undefined}
+        >
+          {visible ? cookie.value : "•".repeat(Math.min(24, Math.max(8, cookie.value.length)))}
+        </div>
+        <div className="mt-0.5 flex items-center gap-1.5 flex-wrap text-[10px] text-text-tertiary">
+          <span className="font-mono">{cookie.path}</span>
+          <span>·</span>
+          <span>{expiryLabel}</span>
+          {cookie.secure && (
+            <span className="text-success">· {t("cookies.flag_secure")}</span>
+          )}
+          {cookie.http_only && (
+            <span className="text-orange">· {t("cookies.flag_http_only")}</span>
+          )}
+          {expired && (
+            <span className="text-error flex items-center gap-0.5">
+              · <ShieldAlert size={10} /> {t("cookies.flag_expired")}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="flex items-center gap-0.5 shrink-0">
+        <button
+          onClick={() => setOverride((v) => !v)}
+          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-surface-secondary rounded transition-all"
+          title={
+            visible
+              ? t("cookies.hide_value_tooltip")
+              : t("cookies.show_value_tooltip")
+          }
+        >
+          {visible ? (
+            <Eye size={11} className="text-text-tertiary" />
+          ) : (
+            <EyeOff size={11} className="text-text-tertiary" />
+          )}
+        </button>
+        <button
+          onClick={onDelete}
+          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-error/10 rounded transition-all"
+          title={t("cookies.delete_cookie_tooltip")}
+        >
+          <Trash2 size={11} className="text-error/70" />
+        </button>
+      </div>
     </div>
   );
+}
+
+/**
+ * Human-readable cookie expiry. Three buckets:
+ *   - Session cookie (no `expires`)
+ *   - Expired (timestamp in the past)
+ *   - Future (formatted as locale-aware date + time)
+ *
+ * Cookie expiry from SQLite is stored as unix *seconds* (matches the spec
+ * and `reqwest`'s parsing), so we multiply by 1000 to compare against the
+ * `nowMs` snapshot captured by the caller.
+ */
+function formatExpiry(
+  expires: number | undefined,
+  nowMs: number,
+  t: ReturnType<typeof useTranslation>["t"],
+  locale: string,
+): string {
+  if (expires === undefined || expires <= 0) return t("cookies.session");
+  const date = new Date(expires * 1000);
+  // Detect malformed timestamps so we don't render "Invalid Date".
+  if (Number.isNaN(date.getTime())) return t("cookies.expiry_unknown");
+  if (date.getTime() < nowMs) {
+    return t("cookies.expired_at", { date: date.toLocaleDateString(locale) });
+  }
+  return t("cookies.expires_on", {
+    date: date.toLocaleDateString(locale),
+    time: date.toLocaleTimeString(locale, {
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
+  });
 }

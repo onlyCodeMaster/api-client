@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import { Play, X, Square, CheckCircle2, XCircle } from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
 import { executeRequestWithScripts } from "../utils/requestPipeline";
@@ -179,9 +180,11 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
   const failedTests = totalTests - passedTests;
   const erroredRequests = results.filter((r) => r.error).length;
 
-  return (
+  // Portal to <body> so we escape the sidebar's `backdrop-blur-xl`
+  // containing block (without it, the modal is clipped to the sidebar).
+  return createPortal(
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-bg-primary border border-border rounded-apple shadow-xl w-[640px] max-h-[80vh] flex flex-col">
+      <div className="bg-bg-primary border border-border rounded-apple shadow-xl w-[820px] max-w-[92vw] h-[80vh] max-h-[85vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <h2 className="text-[13px] font-semibold text-text-primary">
@@ -322,6 +325,7 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
