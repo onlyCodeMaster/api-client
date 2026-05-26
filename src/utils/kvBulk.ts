@@ -25,9 +25,14 @@ export function serializeKeyValues(items: KeyValue[]): string {
  *   - Empty / whitespace-only lines are skipped (treated as visual spacing).
  *   - Lines beginning with `#` are stored disabled; the `#` and any
  *     following whitespace are stripped from the key.
- *   - The first `:` or `=` is the key/value separator. Anything after is
- *     taken verbatim (so `Authorization: Bearer abc:def` survives the round
- *     trip).
+ *   - `:` is preferred as the key/value separator since that's what
+ *     `serializeKeyValues` writes; `=` is only consulted when there is no
+ *     `:` on the line. Picking the leftmost of the two would corrupt keys
+ *     that legitimately contain `=` (e.g. form fields named `a=b`) on
+ *     round-trip, since the serialized form `a=b: value` would split at
+ *     the `=` instead of the `:`.
+ *   - Everything after the separator is taken verbatim, so
+ *     `Authorization: Bearer abc:def` survives the round trip.
  *   - A line without a separator becomes a bare key with empty value.
  *   - The result always contains at least one row; if the input parses to
  *     zero rows, a fresh empty row is returned so the editor stays usable.
@@ -43,7 +48,10 @@ export function parseKeyValues(input: string): KeyValue[] {
       enabled = false;
       body = body.replace(/^#\s*/, "");
     }
-    const sepIdx = body.search(/[:=]/);
+    // Prefer ':' (canonical separator we write). Fall back to '=' so users
+    // pasting form-data-style input still get sensible behaviour.
+    let sepIdx = body.indexOf(":");
+    if (sepIdx === -1) sepIdx = body.indexOf("=");
     if (sepIdx === -1) {
       rows.push({ id: generateId(), key: body.trim(), value: "", enabled });
       continue;

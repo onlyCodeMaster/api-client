@@ -131,6 +131,16 @@ export function KeyValueEditor({
     [items],
   );
 
+  /** Bulk text mode can't represent file-attachment rows (`is_file`,
+   *  `file_path` aren't part of the `key: value` line format). Suppress
+   *  the toggle whenever any row is a file row so we don't silently lose
+   *  the attachment on a round-trip through the textarea. */
+  const hasFileRows = useMemo(
+    () => items.some((it) => it.is_file),
+    [items],
+  );
+  const bulkAllowed = !hasFileRows;
+
   const enterBulkMode = () => {
     setBulkText(serializeKeyValues(items));
     setBulkMode(true);
@@ -202,14 +212,16 @@ export function KeyValueEditor({
             )}
             {allEnabled ? t("kv.disable_all") : t("kv.enable_all")}
           </button>
-          <button
-            onClick={enterBulkMode}
-            className="px-1.5 py-0.5 rounded-md hover:bg-surface-secondary flex items-center gap-1 transition-colors"
-            title={t("kv.bulk_edit_tooltip")}
-          >
-            <Type size={11} />
-            {t("kv.bulk_edit")}
-          </button>
+          {bulkAllowed && (
+            <button
+              onClick={enterBulkMode}
+              className="px-1.5 py-0.5 rounded-md hover:bg-surface-secondary flex items-center gap-1 transition-colors"
+              title={t("kv.bulk_edit_tooltip")}
+            >
+              <Type size={11} />
+              {t("kv.bulk_edit")}
+            </button>
+          )}
         </div>
       )}
 
@@ -362,7 +374,7 @@ export function KeyValueEditor({
           <Plus size={12} strokeWidth={2.2} />
           {t("kv.add")}
         </button>
-        {!showBulkToolbar && meaningfulRows > 0 && (
+        {!showBulkToolbar && bulkAllowed && meaningfulRows > 0 && (
           <button
             onClick={enterBulkMode}
             className="flex items-center gap-1 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors py-1"
