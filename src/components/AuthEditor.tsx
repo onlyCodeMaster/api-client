@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, Loader2, AlertTriangle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { AuthConfig } from "../types";
 
 interface Props {
@@ -23,8 +24,22 @@ interface Props {
 const ALL: AuthConfig["auth_type"][] = ["inherit", "none", "bearer", "basic", "api_key", "oauth2", "sigv4"];
 
 export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Props) {
+  const { t } = useTranslation();
   const current: AuthConfig = value || { auth_type: allowInherit ? "inherit" : "none" };
-  const types = allowInherit ? ALL : ALL.filter((t) => t !== "inherit");
+  const types = allowInherit ? ALL : ALL.filter((tp) => tp !== "inherit");
+
+  const typeLabel = (type: AuthConfig["auth_type"]): string => {
+    switch (type) {
+      case "inherit": return t("auth.type_inherit");
+      case "none": return t("auth.type_none");
+      case "bearer": return t("auth.type_bearer");
+      case "basic": return t("auth.type_basic");
+      case "api_key": return t("auth.type_api_key");
+      case "oauth2": return t("auth.type_oauth2");
+      case "sigv4": return t("auth.type_sigv4");
+      default: return type;
+    }
+  };
 
   return (
     <div className="space-y-3">
@@ -35,15 +50,7 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
             onClick={() => onChange({ ...current, auth_type: type })}
             className={`segment ${current.auth_type === type ? "segment-active" : ""}`}
           >
-            {type === "api_key"
-              ? "API Key"
-              : type === "oauth2"
-              ? "OAuth 2"
-              : type === "sigv4"
-              ? "AWS SigV4"
-              : type === "none"
-              ? "None"
-              : type.charAt(0).toUpperCase() + type.slice(1)}
+            {typeLabel(type)}
           </button>
         ))}
       </div>
@@ -51,19 +58,19 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
       {current.auth_type === "inherit" && (
         <p className="text-[12px] text-text-tertiary">
           {inheritedFrom
-            ? `Inherits authentication from ${inheritedFrom}.`
-            : "Inherits authentication from this request's parent folder or collection. Configure auth on the collection (right-click → Edit auth) to use this."}
+            ? t("auth.inherits_from", { source: inheritedFrom })
+            : t("auth.inherits_default")}
         </p>
       )}
 
       {current.auth_type === "bearer" && (
         <div className="space-y-2">
-          <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Token</label>
+          <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.token")}</label>
           <input
             type="text"
             value={current.bearer_token || ""}
             onChange={(e) => onChange({ ...current, bearer_token: e.target.value })}
-            placeholder="Enter bearer token..."
+            placeholder={t("auth.token_placeholder")}
             className="input-apple w-full font-mono text-[12px]"
             spellCheck={false}
           />
@@ -73,22 +80,22 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
       {current.auth_type === "basic" && (
         <div className="space-y-2">
           <div>
-            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Username</label>
+            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.username")}</label>
             <input
               type="text"
               value={current.basic_username || ""}
               onChange={(e) => onChange({ ...current, basic_username: e.target.value })}
-              placeholder="Username"
+              placeholder={t("auth.username")}
               className="input-apple w-full text-[12px] mt-1"
             />
           </div>
           <div>
-            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Password</label>
+            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.password")}</label>
             <input
               type="password"
               value={current.basic_password || ""}
               onChange={(e) => onChange({ ...current, basic_password: e.target.value })}
-              placeholder="Password"
+              placeholder={t("auth.password")}
               className="input-apple w-full text-[12px] mt-1"
             />
           </div>
@@ -98,7 +105,7 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
       {current.auth_type === "api_key" && (
         <div className="space-y-2">
           <div>
-            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Key</label>
+            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.key")}</label>
             <input
               type="text"
               value={current.api_key_key || ""}
@@ -108,7 +115,7 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
             />
           </div>
           <div>
-            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Value</label>
+            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.value")}</label>
             <input
               type="text"
               value={current.api_key_value || ""}
@@ -119,19 +126,19 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
             />
           </div>
           <div>
-            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Add to</label>
+            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.add_to")}</label>
             <div className="segmented-control mt-1">
               <button
                 onClick={() => onChange({ ...current, api_key_in: "header" })}
                 className={`segment ${(current.api_key_in || "header") === "header" ? "segment-active" : ""}`}
               >
-                Header
+                {t("auth.in_header")}
               </button>
               <button
                 onClick={() => onChange({ ...current, api_key_in: "query" })}
                 className={`segment ${current.api_key_in === "query" ? "segment-active" : ""}`}
               >
-                Query Param
+                {t("auth.in_query")}
               </button>
             </div>
           </div>
@@ -146,7 +153,7 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
         <div className="space-y-2">
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Access Key ID</label>
+              <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.aws_access_key_id")}</label>
               <input
                 type="text"
                 value={current.aws_access_key_id || ""}
@@ -157,7 +164,7 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
               />
             </div>
             <div>
-              <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Secret Access Key</label>
+              <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.aws_secret")}</label>
               <input
                 type="password"
                 value={current.aws_secret_access_key || ""}
@@ -169,7 +176,7 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Region</label>
+              <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.aws_region")}</label>
               <input
                 type="text"
                 value={current.aws_region || ""}
@@ -180,7 +187,7 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
               />
             </div>
             <div>
-              <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Service</label>
+              <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.aws_service")}</label>
               <input
                 type="text"
                 value={current.aws_service || ""}
@@ -192,18 +199,17 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
             </div>
           </div>
           <div>
-            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Session Token (optional)</label>
+            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.aws_session_token")}</label>
             <input
               type="password"
               value={current.aws_session_token || ""}
               onChange={(e) => onChange({ ...current, aws_session_token: e.target.value })}
-              placeholder="STS session token — leave blank for long-lived credentials"
+              placeholder={t("auth.aws_session_placeholder")}
               className="input-apple w-full font-mono text-[12px] mt-1"
             />
           </div>
           <p className="text-[10px] text-text-tertiary leading-relaxed">
-            Signing happens client-side on every Send. form-data bodies are signed with UNSIGNED-PAYLOAD
-            (works for S3 and API Gateway over HTTPS).
+            {t("auth.sigv4_notice")}
           </p>
         </div>
       )}
@@ -211,8 +217,8 @@ export function AuthEditor({ value, onChange, allowInherit, inheritedFrom }: Pro
       {current.auth_type === "none" && (
         <p className="text-[12px] text-text-tertiary">
           {allowInherit
-            ? "This request explicitly opts out of inherited authentication."
-            : "No authentication is configured."}
+            ? t("auth.none_explicit")
+            : t("auth.none_default")}
         </p>
       )}
     </div>
@@ -226,6 +232,7 @@ function OAuth2Editor({
   value: AuthConfig;
   onChange: (next: AuthConfig) => void;
 }) {
+  const { t } = useTranslation();
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [fetchOk, setFetchOk] = useState(false);
@@ -246,10 +253,10 @@ function OAuth2Editor({
   const tokenStatus = !hasToken
     ? null
     : isExpired
-    ? "expired"
+    ? t("auth.oauth2_status_expired")
     : expiresAt != null
-    ? `valid until ${new Date(expiresAt).toLocaleString()}`
-    : "no expiry reported";
+    ? t("auth.oauth2_status_valid_until", { when: new Date(expiresAt).toLocaleString() })
+    : t("auth.oauth2_status_no_expiry");
 
   const fetchToken = async () => {
     setFetching(true);
@@ -288,30 +295,30 @@ function OAuth2Editor({
   return (
     <div className="space-y-2">
       <div>
-        <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Grant Type</label>
+        <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.oauth2_grant")}</label>
         <div className="segmented-control mt-1">
           <button
             onClick={() => onChange({ ...value, oauth2_grant_type: "client_credentials" })}
             className={`segment ${grant === "client_credentials" ? "segment-active" : ""}`}
           >
-            Client Credentials
+            {t("auth.oauth2_grant_client_credentials")}
           </button>
           <button
             onClick={() => onChange({ ...value, oauth2_grant_type: "password" })}
             className={`segment ${grant === "password" ? "segment-active" : ""}`}
           >
-            Password
+            {t("auth.oauth2_grant_password")}
           </button>
         </div>
       </div>
 
       <div>
-        <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Token URL</label>
+        <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.oauth2_token_url")}</label>
         <input
           type="text"
           value={value.oauth2_token_url || ""}
           onChange={(e) => onChange({ ...value, oauth2_token_url: e.target.value })}
-          placeholder="https://auth.example.com/oauth/token"
+          placeholder={t("auth.oauth2_token_url_placeholder")}
           className="input-apple w-full font-mono text-[12px] mt-1"
           spellCheck={false}
         />
@@ -319,23 +326,23 @@ function OAuth2Editor({
 
       <div className="grid grid-cols-2 gap-2">
         <div>
-          <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Client ID</label>
+          <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.oauth2_client_id")}</label>
           <input
             type="text"
             value={value.oauth2_client_id || ""}
             onChange={(e) => onChange({ ...value, oauth2_client_id: e.target.value })}
-            placeholder="client id"
+            placeholder={t("auth.oauth2_client_id_placeholder")}
             className="input-apple w-full text-[12px] mt-1 font-mono"
             spellCheck={false}
           />
         </div>
         <div>
-          <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Client Secret</label>
+          <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.oauth2_client_secret")}</label>
           <input
             type="password"
             value={value.oauth2_client_secret || ""}
             onChange={(e) => onChange({ ...value, oauth2_client_secret: e.target.value })}
-            placeholder="client secret"
+            placeholder={t("auth.oauth2_client_secret_placeholder")}
             className="input-apple w-full text-[12px] mt-1 font-mono"
           />
         </div>
@@ -344,22 +351,22 @@ function OAuth2Editor({
       {grant === "password" && (
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Username</label>
+            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.username")}</label>
             <input
               type="text"
               value={value.oauth2_username || ""}
               onChange={(e) => onChange({ ...value, oauth2_username: e.target.value })}
-              placeholder="username"
+              placeholder={t("auth.oauth2_username_placeholder")}
               className="input-apple w-full text-[12px] mt-1"
             />
           </div>
           <div>
-            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Password</label>
+            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.password")}</label>
             <input
               type="password"
               value={value.oauth2_password || ""}
               onChange={(e) => onChange({ ...value, oauth2_password: e.target.value })}
-              placeholder="password"
+              placeholder={t("auth.oauth2_password_placeholder")}
               className="input-apple w-full text-[12px] mt-1"
             />
           </div>
@@ -367,33 +374,33 @@ function OAuth2Editor({
       )}
 
       <div>
-        <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Scope</label>
+        <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.oauth2_scope")}</label>
         <input
           type="text"
           value={value.oauth2_scope || ""}
           onChange={(e) => onChange({ ...value, oauth2_scope: e.target.value })}
-          placeholder="read write (space-separated)"
+          placeholder={t("auth.oauth2_scope_placeholder")}
           className="input-apple w-full font-mono text-[12px] mt-1"
           spellCheck={false}
         />
       </div>
 
       <div>
-        <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Client Auth Method</label>
+        <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.oauth2_client_auth")}</label>
         <div className="segmented-control mt-1">
           <button
             onClick={() => onChange({ ...value, oauth2_client_auth: "basic" })}
             className={`segment ${clientAuth === "basic" ? "segment-active" : ""}`}
-            title="HTTP Basic auth header (RFC 6749 §2.3.1 preferred)"
+            title={t("auth.oauth2_client_auth_basic_tooltip")}
           >
-            Basic auth header
+            {t("auth.oauth2_client_auth_basic")}
           </button>
           <button
             onClick={() => onChange({ ...value, oauth2_client_auth: "body" })}
             className={`segment ${clientAuth === "body" ? "segment-active" : ""}`}
-            title="client_id / client_secret in form body"
+            title={t("auth.oauth2_client_auth_body_tooltip")}
           >
-            Request body
+            {t("auth.oauth2_client_auth_body")}
           </button>
         </div>
       </div>
@@ -408,10 +415,10 @@ function OAuth2Editor({
           {fetching ? (
             <>
               <Loader2 size={12} className="animate-spin" />
-              Fetching…
+              {t("auth.oauth2_fetching")}
             </>
           ) : (
-            <>Fetch Token</>
+            <>{t("auth.oauth2_fetch_token")}</>
           )}
         </button>
 
@@ -425,13 +432,13 @@ function OAuth2Editor({
         {fetchOk && !fetchError && (
           <div className="mt-2 flex items-center gap-1.5 text-[11px] text-success">
             <Check size={11} />
-            <span>Token fetched.</span>
+            <span>{t("auth.oauth2_fetched")}</span>
           </div>
         )}
 
         {hasToken && (
           <div className="mt-2 text-[11px] text-text-tertiary">
-            Cached token: <span className={isExpired ? "text-error" : "text-text-secondary"}>{tokenStatus}</span>
+            {t("auth.oauth2_cached_token")} <span className={isExpired ? "text-error" : "text-text-secondary"}>{tokenStatus}</span>
             {" — "}
             <button
               type="button"
@@ -444,7 +451,7 @@ function OAuth2Editor({
               }
               className="text-accent hover:underline"
             >
-              clear
+              {t("auth.oauth2_clear")}
             </button>
           </div>
         )}

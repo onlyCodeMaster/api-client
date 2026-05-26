@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { Play, Square, Plus, Trash2, Copy, RefreshCw } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { KeyValue, MockRoute, MockServerStatus } from "../types";
 import { useRequestStore } from "../store/useRequestStore";
 import { KeyValueEditor } from "./KeyValueEditor";
 import { CodeEditor } from "./CodeEditor";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 15);
@@ -23,6 +25,7 @@ function hydrateHeaders(headers: KeyValue[] | undefined): KeyValue[] {
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "*"];
 
 export function MockServerPanel({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation();
   const workspace = useRequestStore((s) => s.workspace);
   const workspaceId = workspace?.id;
 
@@ -32,6 +35,7 @@ export function MockServerPanel({ onClose }: { onClose: () => void }) {
   const [port, setPort] = useState<string>("0");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<MockRoute | null>(null);
 
   const refresh = useCallback(async () => {
     if (!workspaceId) return;
@@ -144,13 +148,19 @@ export function MockServerPanel({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const deleteSelected = async () => {
+  const deleteSelected = () => {
     if (!workspaceId || !selected) return;
-    if (!window.confirm(`Delete route "${selected.method} ${selected.path}"?`)) return;
+    setConfirmDelete(selected);
+  };
+
+  const confirmDeleteRoute = async () => {
+    if (!workspaceId || !confirmDelete) return;
+    const route = confirmDelete;
+    setConfirmDelete(null);
     try {
-      await invoke("delete_mock_route", { workspaceId, id: selected.id });
-      setRoutes((prev) => prev.filter((r) => r.id !== selected.id));
-      setSelectedId(routes.find((r) => r.id !== selected.id)?.id ?? null);
+      await invoke("delete_mock_route", { workspaceId, id: route.id });
+      setRoutes((prev) => prev.filter((r) => r.id !== route.id));
+      setSelectedId(routes.find((r) => r.id !== route.id)?.id ?? null);
     } catch (e) {
       setError(String(e));
     }
@@ -171,23 +181,23 @@ export function MockServerPanel({ onClose }: { onClose: () => void }) {
         <div className="flex items-center justify-between border-b border-neutral-200 px-5 py-3 dark:border-neutral-800">
           <div>
             <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
-              Mock Server
+              {t("mock.title")}
             </h2>
             <p className="text-xs text-neutral-500 dark:text-neutral-400">
-              Workspace: {workspace?.name ?? "—"}
+              {t("mock.workspace_label", { name: workspace?.name ?? "—" })}
             </p>
           </div>
           <div className="flex items-center gap-2">
             {status.running ? (
               <>
                 <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
-                  Running on :{status.port}
+                  {t("mock.running_on", { port: status.port })}
                 </span>
                 <button
                   type="button"
                   onClick={copyBaseUrl}
                   className="rounded border border-neutral-300 p-1.5 text-neutral-700 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-                  title="Copy base URL"
+                  title={t("mock.copy_base_url")}
                 >
                   <Copy size={14} />
                 </button>
@@ -196,7 +206,7 @@ export function MockServerPanel({ onClose }: { onClose: () => void }) {
                   onClick={stop}
                   className="flex items-center gap-1 rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700"
                 >
-                  <Square size={12} /> Stop
+                  <Square size={12} /> {t("mock.stop")}
                 </button>
               </>
             ) : (
@@ -205,9 +215,9 @@ export function MockServerPanel({ onClose }: { onClose: () => void }) {
                   type="text"
                   value={port}
                   onChange={(e) => setPort(e.target.value)}
-                  placeholder="0 (auto)"
+                  placeholder={t("mock.port_placeholder")}
                   className="w-20 rounded border border-neutral-300 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
-                  title="Port (0 = pick a free port)"
+                  title={t("mock.port_tooltip")}
                 />
                 <button
                   type="button"
@@ -215,7 +225,7 @@ export function MockServerPanel({ onClose }: { onClose: () => void }) {
                   disabled={!workspaceId}
                   className="flex items-center gap-1 rounded bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
                 >
-                  <Play size={12} /> Start
+                  <Play size={12} /> {t("mock.start")}
                 </button>
               </>
             )}
@@ -224,7 +234,7 @@ export function MockServerPanel({ onClose }: { onClose: () => void }) {
               onClick={refresh}
               disabled={loading}
               className="rounded border border-neutral-300 p-1.5 text-neutral-700 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-              title="Refresh"
+              title={t("mock.refresh")}
             >
               <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
             </button>
@@ -233,7 +243,7 @@ export function MockServerPanel({ onClose }: { onClose: () => void }) {
               onClick={onClose}
               className="ml-2 rounded px-2 py-1 text-sm text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
             >
-              Close
+              {t("mock.close")}
             </button>
           </div>
         </div>
@@ -250,20 +260,20 @@ export function MockServerPanel({ onClose }: { onClose: () => void }) {
           <div className="flex w-72 flex-col border-r border-neutral-200 dark:border-neutral-800">
             <div className="flex items-center justify-between border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
               <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-                Routes ({routes.length})
+                {t("mock.routes_count", { count: routes.length })}
               </span>
               <button
                 type="button"
                 onClick={createRoute}
                 className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-700"
               >
-                <Plus size={12} /> New
+                <Plus size={12} /> {t("mock.new")}
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
               {routes.length === 0 && (
                 <div className="px-3 py-4 text-xs text-neutral-500 dark:text-neutral-400">
-                  No routes yet. Click "New" to create one.
+                  {t("mock.empty")}
                 </div>
               )}
               {routes.map((r) => (
@@ -284,7 +294,7 @@ export function MockServerPanel({ onClose }: { onClose: () => void }) {
                     {r.path}
                   </span>
                   {!r.enabled && (
-                    <span className="text-[10px] uppercase text-neutral-400">off</span>
+                    <span className="text-[10px] uppercase text-neutral-400">{t("common.off")}</span>
                   )}
                 </button>
               ))}
@@ -303,12 +313,26 @@ export function MockServerPanel({ onClose }: { onClose: () => void }) {
               />
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-neutral-500 dark:text-neutral-400">
-                Select a route or create a new one.
+                {t("mock.select_or_create")}
               </div>
             )}
           </div>
         </div>
       </div>
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        title={t("mock.delete_confirm_title")}
+        message={
+          confirmDelete
+            ? t("mock.delete_confirm_message", {
+                method: confirmDelete.method,
+                path: confirmDelete.path,
+              })
+            : ""
+        }
+        onConfirm={confirmDeleteRoute}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </div>,
     document.body,
   );
@@ -341,6 +365,7 @@ interface RouteEditorProps {
 }
 
 function RouteEditor({ route, onChange, onDelete, onDuplicate }: RouteEditorProps) {
+  const { t } = useTranslation();
   const [headers, setHeaders] = useState<KeyValue[]>(hydrateHeaders(route.headers));
 
   // When the user picks a different route, re-hydrate from the new value.
@@ -366,7 +391,7 @@ function RouteEditor({ route, onChange, onDelete, onDuplicate }: RouteEditorProp
             checked={route.enabled}
             onChange={(e) => onChange({ enabled: e.target.checked })}
           />
-          Enabled
+          {t("mock.enabled")}
         </label>
         <div className="flex-1" />
         <button
@@ -374,14 +399,14 @@ function RouteEditor({ route, onChange, onDelete, onDuplicate }: RouteEditorProp
           onClick={onDuplicate}
           className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
         >
-          Duplicate
+          {t("mock.duplicate")}
         </button>
         <button
           type="button"
           onClick={onDelete}
           className="flex items-center gap-1 rounded border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950/40"
         >
-          <Trash2 size={12} /> Delete
+          <Trash2 size={12} /> {t("mock.delete")}
         </button>
       </div>
 
@@ -401,7 +426,7 @@ function RouteEditor({ route, onChange, onDelete, onDuplicate }: RouteEditorProp
           type="text"
           value={route.path}
           onChange={(e) => onChange({ path: e.target.value })}
-          placeholder="/api/users/:id"
+          placeholder={t("mock.path_placeholder")}
           className="flex-1 rounded border border-neutral-300 px-2 py-1.5 font-mono text-xs dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
         />
       </div>
@@ -409,7 +434,7 @@ function RouteEditor({ route, onChange, onDelete, onDuplicate }: RouteEditorProp
       <div className="grid grid-cols-2 gap-2">
         <label className="flex flex-col gap-1">
           <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-            Status code
+            {t("mock.status_code")}
           </span>
           <input
             type="number"
@@ -420,7 +445,7 @@ function RouteEditor({ route, onChange, onDelete, onDuplicate }: RouteEditorProp
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-            Delay (ms)
+            {t("mock.delay")}
           </span>
           <input
             type="number"
@@ -437,27 +462,27 @@ function RouteEditor({ route, onChange, onDelete, onDuplicate }: RouteEditorProp
 
       <div className="space-y-1">
         <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-          Response headers
+          {t("mock.response_headers")}
         </span>
         <KeyValueEditor
           items={headers}
           onChange={commitHeaders}
-          keyPlaceholder="Header"
-          valuePlaceholder="Value"
+          keyPlaceholder={t("mock.header_placeholder")}
+          valuePlaceholder={t("mock.value_placeholder")}
           reorderable={false}
         />
       </div>
 
       <div className="space-y-1">
         <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-          Response body
+          {t("mock.response_body")}
         </span>
         <CodeEditor
           value={route.body}
           onChange={(v) => onChange({ body: v })}
           language="json"
           height={200}
-          placeholder='{"hello": "world"}'
+          placeholder={t("mock.body_placeholder")}
         />
       </div>
     </div>

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { ResponseSnapshot } from "../types";
 import { diffLines, diffHeaders } from "../utils/diff";
 
@@ -39,6 +40,7 @@ export function ResponseDiffModal({
   initialRightId,
   onClose,
 }: Props) {
+  const { t } = useTranslation();
   const ordered = snapshots; // already newest-first
   const [leftId, setLeftId] = useState<string>(
     initialLeftId ?? ordered[1]?.id ?? ordered[0]?.id ?? ""
@@ -77,7 +79,7 @@ export function ResponseDiffModal({
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
       <div className="bg-bg-primary border border-border rounded-apple shadow-xl w-[1100px] max-w-[95vw] h-[80vh] flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <h2 className="text-[13px] font-semibold text-text-primary">Compare Responses</h2>
+          <h2 className="text-[13px] font-semibold text-text-primary">{t("diff.title")}</h2>
           <button
             onClick={onClose}
             className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-black/5"
@@ -89,7 +91,7 @@ export function ResponseDiffModal({
         {/* Selectors */}
         <div className="flex items-center gap-3 px-4 py-2 border-b border-border">
           <label className="flex items-center gap-1.5 text-[11px] text-text-secondary">
-            Left (old)
+            {t("diff.left")}
             <select
               value={leftId}
               onChange={(e) => setLeftId(e.target.value)}
@@ -104,7 +106,7 @@ export function ResponseDiffModal({
             </select>
           </label>
           <label className="flex items-center gap-1.5 text-[11px] text-text-secondary">
-            Right (new)
+            {t("diff.right")}
             <select
               value={rightId}
               onChange={(e) => setRightId(e.target.value)}
@@ -126,26 +128,26 @@ export function ResponseDiffModal({
 
         {!left || !right ? (
           <div className="flex-1 flex items-center justify-center text-[12px] text-text-tertiary">
-            Select two responses to compare.
+            {t("diff.select_both")}
           </div>
         ) : (
           <div className="flex-1 flex flex-col overflow-hidden">
             {/* Status / time summary */}
             <div className="grid grid-cols-2 border-b border-border text-[11px]">
               <div className="px-3 py-2 border-r border-border bg-bg-secondary/30">
-                <span className="text-text-tertiary">Status: </span>
+                <span className="text-text-tertiary">{t("diff.status")} </span>
                 <span className="font-mono">{left.response.status}</span>
-                <span className="ml-3 text-text-tertiary">Time: </span>
+                <span className="ml-3 text-text-tertiary">{t("diff.time")} </span>
                 <span className="font-mono">{left.response.time_ms}ms</span>
-                <span className="ml-3 text-text-tertiary">Size: </span>
+                <span className="ml-3 text-text-tertiary">{t("diff.size")} </span>
                 <span className="font-mono">{left.response.size_bytes}B</span>
               </div>
               <div className="px-3 py-2 bg-bg-secondary/30">
-                <span className="text-text-tertiary">Status: </span>
+                <span className="text-text-tertiary">{t("diff.status")} </span>
                 <span className="font-mono">{right.response.status}</span>
-                <span className="ml-3 text-text-tertiary">Time: </span>
+                <span className="ml-3 text-text-tertiary">{t("diff.time")} </span>
                 <span className="font-mono">{right.response.time_ms}ms</span>
-                <span className="ml-3 text-text-tertiary">Size: </span>
+                <span className="ml-3 text-text-tertiary">{t("diff.size")} </span>
                 <span className="font-mono">{right.response.size_bytes}B</span>
               </div>
             </div>
@@ -156,7 +158,7 @@ export function ResponseDiffModal({
                 headerDiff.removed.length > 0 ||
                 headerDiff.changed.length > 0) && (
                 <div className="border-b border-border max-h-[160px] overflow-auto px-3 py-2 text-[11px] font-mono">
-                  <div className="text-text-tertiary mb-1">Headers</div>
+                  <div className="text-text-tertiary mb-1">{t("diff.headers")}</div>
                   {headerDiff.removed.map((h) => (
                     <div key={`r-${h.key}`} className="text-error">
                       - {h.key}: {h.value}
@@ -184,7 +186,7 @@ export function ResponseDiffModal({
             <div className="flex-1 overflow-auto font-mono text-[11px] leading-[1.5]">
               {lineDiff.length === 0 ? (
                 <div className="px-3 py-4 text-text-tertiary">
-                  Bodies are identical.
+                  {t("diff.identical")}
                 </div>
               ) : (
                 lineDiff.map((line, idx) => {

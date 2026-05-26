@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search, FolderTree, Clock, Send, Layers } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useRequestStore } from "../store/useRequestStore";
 import type { Collection, CollectionFolder, CollectionRequest } from "../types";
 
@@ -91,6 +92,7 @@ interface Props {
 }
 
 export function SearchPalette({ onClose }: Props) {
+  const { t } = useTranslation();
   const collections = useRequestStore((s) => s.collections);
   const history = useRequestStore((s) => s.history);
   const environments = useRequestStore((s) => s.environments);
@@ -116,7 +118,7 @@ export function SearchPalette({ onClose }: Props) {
       out.push({
         id: `col:${c.id}`,
         label: c.name,
-        sub: `${c.requests.length + c.folders.length} item(s)`,
+        sub: t("palette.items_count", { count: c.requests.length + c.folders.length }),
         haystack: `${c.name} ${c.description}`.toLowerCase(),
         kind: "collection",
         open: () => {
@@ -150,7 +152,7 @@ export function SearchPalette({ onClose }: Props) {
       out.push({
         id: `env:${env.id}`,
         label: env.name,
-        sub: isActive ? "active" : `${env.variables.length} var(s)`,
+        sub: isActive ? t("palette.active") : t("palette.vars_count", { count: env.variables.length }),
         haystack: env.name.toLowerCase(),
         kind: "environment",
         open: () => setActiveEnvironment(env.id),
@@ -158,7 +160,7 @@ export function SearchPalette({ onClose }: Props) {
     }
 
     return out;
-  }, [collections, history, environments, workspace, loadRequest, openTab, setActiveEnvironment]);
+  }, [collections, history, environments, workspace, loadRequest, openTab, setActiveEnvironment, t]);
 
   const ranked = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -228,7 +230,7 @@ export function SearchPalette({ onClose }: Props) {
                 if (r) select(r);
               }
             }}
-            placeholder="Search requests, history, collections, environments…"
+            placeholder={t("palette.placeholder")}
             className="flex-1 bg-transparent text-[14px] text-text-primary placeholder-text-tertiary outline-none border-0"
           />
           <kbd className="text-[10px] text-text-tertiary border border-border-light rounded px-1.5 py-0.5">ESC</kbd>
@@ -236,7 +238,7 @@ export function SearchPalette({ onClose }: Props) {
         <div ref={listRef} className="max-h-[60vh] overflow-y-auto">
           {ranked.length === 0 && (
             <div className="text-center py-10 text-[12px] text-text-tertiary">
-              No matches
+              {t("palette.no_matches")}
             </div>
           )}
           {ranked.map((r, i) => {
@@ -265,16 +267,16 @@ export function SearchPalette({ onClose }: Props) {
                   <div className="text-[11px] text-text-tertiary truncate">{r.sub}</div>
                 </div>
                 <span className="text-[10px] uppercase text-text-tertiary opacity-60">
-                  {r.kind}
+                  {t(`palette.kind_${r.kind}` as const)}
                 </span>
               </div>
             );
           })}
         </div>
         <div className="flex items-center gap-3 px-4 py-2 border-t border-border-light text-[10px] text-text-tertiary">
-          <span>↑↓ navigate</span>
-          <span>↵ open</span>
-          <span>esc close</span>
+          <span>↑↓ {t("palette.navigate")}</span>
+          <span>↵ {t("palette.open")}</span>
+          <span>esc {t("palette.close")}</span>
         </div>
       </div>
     </div>

@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Play, X, Square, CheckCircle2, XCircle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useRequestStore } from "../store/useRequestStore";
 import { executeRequestWithScripts } from "../utils/requestPipeline";
 import { buildScopedVars } from "../utils/variableScope";
@@ -73,6 +74,7 @@ interface Props {
 }
 
 export function CollectionRunnerModal({ collectionId, onClose }: Props) {
+  const { t } = useTranslation();
   const { collections, environments, workspace, defaultTimeoutMs, verifyTlsDefault } =
     useRequestStore();
 
@@ -111,9 +113,9 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
       } catch {
         setResults([
           {
-            name: "(data file)",
+            name: t("runner.data_label"),
             method: "",
-            error: "Invalid JSON data file",
+            error: t("runner.data_invalid"),
             tests: [],
             iteration: 0,
           },
@@ -188,7 +190,7 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <h2 className="text-[13px] font-semibold text-text-primary">
-            Run Collection: {col.name}
+            {t("runner.title", { name: col.name })}
           </h2>
           <button
             onClick={onClose}
@@ -202,7 +204,7 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
         <div className="px-4 py-3 border-b border-border space-y-2">
           <div className="flex gap-4">
             <label className="flex items-center gap-2 text-[11px] text-text-secondary">
-              Iterations
+              {t("runner.iterations")}
               <input
                 type="number"
                 min={1}
@@ -214,7 +216,7 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
               />
             </label>
             <label className="flex items-center gap-2 text-[11px] text-text-secondary">
-              Delay (ms)
+              {t("runner.delay_ms")}
               <input
                 type="number"
                 min={0}
@@ -228,7 +230,7 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
           </div>
           <div>
             <label className="text-[11px] text-text-secondary block mb-1">
-              Data (JSON array, optional)
+              {t("runner.data")}
             </label>
             <CodeEditor
               value={dataJson}
@@ -236,7 +238,7 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
               language="json"
               height={80}
               readOnly={running}
-              placeholder={'[{"token":"abc"},{"token":"xyz"}]'}
+              placeholder={t("runner.data_placeholder")}
             />
           </div>
           <div className="flex items-center gap-2">
@@ -247,7 +249,7 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
                 className="btn-apple btn-apple-sm bg-accent text-white hover:bg-accent/90 flex items-center gap-1.5"
               >
                 <Play size={12} />
-                Run ({requests.length} requests)
+                {t("runner.run_with_count", { count: requests.length })}
               </button>
             ) : (
               <button
@@ -257,18 +259,18 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
                 className="btn-apple btn-apple-sm bg-error/10 text-error hover:bg-error/15 flex items-center gap-1.5"
               >
                 <Square size={12} />
-                Stop
+                {t("runner.stop")}
               </button>
             )}
             {results.length > 0 && !running && (
               <span className="text-[11px] text-text-tertiary">
                 {totalTests > 0 && (
                   <span>
-                    {passedTests} passed, {failedTests} failed
-                    {erroredRequests > 0 && `, ${erroredRequests} errored`}
+                    {t("runner.summary_passed_failed", { passed: passedTests, failed: failedTests })}
+                    {erroredRequests > 0 && t("runner.summary_errored", { count: erroredRequests })}
                   </span>
                 )}
-                {totalTests === 0 && `${results.length} requests completed`}
+                {totalTests === 0 && t("runner.summary_completed", { count: results.length })}
               </span>
             )}
           </div>
@@ -278,7 +280,7 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
         <div className="flex-1 overflow-auto px-4 py-2">
           {results.length === 0 && !running && (
             <p className="text-[12px] text-text-tertiary py-4 text-center">
-              Configure and click Run to execute all requests sequentially.
+              {t("runner.hint")}
             </p>
           )}
           {results.map((r, i) => (

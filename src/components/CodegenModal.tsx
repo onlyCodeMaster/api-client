@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { X, Copy, Check, Code2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { CODEGEN_TARGETS, generateCode, type CodegenTarget } from "../utils/codegen";
 import type { RequestItem } from "../types";
 
@@ -10,6 +11,7 @@ export function CodegenModal({
   request: RequestItem;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const [target, setTarget] = useState<CodegenTarget>("fetch");
   const [copied, setCopied] = useState(false);
 
@@ -17,9 +19,9 @@ export function CodegenModal({
     try {
       return generateCode(request, target);
     } catch (err) {
-      return `// Error generating code: ${String(err)}`;
+      return `// ${t("codegen.error_prefix")}: ${String(err)}`;
     }
-  }, [request, target]);
+  }, [request, target, t]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
@@ -27,7 +29,7 @@ export function CodegenModal({
         <div className="flex items-center justify-between px-5 py-4 border-b border-border-light">
           <div className="flex items-center gap-2">
             <Code2 size={18} className="text-accent" />
-            <h2 className="text-[15px] font-semibold text-text-primary">Generate Code</h2>
+            <h2 className="text-[15px] font-semibold text-text-primary">{t("codegen.title")}</h2>
           </div>
           <button
             onClick={onClose}
@@ -63,7 +65,7 @@ export function CodegenModal({
             className="absolute top-3 right-3 flex items-center gap-1 px-2 py-1 bg-surface rounded-md text-[11px] hover:bg-surface/80 transition-colors shadow-apple-sm"
           >
             {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
-            {copied ? "Copied" : "Copy"}
+            {copied ? t("codegen.copied") : t("codegen.copy")}
           </button>
           <pre className="text-[12px] font-mono text-text-primary whitespace-pre-wrap break-all leading-[1.65]">
             {code}
