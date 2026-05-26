@@ -349,6 +349,27 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// Truncate an arbitrary text body so it's safe to embed in an error
+/// message. Three constraints:
+///   * Never panic on multi-byte UTF-8 — `&s[..n]` panics if `n` lands
+///     inside a code point, which happens easily with localized provider
+///     errors (CJK, accented Latin, emoji). We walk back to the nearest
+///     char boundary instead.
+///   * Keep the message size bounded so a malicious or runaway provider
+///     can't push megabytes of HTML into a Rust panic / log line.
+///   * Preserve any short body verbatim so unit-test assertions and the
+///     UI's "everything fits, here's the JSON" path stay simple.
+fn truncate_for_error_snippet(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
+}
+
 /// URL-encode a single query value. Conservative; allows only unreserved
 /// characters and percent-encodes the rest. Used for building the
 /// authorization endpoint URL.
@@ -507,11 +528,7 @@ pub async fn start_device_code(req: DeviceCodeStartRequest) -> Result<DeviceCode
         .map_err(|e| format!("Failed to read device authorization response body: {}", e))?;
 
     if !status.is_success() {
-        let snippet = if body_text.len() > 500 {
-            format!("{}…", &body_text[..500])
-        } else {
-            body_text.clone()
-        };
+        let snippet = truncate_for_error_snippet(&body_text, 500);
         return Err(format!(
             "Device authorization endpoint returned {}: {}",
             status, snippet
@@ -711,11 +728,7 @@ pub async fn poll_device_token(
                 return Err(format!("Device token poll failed ({}{})", other, desc));
             }
             None => {
-                let snippet = if body_text.len() > 500 {
-                    format!("{}…", &body_text[..500])
-                } else {
-                    body_text.clone()
-                };
+                let snippet = truncate_for_error_snippet(&body_text, 500);
                 return Err(format!(
                     "Token endpoint returned {} during device polling: {}",
                     status, snippet
@@ -836,11 +849,7 @@ pub async fn fetch_token(req: OAuth2FetchRequest) -> Result<OAuth2FetchResponse,
     if !status.is_success() {
         // Many providers return JSON {"error": "...", "error_description": "..."}
         // on failure. Surface that verbatim if present, otherwise raw body.
-        let snippet = if body_text.len() > 500 {
-            format!("{}…", &body_text[..500])
-        } else {
-            body_text.clone()
-        };
+        let snippet = truncate_for_error_snippet(&body_text, 500);
         return Err(format!("Token endpoint returned {}: {}", status, snippet));
     }
 
@@ -864,6 +873,54 @@ pub async fn fetch_token(req: OAuth2FetchRequest) -> Result<OAuth2FetchResponse,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncate_for_error_snippet_preserves_short_ascii() {
+        assert_eq!(truncate_for_error_snippet("hello", 500), "hello");
+        assert_eq!(truncate_for_error_snippet("", 500), "");
+    }
+
+    #[test]
+    fn truncate_for_error_snippet_bounds_long_ascii_with_ellipsis() {
+        let long = "a".repeat(1000);
+        let out = truncate_for_error_snippet(&long, 500);
+        // 500 bytes of 'a' + the single-codepoint ellipsis.
+        assert_eq!(out.len(), 500 + '…'.len_utf8());
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn truncate_for_error_snippet_does_not_panic_on_multibyte_boundary() {
+        // 200 copies of a 3-byte CJK character (600 bytes total). A naive
+        // `&s[..500]` would land at byte 500, which is inside the 167th
+        // character (bytes 498..501) and panic. The helper must back up
+        // to byte 498 (the nearest char boundary).
+        let s: String = std::iter::repeat('哈').take(200).collect();
+        assert_eq!(s.len(), 600);
+        let out = truncate_for_error_snippet(&s, 500);
+        // Sanity-check: the truncated body must be valid UTF-8 (already
+        // implied by Rust's `&str`, but we verify the boundary handling
+        // by confirming the byte length matches 498 + ellipsis).
+        assert_eq!(out.len(), 498 + '…'.len_utf8());
+        assert!(out.ends_with('…'));
+        // Every char in the body must be the original CJK char (no
+        // partial code point smuggled in).
+        for c in out.chars().take_while(|c| *c != '…') {
+            assert_eq!(c, '哈');
+        }
+    }
+
+    #[test]
+    fn truncate_for_error_snippet_handles_emoji_at_boundary() {
+        // 🌍 is 4 bytes; place one straddling byte 500.
+        let mut s = "x".repeat(498);
+        s.push('🌍');
+        s.push_str("yz");
+        // Total = 498 + 4 + 2 = 504 bytes.
+        let out = truncate_for_error_snippet(&s, 500);
+        // Must back up to byte 498 (before the emoji).
+        assert_eq!(out.len(), 498 + '…'.len_utf8());
+    }
 
     #[test]
     fn code_verifier_is_43_chars_url_safe() {
