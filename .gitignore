@@ -3,3 +3,7 @@
 /dist
 /src-tauri/target
 /src-tauri/gen
+
+# Playwright artefacts (generated each run).
+/playwright-report
+/test-results
