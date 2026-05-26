@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Eye } from "lucide-react";
 import { substituteAll } from "../utils/dynamicVars";
 
@@ -33,6 +34,7 @@ function extractTokens(s: string): string[] {
  * before sending.
  */
 export function VariablePreview({ value, vars }: VariablePreviewProps) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
 
   const tokens = useMemo(() => extractTokens(value), [value]);
@@ -59,18 +61,24 @@ export function VariablePreview({ value, vars }: VariablePreviewProps) {
         className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${
           anyUnresolved ? "text-warning" : "text-accent"
         } hover:bg-black/5 dark:hover:bg-white/10`}
-        title={anyUnresolved ? "Some variables are unresolved" : "Preview resolved value"}
+        title={
+          anyUnresolved
+            ? t("variable_preview.has_unresolved")
+            : t("variable_preview.title")
+        }
       >
         <Eye size={14} />
       </button>
       {open && (
         <div className="absolute right-0 top-full mt-1 w-[420px] max-h-[320px] overflow-auto z-50 rounded-apple-lg border border-border-light bg-surface shadow-apple-lg p-3 text-[11px]">
-          <div className="font-semibold text-text-secondary mb-1">Resolved value</div>
+          <div className="font-semibold text-text-secondary mb-1">
+            {t("variable_preview.resolved_value")}
+          </div>
           <div className="font-mono text-text-primary break-all bg-surface-secondary rounded-apple p-2 mb-2 whitespace-pre-wrap">
-            {resolved || "(empty)"}
+            {resolved || t("variable_preview.empty")}
           </div>
           <div className="font-semibold text-text-secondary mb-1">
-            Variables ({tokens.length})
+            {t("variable_preview.variables_n", { count: tokens.length })}
           </div>
           <div className="divide-y divide-border-light">
             {tokens.map((k) => {
@@ -84,8 +92,8 @@ export function VariablePreview({ value, vars }: VariablePreviewProps) {
                   <span className="font-mono text-text-secondary break-all flex-1 text-right">
                     {unresolved
                       ? k.startsWith("$")
-                        ? "(unknown dynamic)"
-                        : "(undefined)"
+                        ? t("variable_preview.unknown_dynamic")
+                        : t("variable_preview.undefined")
                       : v ?? ""}
                   </span>
                 </div>

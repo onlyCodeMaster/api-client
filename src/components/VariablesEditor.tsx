@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Trash2, Eye, EyeOff, Maximize2, Minimize2 } from "lucide-react";
 import type { EnvVariable } from "../types";
+import { VariablePreview } from "./VariablePreview";
 
 /**
  * Tabular editor for a list of `EnvVariable`. Used by both `EnvironmentPanel`
@@ -24,10 +25,18 @@ export function VariablesEditor({
   value,
   onChange,
   emptyHint,
+  previewVars,
 }: {
   value: EnvVariable[];
   onChange: (next: EnvVariable[]) => void;
   emptyHint?: string;
+  /**
+   * Lookup map used for the inline `{{var}}` preview that appears on rows
+   * whose value references other variables. When omitted, the preview is
+   * disabled — callers that don't have a meaningful scope shouldn't pass
+   * this prop to avoid showing a misleading "unresolved" indicator.
+   */
+  previewVars?: Record<string, string>;
 }) {
   const { t } = useTranslation();
 
@@ -57,6 +66,7 @@ export function VariablesEditor({
         <VariableRow
           key={i}
           variable={variable}
+          previewVars={previewVars}
           onChange={(partial) => update(i, partial)}
           onDelete={() => remove(i)}
         />
@@ -82,7 +92,7 @@ function VariableHeader() {
       <span className="w-4 shrink-0" />
       <span className="w-[180px] shrink-0">{t("env.column_key")}</span>
       <span className="flex-1 min-w-0">{t("env.column_value")}</span>
-      <span className="w-[112px] shrink-0 text-right pr-1">
+      <span className="w-[140px] shrink-0 text-right pr-1">
         {t("env.column_actions")}
       </span>
     </div>
@@ -91,10 +101,12 @@ function VariableHeader() {
 
 function VariableRow({
   variable,
+  previewVars,
   onChange,
   onDelete,
 }: {
   variable: EnvVariable;
+  previewVars?: Record<string, string>;
   onChange: (partial: Partial<EnvVariable>) => void;
   onDelete: () => void;
 }) {
@@ -163,6 +175,9 @@ function VariableRow({
         )}
       </div>
       <div className="flex items-center gap-0.5 shrink-0">
+        {previewVars && (
+          <VariablePreview value={variable.value} vars={previewVars} />
+        )}
         {showExpand && (
           <IconButton
             onClick={() => setExpanded((v) => !v)}
