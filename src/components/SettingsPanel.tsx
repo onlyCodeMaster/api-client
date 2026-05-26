@@ -76,7 +76,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                 onClick={save}
                 className="px-3 py-1.5 bg-accent text-white text-[12px] rounded-apple hover:bg-accent-hover active:scale-[0.97] transition-all"
               >
-                {saved ? t("common.copied") : t("common.save")}
+                {saved ? t("common.saved") : t("common.save")}
               </button>
             </div>
           </div>
