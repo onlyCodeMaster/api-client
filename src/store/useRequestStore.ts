@@ -30,6 +30,13 @@ import {
   buildResponseSnapshot,
   historyEntryToResponse,
 } from "../utils/historySnapshot";
+import { resolveAuth, locateAuthSource } from "../utils/auth";
+import {
+  shouldRefreshOAuth2,
+  buildRefreshRequest,
+  applyRefreshResult,
+  updateFolderAuth,
+} from "../utils/oauth2Refresh";
 import {
   createNewFolder,
   addFolderTo,
@@ -230,6 +237,13 @@ interface RequestState {
   setTags: (tags: string[]) => void;
 
   sendRequest: () => Promise<void>;
+  /** Check whether the request's effective OAuth2 auth needs a refresh
+   *  (expired access_token + cached refresh_token) and, if so, swap in a
+   *  fresh access_token by calling the token endpoint. Writes the new
+   *  tokens back to whichever layer they came from (request / folder /
+   *  collection). Safe to call when no oauth2 auth is in effect — it's a
+   *  no-op then. */
+  ensureFreshOAuth2: (req: RequestItem) => Promise<void>;
   cancelRequest: () => void;
   createNewRequest: () => void;
   clearResponseHistory: (requestId: string) => void;
@@ -754,6 +768,13 @@ export const useRequestStore = create<RequestState>((set, get) => {
       // entire long-lived response.
       if (req.protocol === "websocket" || req.protocol === "sse") return;
 
+      // Pre-flight: auto-refresh an expired OAuth2 token if we have a
+      // refresh_token on file. Runs before the loading spinner so the user
+      // sees "refreshing…" vs "sending…" latency, but errors here are
+      // non-fatal — we'll still attempt the request with the stale token
+      // and let the 401 inform the user.
+      try { await get().ensureFreshOAuth2(req); } catch { /* best-effort */ }
+
       const reqId = req.id;
       set((s) => ({
         loadings: { ...s.loadings, [reqId]: true },
@@ -905,6 +926,39 @@ export const useRequestStore = create<RequestState>((set, get) => {
       set((s) => ({
         responseHistory: { ...s.responseHistory, [requestId]: [] },
       }));
+    },
+
+    ensureFreshOAuth2: async (req) => {
+      const { collections } = get();
+      const auth = resolveAuth(req, collections);
+      if (!shouldRefreshOAuth2(auth)) return;
+
+      const payload = buildRefreshRequest(auth!);
+      const resp = await invoke<{
+        access_token: string;
+        expires_at: number | null;
+        refresh_token: string | null;
+      }>("oauth2_fetch_token", { request: payload });
+
+      const newAuth = applyRefreshResult(auth!, resp);
+      const src = locateAuthSource(req, collections);
+      if (!src) return;
+
+      switch (src.source) {
+        case "request":
+          get().updateActiveRequest({ auth: newAuth });
+          break;
+        case "collection":
+          await get().setCollectionAuth(src.collectionId, newAuth);
+          break;
+        case "folder": {
+          const col = collections.find((c) => c.id === src.collectionId);
+          if (!col) break;
+          const updated = updateFolderAuth(col, src.folderId, newAuth);
+          await get().updateCollection(updated);
+          break;
+        }
+      }
     },
 
     cancelRequest: () => {

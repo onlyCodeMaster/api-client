@@ -780,6 +780,29 @@ async fn oauth2_fetch_token(
     oauth2::fetch_token(request).await
 }
 
+/// Drive the authorization_code flow: open the user's browser, await the
+/// loopback redirect, return the authorization code + redirect_uri +
+/// code_verifier so the frontend can call `oauth2_fetch_token` to swap
+/// the code for tokens.
+#[tauri::command]
+async fn oauth2_start_authorization_code(
+    app: tauri::AppHandle,
+    request: oauth2::OAuth2FetchRequest,
+) -> Result<oauth2::AuthorizationCodeResult, String> {
+    use tauri_plugin_shell::ShellExt;
+    oauth2::start_authorization_code(&request, |url| async move {
+        // `Shell::open` is deprecated in favor of `tauri-plugin-opener`,
+        // but we only use it here to launch the system browser. Pulling
+        // in a new crate to silence the warning isn't worth it; revisit
+        // when we next bump the Tauri toolchain.
+        #[allow(deprecated)]
+        app.shell()
+            .open(url, None)
+            .map_err(|e| format!("Failed to open browser: {}", e))
+    })
+    .await
+}
+
 /// Write a response body to disk. Two modes:
 ///
 /// 1. **Truncated body**: when the response was too big to send over IPC in
@@ -866,6 +889,7 @@ pub fn run() {
             sse_connect,
             sse_close,
             oauth2_fetch_token,
+            oauth2_start_authorization_code,
             // History
             commands::save_history,
             commands::get_history,
