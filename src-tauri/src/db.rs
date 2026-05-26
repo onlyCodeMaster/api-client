@@ -80,6 +80,18 @@ impl Database {
         Ok(base.join("api-client.db"))
     }
 
+    /// Wrap an already-open [`Connection`] (e.g. an in-memory SQLite handle)
+    /// and run the same `init_tables` migration path as the production
+    /// constructor. Used by the migration regression tests below.
+    #[cfg(test)]
+    pub(crate) fn from_connection(conn: Connection) -> Result<Self, String> {
+        let db = Database {
+            conn: Mutex::new(conn),
+        };
+        db.init_tables()?;
+        Ok(db)
+    }
+
     fn init_tables(&self) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute_batch(
@@ -96,12 +108,12 @@ impl Database {
                 response_status INTEGER,
                 response_time_ms INTEGER,
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
+                updated_at INTEGER NOT NULL,
+                workspace_id TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_history_updated ON history(updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_history_url ON history(url);
-            CREATE INDEX IF NOT EXISTS idx_history_workspace ON history(workspace_id);
 
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -135,9 +147,10 @@ impl Database {
         )
         .map_err(|e| format!("Failed to initialize tables: {}", e))?;
 
-        // Backfill: add workspace_id column to legacy history tables. Wrapped
-        // in a transaction-safe check so we don't fail when the column
-        // already exists.
+        // Backfill: add workspace_id column to legacy `history` tables that
+        // pre-date the multi-workspace migration. Fresh installs already get
+        // the column from the CREATE TABLE above. The pragma check keeps
+        // this idempotent across restarts.
         let has_col: bool = {
             let mut stmt = conn
                 .prepare("SELECT 1 FROM pragma_table_info('history') WHERE name = 'workspace_id'")
@@ -148,12 +161,18 @@ impl Database {
         if !has_col {
             conn.execute("ALTER TABLE history ADD COLUMN workspace_id TEXT", [])
                 .map_err(|e| format!("Failed to add workspace_id column: {}", e))?;
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_history_workspace ON history(workspace_id)",
-                [],
-            )
-            .map_err(|e| format!("Failed to create workspace index: {}", e))?;
         }
+        // Always (re)ensure the workspace index — covers both the
+        // fresh-install path (column created above by execute_batch) and
+        // the legacy path (column just added by ALTER TABLE). Doing this
+        // unconditionally is cheap thanks to `IF NOT EXISTS` and avoids
+        // the earlier ordering bug where the index was placed in the same
+        // batch as CREATE TABLE, before the column existed.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_history_workspace ON history(workspace_id)",
+            [],
+        )
+        .map_err(|e| format!("Failed to create workspace index: {}", e))?;
         Ok(())
     }
 
@@ -542,4 +561,89 @@ fn row_to_history(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
         updated_at: row.get(11)?,
         workspace_id: row.get(12)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    /// `init_tables` must succeed against a brand-new database — the
+    /// schema's CREATE TABLE block has to declare `workspace_id` itself,
+    /// otherwise the workspace index creation would reference a missing
+    /// column.
+    #[test]
+    fn init_tables_succeeds_on_fresh_database() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        let db = Database::from_connection(conn).expect("init_tables");
+
+        let conn = db.conn.lock().unwrap();
+        // workspace_id column exists.
+        let has_col: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('history') WHERE name = 'workspace_id'")
+            .unwrap()
+            .exists([])
+            .unwrap();
+        assert!(has_col, "fresh database must include workspace_id column");
+
+        // Workspace index exists.
+        let has_idx: bool = conn
+            .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_history_workspace'")
+            .unwrap()
+            .exists([])
+            .unwrap();
+        assert!(has_idx, "fresh database must register the workspace index");
+    }
+
+    /// `init_tables` must also succeed when invoked against a legacy
+    /// `history` table that pre-dates the multi-workspace migration.
+    /// Reproduces the panic reported when upgrading an old app database.
+    #[test]
+    fn init_tables_migrates_legacy_history_table() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        // Recreate the pre-migration schema verbatim.
+        conn.execute_batch(
+            "CREATE TABLE history (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT 'Untitled',
+                method TEXT NOT NULL DEFAULT 'GET',
+                url TEXT NOT NULL DEFAULT '',
+                headers TEXT NOT NULL DEFAULT '[]',
+                params TEXT NOT NULL DEFAULT '[]',
+                body TEXT NOT NULL DEFAULT '',
+                body_type TEXT NOT NULL DEFAULT 'none',
+                response_status INTEGER,
+                response_time_ms INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );",
+        )
+        .unwrap();
+
+        let db = Database::from_connection(conn).expect("init_tables on legacy db");
+
+        let conn = db.conn.lock().unwrap();
+        let has_col: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('history') WHERE name = 'workspace_id'")
+            .unwrap()
+            .exists([])
+            .unwrap();
+        assert!(has_col, "legacy database must gain workspace_id column");
+        let has_idx: bool = conn
+            .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_history_workspace'")
+            .unwrap()
+            .exists([])
+            .unwrap();
+        assert!(has_idx, "legacy database must gain the workspace index");
+    }
+
+    /// Running `init_tables` repeatedly must remain idempotent — the
+    /// production constructor invokes it on every app launch.
+    #[test]
+    fn init_tables_is_idempotent() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        let db = Database::from_connection(conn).expect("first init");
+        db.init_tables().expect("second init must not fail");
+        db.init_tables().expect("third init must not fail");
+    }
 }
