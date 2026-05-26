@@ -25,12 +25,17 @@ export function serializeKeyValues(items: KeyValue[]): string {
  *   - Empty / whitespace-only lines are skipped (treated as visual spacing).
  *   - Lines beginning with `#` are stored disabled; the `#` and any
  *     following whitespace are stripped from the key.
- *   - `:` is preferred as the key/value separator since that's what
- *     `serializeKeyValues` writes; `=` is only consulted when there is no
- *     `:` on the line. Picking the leftmost of the two would corrupt keys
- *     that legitimately contain `=` (e.g. form fields named `a=b`) on
- *     round-trip, since the serialized form `a=b: value` would split at
- *     the `=` instead of the `:`.
+ *   - Separator precedence:
+ *       1. The first `": "` (colon followed by space) wins. This is what
+ *          `serializeKeyValues` always emits, and what users paste from
+ *          devtools / cURL header blocks, so a round-trip always lands
+ *          here. Pinning on the colon-space pair lets keys that contain
+ *          `=` (e.g. form field `a=b`) survive round-trip, and lets values
+ *          containing `:` (e.g. URLs like `https://example.com`) keep the
+ *          `:` intact.
+ *       2. If no `": "` is present, fall back to the leftmost of `:` or
+ *          `=` (legacy behaviour). Covers manually-typed lines like
+ *          `Auth:Bearer xyz` (no space after `:`) and `foo=bar`.
  *   - Everything after the separator is taken verbatim, so
  *     `Authorization: Bearer abc:def` survives the round trip.
  *   - A line without a separator becomes a bare key with empty value.
@@ -48,16 +53,24 @@ export function parseKeyValues(input: string): KeyValue[] {
       enabled = false;
       body = body.replace(/^#\s*/, "");
     }
-    // Prefer ':' (canonical separator we write). Fall back to '=' so users
-    // pasting form-data-style input still get sensible behaviour.
-    let sepIdx = body.indexOf(":");
-    if (sepIdx === -1) sepIdx = body.indexOf("=");
+    // 1) Anchor on ": " (canonical write form). This both round-trips keys
+    //    containing "=" (e.g. `a=b: value`) and keeps `:` inside values
+    //    (e.g. `redirect_uri=https://example.com`) from being mistaken for
+    //    the separator.
+    let sepIdx = body.indexOf(": ");
+    let sepLen = 2;
+    if (sepIdx === -1) {
+      // 2) No ": " on the line. Fall back to the leftmost of ":" or "=",
+      //    matching the pre-PR-D-1 behaviour for user-typed lines.
+      sepIdx = body.search(/[:=]/);
+      sepLen = 1;
+    }
     if (sepIdx === -1) {
       rows.push({ id: generateId(), key: body.trim(), value: "", enabled });
       continue;
     }
     const key = body.slice(0, sepIdx).trim();
-    const value = body.slice(sepIdx + 1).trim();
+    const value = body.slice(sepIdx + sepLen).trim();
     rows.push({ id: generateId(), key, value, enabled });
   }
   if (rows.length === 0) {
