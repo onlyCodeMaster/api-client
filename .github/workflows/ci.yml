@@ -156,11 +156,23 @@ jobs:
         if: steps.cache-cargo-audit.outputs.cache-hit != 'true'
         run: cargo install cargo-audit --locked
 
+      - name: Install cargo-audit ignore list
+        # `cargo-audit` only reads `~/.cargo/audit.toml` (no project-local
+        # config path is supported). We keep the canonical file inside
+        # `src-tauri/` so it lives near the code and contributors can find
+        # it; this step copies it into the cargo-home location before the
+        # scan. See `src-tauri/audit.toml` for the rationale per ignored ID.
+        run: |
+          mkdir -p ~/.cargo
+          cp src-tauri/audit.toml ~/.cargo/audit.toml
+
       - name: cargo audit
         working-directory: src-tauri
         # `--deny warnings` turns unmaintained / yanked notices into hard
-        # failures too. If a single advisory becomes unactionable, add its
-        # ID via `--ignore RUSTSEC-XXXX-YYYY` here (and note why).
+        # failures too. Advisories we can't act on (transitive deps deep
+        # in the Tauri Linux WebView stack) are listed in
+        # `src-tauri/audit.toml` with a comment per entry; remove them
+        # when Tauri / wry bumps and drops the affected crate.
         run: cargo audit --deny warnings
 
       # ---- JavaScript side ------------------------------------------------
