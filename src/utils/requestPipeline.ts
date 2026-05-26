@@ -27,6 +27,36 @@ export interface PipelineDefaults {
   defaultProxyUrl?: string;
 }
 
+/** Subset of the request store that holds pipeline defaults. We accept
+ *  a plain object so this helper has no dependency on the store module
+ *  and stays unit-testable. */
+export interface PipelineDefaultsSource {
+  defaultTimeoutMs: number;
+  verifyTlsDefault: boolean;
+  maxBodyBytes: number;
+  defaultRedirectPolicy: "follow" | "none" | "manual";
+  defaultMaxRedirects: number;
+  defaultProxyUrl: string;
+}
+
+/** Build a `PipelineDefaults` from the store. Centralizing the field list
+ *  here prevents the "single send honours setting X, runner doesn't"
+ *  class of bug — every caller goes through this one shape, so a new
+ *  default can't be added to the store without showing up everywhere it
+ *  needs to be threaded. */
+export function pipelineDefaultsFrom(
+  source: PipelineDefaultsSource,
+): PipelineDefaults {
+  return {
+    defaultTimeoutMs: source.defaultTimeoutMs,
+    verifyTlsDefault: source.verifyTlsDefault,
+    maxBodyBytes: source.maxBodyBytes,
+    defaultRedirectPolicy: source.defaultRedirectPolicy,
+    defaultMaxRedirects: source.defaultMaxRedirects,
+    defaultProxyUrl: source.defaultProxyUrl,
+  };
+}
+
 /** Everything needed to execute one request end-to-end. */
 export interface PipelineInput {
   request: RequestItem;
