@@ -24,6 +24,17 @@ import { postmanToCollection } from "../utils/postman";
 import { executeRequestWithScripts } from "../utils/requestPipeline";
 import { substituteAll } from "../utils/dynamicVars";
 import { buildScopedVars } from "../utils/variableScope";
+import {
+  createNewFolder,
+  addFolderTo,
+  removeFolder,
+  renameFolder as renameFolderInTree,
+  moveRequest,
+  moveFolder,
+  reorderFoldersInContainer,
+  reorderRequestsInContainer,
+  type NodeContainer,
+} from "../utils/folderTree";
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 15);
@@ -215,6 +226,36 @@ interface RequestState {
   renameRequestInCollection: (collectionId: string, requestId: string, name: string) => Promise<void>;
   reorderCollections: (fromId: string, toId: string) => void;
   reorderRequestsInCollection: (collectionId: string, fromId: string, toId: string) => Promise<void>;
+
+  // === Folders ===
+
+  /** Create a new folder. `parentFolderId === null` places it at the
+   *  collection root, otherwise inside the named folder. */
+  createFolder: (collectionId: string, parentFolderId: string | null, name: string) => Promise<void>;
+  /** Rename a folder anywhere in the collection tree. */
+  renameFolder: (collectionId: string, folderId: string, name: string) => Promise<void>;
+  /** Delete a folder and its entire subtree (matching Postman/Insomnia). */
+  deleteFolder: (collectionId: string, folderId: string) => Promise<void>;
+  /** Move a request to a different container within the same collection.
+   *  Pass `targetFolderId === null` to move it to the collection root. */
+  moveRequestToFolder: (
+    collectionId: string,
+    requestId: string,
+    targetFolderId: string | null,
+  ) => Promise<void>;
+  /** Move a folder (and its subtree) to a different container within the
+   *  same collection. Refuses to move a folder into its own descendant. */
+  moveFolderToFolder: (
+    collectionId: string,
+    folderId: string,
+    targetParentFolderId: string | null,
+  ) => Promise<void>;
+  /** Reorder two folders that share the same parent container. */
+  reorderFoldersInCollection: (
+    collectionId: string,
+    fromFolderId: string,
+    toFolderId: string,
+  ) => Promise<void>;
   importPostmanCollection: (data: unknown) => Promise<void>;
   /** Save a batch of already-built collections (used by every import format). */
   importCollections: (cols: Collection[]) => Promise<void>;
@@ -1016,13 +1057,85 @@ export const useRequestStore = create<RequestState>((set, get) => {
       const { collections } = get();
       const col = collections.find((c) => c.id === collectionId);
       if (!col) return;
-      const from = col.requests.findIndex((r) => r.id === fromId);
-      const to = col.requests.findIndex((r) => r.id === toId);
-      if (from === -1 || to === -1 || from === to) return;
-      const reqs = [...col.requests];
-      const [moved] = reqs.splice(from, 1);
-      reqs.splice(to, 0, moved);
-      const updated = { ...col, requests: reqs, updated_at: Date.now() };
+      // Delegate to the folder-tree helper so reorders also work inside
+      // nested folders (not just at the collection root).
+      const next = reorderRequestsInContainer(col, fromId, toId);
+      if (next === col) return;
+      const updated = { ...next, updated_at: Date.now() };
+      await invoke("save_collection", { collection: updated });
+      set((state) => ({ collections: state.collections.map((c) => (c.id === collectionId ? updated : c)) }));
+    },
+
+    // === Folders ===
+
+    createFolder: async (collectionId, parentFolderId, name) => {
+      const { collections } = get();
+      const col = collections.find((c) => c.id === collectionId);
+      if (!col) return;
+      const folder = createNewFolder(name);
+      const container: NodeContainer =
+        parentFolderId === null ? { kind: "root" } : { kind: "folder", folderId: parentFolderId };
+      const next = addFolderTo(col, container, folder);
+      const updated = { ...next, updated_at: Date.now() };
+      await invoke("save_collection", { collection: updated });
+      set((state) => ({ collections: state.collections.map((c) => (c.id === collectionId ? updated : c)) }));
+    },
+
+    renameFolder: async (collectionId, folderId, name) => {
+      const { collections } = get();
+      const col = collections.find((c) => c.id === collectionId);
+      if (!col) return;
+      const next = renameFolderInTree(col, folderId, name);
+      const updated = { ...next, updated_at: Date.now() };
+      await invoke("save_collection", { collection: updated });
+      set((state) => ({ collections: state.collections.map((c) => (c.id === collectionId ? updated : c)) }));
+    },
+
+    deleteFolder: async (collectionId, folderId) => {
+      const { collections } = get();
+      const col = collections.find((c) => c.id === collectionId);
+      if (!col) return;
+      const next = removeFolder(col, folderId);
+      const updated = { ...next, updated_at: Date.now() };
+      await invoke("save_collection", { collection: updated });
+      set((state) => ({ collections: state.collections.map((c) => (c.id === collectionId ? updated : c)) }));
+    },
+
+    moveRequestToFolder: async (collectionId, requestId, targetFolderId) => {
+      const { collections } = get();
+      const col = collections.find((c) => c.id === collectionId);
+      if (!col) return;
+      const target: NodeContainer =
+        targetFolderId === null ? { kind: "root" } : { kind: "folder", folderId: targetFolderId };
+      const next = moveRequest(col, requestId, target);
+      if (next === col) return;
+      const updated = { ...next, updated_at: Date.now() };
+      await invoke("save_collection", { collection: updated });
+      set((state) => ({ collections: state.collections.map((c) => (c.id === collectionId ? updated : c)) }));
+    },
+
+    moveFolderToFolder: async (collectionId, folderId, targetParentFolderId) => {
+      const { collections } = get();
+      const col = collections.find((c) => c.id === collectionId);
+      if (!col) return;
+      const target: NodeContainer =
+        targetParentFolderId === null
+          ? { kind: "root" }
+          : { kind: "folder", folderId: targetParentFolderId };
+      const next = moveFolder(col, folderId, target);
+      if (next === col) return;
+      const updated = { ...next, updated_at: Date.now() };
+      await invoke("save_collection", { collection: updated });
+      set((state) => ({ collections: state.collections.map((c) => (c.id === collectionId ? updated : c)) }));
+    },
+
+    reorderFoldersInCollection: async (collectionId, fromFolderId, toFolderId) => {
+      const { collections } = get();
+      const col = collections.find((c) => c.id === collectionId);
+      if (!col) return;
+      const next = reorderFoldersInContainer(col, fromFolderId, toFolderId);
+      if (next === col) return;
+      const updated = { ...next, updated_at: Date.now() };
       await invoke("save_collection", { collection: updated });
       set((state) => ({ collections: state.collections.map((c) => (c.id === collectionId ? updated : c)) }));
     },

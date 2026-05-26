@@ -34,7 +34,8 @@
     "enabled": "Enabled",
     "disabled": "Disabled",
     "on": "on",
-    "off": "off"
+    "off": "off",
+    "double_click_to_rename": "Double-click to rename"
   },
   "sidebar": {
     "collections": "Collections",
@@ -59,7 +60,16 @@
     "delete_collection_title": "Delete collection?",
     "delete_collection_message": "Delete collection \"{{name}}\"? All requests and folders inside it will be removed.",
     "import_failed_title": "Import failed",
-    "import_failed_message": "Failed to import collection: {{error}}"
+    "import_failed_message": "Failed to import collection: {{error}}",
+    "new_folder": "New folder",
+    "new_folder_placeholder": "Folder name",
+    "rename_folder": "Rename folder",
+    "delete_folder_title": "Delete folder?",
+    "delete_folder_message": "Delete folder \"{{name}}\" and everything inside it? This cannot be undone.",
+    "save_request_to_folder": "Save current request here",
+    "no_collections": "No collections yet",
+    "empty_folder": "Empty",
+    "drop_to_root": "Drop here to move to collection root"
   },
   "workspace": {
     "workspace": "Workspace",
