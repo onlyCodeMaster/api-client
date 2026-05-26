@@ -97,12 +97,22 @@ npm run tauri build
 
 Produces a native installer in `src-tauri/target/release/bundle/`.
 
-### Type-check / Rust check
+### Type-check, lint, test
 
 ```bash
-npm run build               # tsc + vite build
-(cd src-tauri && cargo check)
+npm run typecheck             # tsc --noEmit
+npm run lint                  # eslint .
+npm test                      # vitest run (frontend utils)
+npm run build                 # tsc + vite build
+(cd src-tauri && cargo check) # Rust check
+(cd src-tauri && cargo test --lib)   # Rust unit tests
+(cd src-tauri && cargo clippy --no-deps) # Rust lint (advisory)
 ```
+
+All of the above run on every PR via [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+Pushing a `v*` tag (or running the **Release** workflow manually) triggers
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which builds
+macOS / Linux / Windows bundles and attaches them to a draft GitHub Release.
 
 ---
 
