@@ -38,6 +38,8 @@ import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { MockServerPanel } from "./MockServerPanel";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { tagColor } from "../utils/tagColor";
+import { applyTheme } from "../utils/theme";
+import { useDarkMode } from "../utils/useDarkMode";
 
 /** Heuristic format sniffers used by `handleImportFile`. */
 function isHar(d: unknown): boolean {
@@ -90,27 +92,15 @@ export function Sidebar() {
     { kind: "global" } | { kind: "collection"; collectionId: string } | null
   >(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [dark, setDark] = useState<boolean>(() => {
-    const saved = localStorage.getItem("theme");
-    if (saved === "dark") return true;
-    if (saved === "light") return false;
-    return window.matchMedia("(prefers-color-scheme: dark)").matches;
-  });
+  // `dark` is driven by the central `useDarkMode` observer so anything else
+  // that changes the theme (Settings panel, future system listeners, etc.)
+  // keeps this toggle in sync without manual wiring.
+  const dark = useDarkMode();
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
   const toggleDark = () => {
-    const next = !dark;
-    setDark(next);
-    document.documentElement.classList.toggle("dark", next);
-    localStorage.setItem("theme", next ? "dark" : "light");
+    applyTheme(!dark);
   };
-
-  // Keep <html class="dark"> in sync with the resolved theme. Initial state
-  // is computed from localStorage / the OS preference in the useState lazy
-  // initializer above, so this effect only synchronizes the DOM (no setState).
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", dark);
-  }, [dark]);
 
   // Close the environment dropdown when clicking outside of it
   useEffect(() => {
@@ -124,6 +114,15 @@ export function Sidebar() {
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
   }, [showEnvDropdown]);
+
+  // Bridge for the global Cmd/Ctrl+, shortcut: App.tsx dispatches this event
+  // so any panel that owns modal state can react. Keeping the dispatch path
+  // event-based avoids hoisting `showSettings` into the store.
+  useEffect(() => {
+    const onOpenSettings = () => setShowSettings(true);
+    window.addEventListener("api-client:open-settings", onOpenSettings);
+    return () => window.removeEventListener("api-client:open-settings", onOpenSettings);
+  }, []);
 
   const {
     history,

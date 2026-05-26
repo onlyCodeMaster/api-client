@@ -5,7 +5,12 @@ import "./index.css";
 // Side-effect import: registers translations and sets the initial locale
 // before any component reads `useTranslation()`.
 import "./i18n";
+import { applyInitialTheme } from "./utils/theme";
 import { installE2EMockIPC, isE2EMode } from "./utils/e2eMockTauri";
+
+// Resolve the saved/preferred theme BEFORE React mounts so we never flash
+// the wrong palette during initial paint.
+applyInitialTheme();
 
 // E2E mode (Playwright opt-in via `?e2e=1`): swap the Tauri IPC out for an
 // in-process mock BEFORE React mounts so the store's `initialize()` sees
