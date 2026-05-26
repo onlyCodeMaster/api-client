@@ -37,7 +37,7 @@ import { VariableScopeModal } from "./VariableScopeModal";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { MockServerPanel } from "./MockServerPanel";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { tagColor } from "../utils/tagColor";
+import { CollectionTreeView } from "./CollectionTree";
 import { applyTheme } from "../utils/theme";
 import { useDarkMode } from "../utils/useDarkMode";
 
@@ -80,7 +80,6 @@ export function Sidebar() {
   const [showSettings, setShowSettings] = useState(false);
   const [showMockServer, setShowMockServer] = useState(false);
   const [renamingCollection, setRenamingCollection] = useState<string | null>(null);
-  const [renamingRequest, setRenamingRequest] = useState<{ colId: string; reqId: string } | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [deletingCollection, setDeletingCollection] = useState<{ id: string; name: string } | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
@@ -137,13 +136,9 @@ export function Sidebar() {
     addCollection,
     deleteCollection,
     renameCollection,
-    renameRequestInCollection,
-    loadRequestFromCollection,
-    deleteRequestFromCollection,
     addRequestToCollection,
     reorderHistory,
     reorderCollections,
-    reorderRequestsInCollection,
     importPostmanCollection,
     importCollections,
     setActiveEnvironment,
@@ -178,20 +173,6 @@ export function Sidebar() {
       await renameCollection(renamingCollection, n);
     }
     setRenamingCollection(null);
-    setRenameValue("");
-  };
-
-  const startRenameRequest = (colId: string, reqId: string, currentName: string) => {
-    setRenamingRequest({ colId, reqId });
-    setRenameValue(currentName);
-  };
-
-  const commitRenameRequest = async () => {
-    const n = renameValue.trim();
-    if (renamingRequest && n) {
-      await renameRequestInCollection(renamingRequest.colId, renamingRequest.reqId, n);
-    }
-    setRenamingRequest(null);
     setRenameValue("");
   };
 
@@ -523,7 +504,7 @@ export function Sidebar() {
               {collections.map((collection) => (
                 <div
                   key={collection.id}
-                  draggable={!renamingCollection && !renamingRequest}
+                  draggable={!renamingCollection}
                   onDragStart={() => setDraggingId(collection.id)}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
@@ -648,99 +629,10 @@ export function Sidebar() {
                       <Plus size={11} className="text-accent" />
                     </button>
                   </div>
-                  {collection.requests.map((item) => (
-                    <div
-                      key={item.id}
-                      draggable={!renamingRequest}
-                      onDragStart={(e) => {
-                        e.stopPropagation();
-                        setDraggingId(`${collection.id}::${item.id}`);
-                      }}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (draggingId && draggingId.startsWith(`${collection.id}::`)) {
-                          const [, fromId] = draggingId.split("::");
-                          if (fromId) reorderRequestsInCollection(collection.id, fromId, item.id);
-                        }
-                        setDraggingId(null);
-                      }}
-                      className="group flex items-center gap-2.5 px-2.5 py-[7px] ml-2 rounded-lg hover:bg-black/[0.04] cursor-pointer transition-colors"
-                      onClick={() => loadRequestFromCollection(collection.id, item.id)}
-                    >
-                      <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-md shrink-0 ${METHOD_BADGE[item.method] || ""}`}>
-                        {item.method}
-                      </span>
-                      {renamingRequest?.colId === collection.id && renamingRequest?.reqId === item.id ? (
-                        <input
-                          type="text"
-                          value={renameValue}
-                          onChange={(e) => setRenameValue(e.target.value)}
-                          onClick={(e) => e.stopPropagation()}
-                          onBlur={commitRenameRequest}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") commitRenameRequest();
-                            if (e.key === "Escape") {
-                              setRenamingRequest(null);
-                              setRenameValue("");
-                            }
-                          }}
-                          className="flex-1 bg-surface text-text-primary px-1.5 py-0.5 rounded text-[12px]"
-                          autoFocus
-                        />
-                      ) : (
-                        <span
-                          className="text-[12px] text-text-secondary truncate flex-1"
-                          onDoubleClick={(e) => {
-                            e.stopPropagation();
-                            startRenameRequest(collection.id, item.id, item.name);
-                          }}
-                          title="Double-click to rename"
-                        >
-                          {item.name || item.url || "Untitled"}
-                        </span>
-                      )}
-                      {item.tags && item.tags.length > 0 && (
-                        <span
-                          className="flex items-center gap-0.5 shrink-0"
-                          title={item.tags.join(", ")}
-                        >
-                          {item.tags.slice(0, 3).map((t) => {
-                            const c = tagColor(t);
-                            return (
-                              <span
-                                key={t}
-                                className={`inline-block w-1.5 h-1.5 rounded-full ${c.bg.replace("/15", "")}`}
-                              />
-                            );
-                          })}
-                        </span>
-                      )}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          startRenameRequest(collection.id, item.id, item.name);
-                        }}
-                        className="opacity-0 group-hover:opacity-100 p-1 hover:bg-accent/10 rounded-md transition-all"
-                        title="Rename request"
-                      >
-                        <Pencil size={11} className="text-text-tertiary" />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteRequestFromCollection(collection.id, item.id);
-                        }}
-                        className="opacity-0 group-hover:opacity-100 p-1 hover:bg-error/10 rounded-md transition-all"
-                      >
-                        <Trash2 size={11} className="text-error/70" />
-                      </button>
-                    </div>
-                  ))}
+                  <CollectionTreeView
+                    collection={collection}
+                    activeRequestId={activeRequestId}
+                  />
                 </div>
               ))}
             </div>

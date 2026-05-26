@@ -34,7 +34,8 @@
     "enabled": "已启用",
     "disabled": "已禁用",
     "on": "开",
-    "off": "关"
+    "off": "关",
+    "double_click_to_rename": "双击重命名"
   },
   "sidebar": {
     "collections": "集合",
@@ -59,7 +60,16 @@
     "delete_collection_title": "删除集合？",
     "delete_collection_message": "删除集合 \"{{name}}\" 吗？集合下的所有请求和文件夹都将被移除。",
     "import_failed_title": "导入失败",
-    "import_failed_message": "导入集合失败：{{error}}"
+    "import_failed_message": "导入集合失败：{{error}}",
+    "new_folder": "新建文件夹",
+    "new_folder_placeholder": "文件夹名称",
+    "rename_folder": "重命名文件夹",
+    "delete_folder_title": "删除文件夹？",
+    "delete_folder_message": "删除文件夹 \"{{name}}\" 及其内部所有内容？此操作不可撤销。",
+    "save_request_to_folder": "把当前请求保存到这里",
+    "no_collections": "尚无集合",
+    "empty_folder": "空",
+    "drop_to_root": "拖到此处移到集合根目录"
   },
   "workspace": {
     "workspace": "工作区",
