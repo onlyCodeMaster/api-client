@@ -243,7 +243,7 @@ export function Sidebar() {
   };
 
   return (
-    <div className="w-64 bg-sidebar backdrop-blur-xl border-r border-border-light flex flex-col h-full">
+    <div className="w-full bg-sidebar backdrop-blur-xl border-r border-border-light flex flex-col h-full">
       {/* Drag region + title */}
       <div className="pt-5 px-4 pb-3">
         <div className="flex items-center justify-between mb-3">

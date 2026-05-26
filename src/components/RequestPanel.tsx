@@ -1,13 +1,15 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { Send, XCircle, Copy, FileDown, Check, Code2, Timer, Cable, Radio, ShieldCheck, ShieldAlert, Globe, Lock, ArrowRightCircle, Tag, X } from "lucide-react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { useRequestStore } from "../store/useRequestStore";
 import { KeyValueEditor } from "./KeyValueEditor";
 import { CodegenModal } from "./CodegenModal";
 import { AuthEditor } from "./AuthEditor";
+import { VariablePreview } from "./VariablePreview";
 import { exportCurl, parseCurl } from "../utils/curl";
 import { describeInherited } from "../utils/auth";
 import { tagColor } from "../utils/tagColor";
+import { buildScopedVars } from "../utils/variableScope";
 import type { HttpMethod } from "../types";
 
 const METHODS: HttpMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
@@ -108,7 +110,24 @@ export function RequestPanel() {
   const headerCount = activeRequest.headers.filter((h) => h.key).length;
   const currentAuth = activeRequest.auth || { auth_type: "none" as const };
   const collections = useRequestStore((s) => s.collections);
+  const environments = useRequestStore((s) => s.environments);
+  const workspace = useRequestStore((s) => s.workspace);
   const inheritedDescription = describeInherited(activeRequest, collections);
+
+  /** Variable lookup table used by the preview tooltip. Mirrors what
+   *  `requestPipeline` builds at send time so the preview matches what
+   *  the user will actually send (modulo transient script overrides which
+   *  aren't known until pre-scripts run). */
+  const scopedVars = useMemo(
+    () =>
+      buildScopedVars({
+        workspace,
+        collections,
+        environments,
+        request: activeRequest,
+      }),
+    [workspace, collections, environments, activeRequest],
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -253,6 +272,8 @@ export function RequestPanel() {
           }
           className="input-apple flex-1"
         />
+
+        <VariablePreview value={activeRequest.url} vars={scopedVars} />
 
         {!isStreaming && (
           loading ? (

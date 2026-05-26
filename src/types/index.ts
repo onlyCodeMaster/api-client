@@ -151,6 +151,15 @@ export interface ScriptRunOutcome {
   logs: ScriptLog[];
 }
 
+/** Phased breakdown of a response's wall-clock time. Reqwest can't give us
+ *  DNS / TCP / TLS individually without a custom connector; for now we ship
+ *  the two-phase split (wait until headers arrived, then body download). */
+export interface ResponseTimings {
+  wait_ms: number;
+  download_ms: number;
+  total_ms: number;
+}
+
 export interface ResponseData {
   status: number;
   status_text: string;
@@ -162,6 +171,8 @@ export interface ResponseData {
   body_truncated: boolean;
   time_ms: number;
   size_bytes: number;
+  /** Phase breakdown. Optional on legacy responses. */
+  timings?: ResponseTimings;
 }
 
 /** In-memory snapshot of a response kept for diffing against newer responses. */

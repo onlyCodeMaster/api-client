@@ -221,6 +221,10 @@ interface RequestState {
   refreshEnvironments: () => Promise<void>;
   setActiveEnvironment: (id: string | null) => void;
 
+  /** Patch the workspace's window_state and persist (debounced via
+   *  caller's responsibility — caller is expected to commit on drag end). */
+  setWindowState: (patch: Partial<NonNullable<Workspace["window_state"]>>) => void;
+
   // Cookies
   refreshCookies: () => Promise<void>;
   deleteCookie: (id: string) => Promise<void>;
@@ -1035,6 +1039,17 @@ export const useRequestStore = create<RequestState>((set, get) => {
       set((state) => ({
         workspace: state.workspace ? { ...state.workspace, active_environment_id: id ?? undefined } : null,
       }));
+      get().saveWorkspaceState();
+    },
+
+    setWindowState: (patch) => {
+      set((state) => {
+        if (!state.workspace) return state;
+        const next = { ...(state.workspace.window_state ?? {}), ...patch };
+        return {
+          workspace: { ...state.workspace, window_state: next },
+        };
+      });
       get().saveWorkspaceState();
     },
 
