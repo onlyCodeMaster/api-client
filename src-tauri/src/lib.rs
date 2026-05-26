@@ -145,6 +145,12 @@ pub struct ActiveRequests {
     map: Mutex<HashMap<String, CancellationToken>>,
 }
 
+impl Default for ActiveRequests {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ActiveRequests {
     pub fn new() -> Self {
         Self {
@@ -162,6 +168,12 @@ impl ActiveRequests {
 /// so memory usage is bounded by the largest single response per request slot.
 pub struct CachedBodies {
     map: Mutex<HashMap<String, bytes::Bytes>>,
+}
+
+impl Default for CachedBodies {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CachedBodies {
@@ -185,6 +197,12 @@ impl CachedBodies {
 /// the cookies they were started with, which is the correct semantic.
 pub struct AppCookies {
     jar: std::sync::RwLock<Arc<Jar>>,
+}
+
+impl Default for AppCookies {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AppCookies {

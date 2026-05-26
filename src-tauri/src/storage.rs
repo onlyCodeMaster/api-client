@@ -298,42 +298,42 @@ fn sanitize_auth(auth: &mut Option<AuthConfig>, scope_id: &str) {
 
 fn hydrate_auth(auth: &mut Option<AuthConfig>, scope_id: &str) {
     let Some(a) = auth.as_mut() else { return };
-    if a.bearer_token.as_deref().map_or(true, str::is_empty) {
+    if a.bearer_token.as_deref().is_none_or(str::is_empty) {
         if let Ok(Some(v)) = secrets::get_auth_secret(scope_id, AUTH_BEARER) {
             a.bearer_token = Some(v);
         }
     }
-    if a.basic_password.as_deref().map_or(true, str::is_empty) {
+    if a.basic_password.as_deref().is_none_or(str::is_empty) {
         if let Ok(Some(v)) = secrets::get_auth_secret(scope_id, AUTH_BASIC_PWD) {
             a.basic_password = Some(v);
         }
     }
-    if a.api_key_value.as_deref().map_or(true, str::is_empty) {
+    if a.api_key_value.as_deref().is_none_or(str::is_empty) {
         if let Ok(Some(v)) = secrets::get_auth_secret(scope_id, AUTH_API_KEY_VALUE) {
             a.api_key_value = Some(v);
         }
     }
-    if a.oauth2_client_secret.as_deref().map_or(true, str::is_empty) {
+    if a.oauth2_client_secret.as_deref().is_none_or(str::is_empty) {
         if let Ok(Some(v)) = secrets::get_auth_secret(scope_id, AUTH_OAUTH2_CLIENT_SECRET) {
             a.oauth2_client_secret = Some(v);
         }
     }
-    if a.oauth2_password.as_deref().map_or(true, str::is_empty) {
+    if a.oauth2_password.as_deref().is_none_or(str::is_empty) {
         if let Ok(Some(v)) = secrets::get_auth_secret(scope_id, AUTH_OAUTH2_PASSWORD) {
             a.oauth2_password = Some(v);
         }
     }
-    if a.oauth2_access_token.as_deref().map_or(true, str::is_empty) {
+    if a.oauth2_access_token.as_deref().is_none_or(str::is_empty) {
         if let Ok(Some(v)) = secrets::get_auth_secret(scope_id, AUTH_OAUTH2_ACCESS_TOKEN) {
             a.oauth2_access_token = Some(v);
         }
     }
-    if a.aws_secret_access_key.as_deref().map_or(true, str::is_empty) {
+    if a.aws_secret_access_key.as_deref().is_none_or(str::is_empty) {
         if let Ok(Some(v)) = secrets::get_auth_secret(scope_id, AUTH_AWS_SECRET_KEY) {
             a.aws_secret_access_key = Some(v);
         }
     }
-    if a.aws_session_token.as_deref().map_or(true, str::is_empty) {
+    if a.aws_session_token.as_deref().is_none_or(str::is_empty) {
         if let Ok(Some(v)) = secrets::get_auth_secret(scope_id, AUTH_AWS_SESSION_TOKEN) {
             a.aws_session_token = Some(v);
         }
@@ -560,7 +560,7 @@ pub fn list_collections(workspace_id: Option<&str>) -> Result<Vec<CollectionFile
         }
     }
 
-    collections.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    collections.sort_by_key(|c| std::cmp::Reverse(c.updated_at));
     Ok(collections)
 }
 
@@ -739,7 +739,7 @@ pub fn list_workspaces() -> Result<Vec<WorkspaceFile>, String> {
             }
         }
     }
-    workspaces.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    workspaces.sort_by_key(|a| a.created_at);
     Ok(workspaces)
 }
 

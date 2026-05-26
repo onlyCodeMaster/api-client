@@ -79,11 +79,9 @@ jobs:
         working-directory: src-tauri
         run: cargo check --locked
 
-      - name: cargo clippy (advisory)
+      - name: cargo clippy
         working-directory: src-tauri
-        # Clippy currently flags pre-existing style issues; run it for
-        # visibility but don't block the build until a cleanup pass lands.
-        run: cargo clippy --no-deps || true
+        run: cargo clippy --no-deps -- -D warnings
 
       - name: cargo test
         working-directory: src-tauri

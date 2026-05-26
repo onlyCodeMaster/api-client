@@ -126,11 +126,9 @@ fn process_line(line: &str, builder: &mut EventBuilder) -> bool {
     match field {
         "event" => builder.event_type = Some(value.to_string()),
         "data" => builder.data.push(value.to_string()),
-        "id" => {
-            // Per spec, ignore IDs containing NULs.
-            if !value.contains('\0') {
-                builder.last_id = Some(value.to_string());
-            }
+        // Per spec, ignore IDs containing NULs.
+        "id" if !value.contains('\0') => {
+            builder.last_id = Some(value.to_string());
         }
         "retry" => {
             if let Ok(ms) = value.parse::<u64>() {
