@@ -7,6 +7,8 @@ import { KeyValueEditor } from "./KeyValueEditor";
 import { CodegenModal } from "./CodegenModal";
 import { AuthEditor } from "./AuthEditor";
 import { VariablePreview } from "./VariablePreview";
+import { CodeEditor } from "./CodeEditor";
+import type { CodeLanguage } from "./CodeEditor";
 import { exportCurl, parseCurl } from "../utils/curl";
 import { describeInherited } from "../utils/auth";
 import { tagColor } from "../utils/tagColor";
@@ -14,6 +16,21 @@ import { buildScopedVars } from "../utils/variableScope";
 import type { HttpMethod } from "../types";
 
 const METHODS: HttpMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+
+function bodyTypeToLanguage(bodyType: string): CodeLanguage {
+  switch (bodyType) {
+    case "json":
+      return "json";
+    case "xml":
+      return "xml";
+    case "html":
+      return "html";
+    case "javascript":
+      return "javascript";
+    default:
+      return "plain";
+  }
+}
 
 const METHOD_COLORS: Record<HttpMethod, string> = {
   GET: "text-success",
@@ -365,36 +382,36 @@ export function RequestPanel() {
             {activeRequest.bodyType === "graphql" && (
               <div className="space-y-2">
                 <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Query</label>
-                <textarea
+                <CodeEditor
                   value={activeRequest.graphqlQuery || ""}
-                  onChange={(e) => setGraphqlQuery(e.target.value)}
+                  onChange={setGraphqlQuery}
+                  language="graphql"
+                  height={160}
                   placeholder={"query Example {\n  field\n}"}
-                  className="input-apple w-full h-32 font-mono text-[12px] resize-none leading-relaxed"
-                  spellCheck={false}
                 />
                 <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">Variables (JSON)</label>
-                <textarea
+                <CodeEditor
                   value={activeRequest.graphqlVariables || ""}
-                  onChange={(e) => setGraphqlVariables(e.target.value)}
+                  onChange={setGraphqlVariables}
+                  language="json"
+                  height={120}
                   placeholder={'{\n  "id": 1\n}'}
-                  className="input-apple w-full h-24 font-mono text-[12px] resize-none leading-relaxed"
-                  spellCheck={false}
                 />
               </div>
             )}
             {activeRequest.bodyType !== "none" &&
               activeRequest.bodyType !== "form-data" &&
               activeRequest.bodyType !== "graphql" && (
-                <textarea
+                <CodeEditor
                   value={activeRequest.body}
-                  onChange={(e) => setBody(e.target.value)}
+                  onChange={setBody}
+                  language={bodyTypeToLanguage(activeRequest.bodyType)}
+                  height={220}
                   placeholder={
                     activeRequest.bodyType === "json"
                       ? '{\n  "key": "value"\n}'
                       : "Enter request body..."
                   }
-                  className="input-apple w-full h-40 font-mono text-[12px] resize-none leading-relaxed"
-                  spellCheck={false}
                 />
               )}
           </div>
@@ -419,16 +436,16 @@ export function RequestPanel() {
               <code className="text-text-secondary">pm.variables.set(k, v)</code>. Script is
               terminated after 5s.
             </p>
-            <textarea
+            <CodeEditor
               value={activeRequest.preScript ?? ""}
-              onChange={(e) => setPreScript(e.target.value)}
-              spellCheck={false}
+              onChange={setPreScript}
+              language="javascript"
+              height={300}
               placeholder={
                 "// Example: stamp every request with a fresh token\n" +
                 "pm.environment.set('ts', String(Date.now()));\n" +
                 "pm.variables.set('nonce', Math.random().toString(36).slice(2));"
               }
-              className="w-full h-72 bg-bg-secondary border border-border rounded px-3 py-2 text-[12px] font-mono leading-relaxed resize-none focus:outline-none focus:border-accent"
             />
           </div>
         )}
@@ -441,10 +458,11 @@ export function RequestPanel() {
               <code className="text-text-secondary">pm.expect(...)</code>. Results show in the
               response panel.
             </p>
-            <textarea
+            <CodeEditor
               value={activeRequest.testScript ?? ""}
-              onChange={(e) => setTestScript(e.target.value)}
-              spellCheck={false}
+              onChange={setTestScript}
+              language="javascript"
+              height={300}
               placeholder={
                 "// Example assertions\n" +
                 "pm.test('responds with 200', () => {\n" +
@@ -455,7 +473,6 @@ export function RequestPanel() {
                 "  pm.expect(json).to.have.property('id');\n" +
                 "});"
               }
-              className="w-full h-72 bg-bg-secondary border border-border rounded px-3 py-2 text-[12px] font-mono leading-relaxed resize-none focus:outline-none focus:border-accent"
             />
           </div>
         )}
