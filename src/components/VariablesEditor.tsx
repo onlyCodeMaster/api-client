@@ -155,7 +155,10 @@ function VariableRow({
             placeholder={t("env.value_placeholder")}
             spellCheck={false}
             className="input-apple w-full text-[12px] py-1 font-mono"
-            title={variable.value}
+            // Don't leak masked secrets through the native browser tooltip.
+            // When a secret is hidden the input shows dots; without this
+            // guard a hover on the field would still reveal the plaintext.
+            title={variable.is_secret && !showValue ? undefined : variable.value}
           />
         )}
       </div>
