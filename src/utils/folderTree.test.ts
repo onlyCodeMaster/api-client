@@ -11,7 +11,9 @@ import {
   moveFolder,
   moveRequest,
   removeFolder,
+  removeRequest,
   renameFolder,
+  renameRequest,
   reorderFoldersInContainer,
   reorderRequestsInContainer,
   takeFolder,
@@ -133,6 +135,61 @@ describe("addFolderTo / addRequestTo", () => {
     const col = makeCollection({ folders: [makeFolder("f1")] });
     const next = addRequestTo(col, { kind: "folder", folderId: "f1" }, makeRequest("r1"));
     expect(next.folders[0].requests.map((r) => r.id)).toEqual(["r1"]);
+  });
+});
+
+describe("removeRequest", () => {
+  it("removes a request from the root", () => {
+    const col = makeCollection({
+      requests: [makeRequest("r1"), makeRequest("r2")],
+    });
+    const next = removeRequest(col, "r1");
+    expect(next.requests.map((r) => r.id)).toEqual(["r2"]);
+  });
+  it("removes a request from inside a nested folder", () => {
+    const col = makeCollection({
+      folders: [
+        makeFolder("f1", "F1", {
+          requests: [makeRequest("r1")],
+          folders: [
+            makeFolder("f2", "F2", {
+              requests: [makeRequest("r2"), makeRequest("r3")],
+            }),
+          ],
+        }),
+      ],
+    });
+    const next = removeRequest(col, "r2");
+    expect(next.folders[0].folders[0].requests.map((r) => r.id)).toEqual(["r3"]);
+    // Other branches untouched.
+    expect(next.folders[0].requests.map((r) => r.id)).toEqual(["r1"]);
+  });
+});
+
+describe("renameRequest", () => {
+  it("renames a request at the root", () => {
+    const col = makeCollection({ requests: [makeRequest("r1", "Old")] });
+    const next = renameRequest(col, "r1", "New");
+    expect(next.requests[0].name).toBe("New");
+    expect(next.requests[0].updated_at).toBeGreaterThanOrEqual(col.requests[0].updated_at);
+  });
+  it("renames a request inside a nested folder", () => {
+    const col = makeCollection({
+      folders: [
+        makeFolder("f1", "F1", {
+          folders: [
+            makeFolder("f2", "F2", { requests: [makeRequest("r1", "Old")] }),
+          ],
+        }),
+      ],
+    });
+    const next = renameRequest(col, "r1", "New");
+    expect(next.folders[0].folders[0].requests[0].name).toBe("New");
+  });
+  it("is a no-op if the id is missing", () => {
+    const col = makeCollection({ requests: [makeRequest("r1", "Old")] });
+    const next = renameRequest(col, "missing", "New");
+    expect(next.requests[0].name).toBe("Old");
   });
 });
 
