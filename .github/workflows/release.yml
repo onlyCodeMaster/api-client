@@ -22,9 +22,15 @@ jobs:
         platform:
           # macOS: ship two arch-specific bundles so Apple Silicon users
           # get a native arm64 build (smaller download, no Rosetta) and
-          # Intel Macs still get a compatible x86_64 build.
+          # Intel Macs still get a compatible x86_64 build. Both bundles
+          # are built on Apple Silicon runners (`macos-14`) because the
+          # Intel `macos-13` hosted image has reached end of life and
+          # jobs targeting it now hang indefinitely waiting for a
+          # runner. The Apple Silicon runner ships the full universal
+          # macOS SDK, so cross-compiling x86_64 from arm64 works
+          # natively via the `x86_64-apple-darwin` Rust target.
           - { os-name: macOS (Apple Silicon), runner: macos-14,     rust-target: aarch64-apple-darwin, args: "--target aarch64-apple-darwin" }
-          - { os-name: macOS (Intel),         runner: macos-13,     rust-target: x86_64-apple-darwin,  args: "--target x86_64-apple-darwin" }
+          - { os-name: macOS (Intel),         runner: macos-14,     rust-target: x86_64-apple-darwin,  args: "--target x86_64-apple-darwin" }
           - { os-name: Linux (x86_64),        runner: ubuntu-22.04, rust-target: "",                    args: "" }
           - { os-name: Windows (x86_64),      runner: windows-latest, rust-target: "",                  args: "" }
     steps:
