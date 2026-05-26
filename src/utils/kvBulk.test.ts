@@ -89,4 +89,58 @@ describe("parseKeyValues", () => {
       { key: "B", value: "2", enabled: true },
     ]);
   });
+
+  it("prefers `:` over `=` when the key itself contains `=`", () => {
+    // Regression: previously `body.search(/[:=]/)` took the leftmost of the
+    // two separators, so `a=b: value` was parsed as `key="a"`, `value="b: value"`
+    // — corrupting any form field whose name legitimately contained `=`.
+    const out = parseKeyValues("a=b: value");
+    expect(stripIds(out)).toEqual([
+      { key: "a=b", value: "value", enabled: true },
+    ]);
+  });
+
+  it("falls back to `=` only when there is no `:` on the line", () => {
+    const out = parseKeyValues("foo=bar=baz");
+    expect(stripIds(out)).toEqual([
+      { key: "foo", value: "bar=baz", enabled: true },
+    ]);
+  });
+
+  it("round-trips a key containing `=` without corrupting it", () => {
+    const original: KeyValue[] = [
+      { id: "a", key: "a=b", value: "value", enabled: true },
+    ];
+    const text = serializeKeyValues(original);
+    const reparsed = parseKeyValues(text);
+    expect(stripIds(reparsed)).toEqual(stripIds(original));
+  });
+
+  it("keeps `:` inside an `=`-separated value (e.g. a URL)", () => {
+    // Regression for PR-D-1.1 first attempt: unconditionally preferring
+    // `:` over `=` broke values like URLs that contain a `:` after the
+    // `=` separator. Anchoring on `": "` (colon-space) avoids both pitfalls.
+    const out = parseKeyValues("redirect_uri=https://example.com/callback");
+    expect(stripIds(out)).toEqual([
+      {
+        key: "redirect_uri",
+        value: "https://example.com/callback",
+        enabled: true,
+      },
+    ]);
+  });
+
+  it("still parses `:` as separator when there is no space after it", () => {
+    const out = parseKeyValues("Auth:Bearer abc");
+    expect(stripIds(out)).toEqual([
+      { key: "Auth", value: "Bearer abc", enabled: true },
+    ]);
+  });
+
+  it("handles `key:` with no value (no space after colon)", () => {
+    const out = parseKeyValues("X-Trailer:");
+    expect(stripIds(out)).toEqual([
+      { key: "X-Trailer", value: "", enabled: true },
+    ]);
+  });
 });
