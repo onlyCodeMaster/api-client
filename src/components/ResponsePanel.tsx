@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Copy, Check, ArrowUpRight, Search, X, Download, AlertTriangle, FileQuestion, GitCompare, ListTree, FileCode2 } from "lucide-react";
+import { Copy, Check, ArrowUpRight, Search, X, Download, AlertTriangle, FileQuestion, GitCompare, ListTree, FileCode2, Filter } from "lucide-react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { JsonView, defaultStyles, darkStyles } from "react-json-view-lite";
@@ -7,6 +7,7 @@ import "react-json-view-lite/dist/index.css";
 import { useDarkMode } from "../utils/useDarkMode";
 import { useRequestStore } from "../store/useRequestStore";
 import { ResponseDiffModal } from "./ResponseDiffModal";
+import { evaluateJsonPath } from "../utils/jsonPath";
 
 type ResponseTab = "body" | "headers" | "tests";
 
@@ -144,6 +145,11 @@ export function ResponsePanel() {
   // tree. Only meaningful when the body is valid JSON; for everything else
   // we fall back to raw regardless of this setting.
   const [bodyView, setBodyView] = useState<"raw" | "tree">("raw");
+  // JSONPath filter applied to the response body before display. Empty
+  // string = show the whole document. Errors during evaluation are caught
+  // and surfaced as a small inline message rather than crashing.
+  const [jsonPath, setJsonPath] = useState("");
+  const [jsonPathOpen, setJsonPathOpen] = useState(false);
   const { response, loading, error, activeRequest, testResults, scriptLogs, scriptError, responseHistory } = useRequestStore();
   const snapshots = activeRequest ? responseHistory[activeRequest.id] ?? [] : [];
   const canDiff = snapshots.length >= 2;
@@ -178,6 +184,35 @@ export function ResponsePanel() {
       return undefined;
     }
   }, [bodyIsJson, response?.body]);
+
+  // Result of applying the active JSONPath filter to the parsed JSON.
+  // `error` is shown inline; `value` feeds both the tree view and (when
+  // serialized) the raw view below.
+  const jsonPathResult = useMemo<{ value: unknown; error: string | null }>(() => {
+    if (!jsonPath.trim() || parsedJson === undefined) {
+      return { value: parsedJson, error: null };
+    }
+    try {
+      return { value: evaluateJsonPath(parsedJson, jsonPath), error: null };
+    } catch (e) {
+      return { value: undefined, error: e instanceof Error ? e.message : String(e) };
+    }
+  }, [jsonPath, parsedJson]);
+
+  /** When the user has typed a JSONPath, render the filtered subtree
+   *  (re-serialized) instead of the original body. Falls back to the
+   *  original body when the path is empty or fails to evaluate. */
+  const displayJson = jsonPath.trim() ? jsonPathResult.value : parsedJson;
+  const displayBody = useMemo(() => {
+    if (!jsonPath.trim()) return formattedBody;
+    if (jsonPathResult.error) return formattedBody;
+    if (jsonPathResult.value === undefined) return "(no match)";
+    try {
+      return JSON.stringify(jsonPathResult.value, null, 2);
+    } catch {
+      return String(jsonPathResult.value);
+    }
+  }, [jsonPath, jsonPathResult, formattedBody]);
 
   // Pick the JSON tree theme that follows the app's current light/dark
   // setting. `useDarkMode` subscribes to the `.dark` class on the document
@@ -284,7 +319,7 @@ export function ResponsePanel() {
         <span className={`px-2 py-[3px] rounded-md text-[11px] font-semibold ${getStatusStyle(response.status)}`}>
           {response.status} {response.status_text}
         </span>
-        <span className="text-[11px] text-text-tertiary">{response.time_ms} ms</span>
+        <TimingPill timeMs={response.time_ms} timings={response.timings} />
         <span className="text-[11px] text-text-tertiary">·</span>
         <span className="text-[11px] text-text-tertiary">{formatSize(response.size_bytes)}</span>
 
@@ -326,17 +361,26 @@ export function ResponsePanel() {
             )}
           </div>
           {activeTab === "body" && bodyIsJson && (
-            <button
-              onClick={() => setBodyView((v) => (v === "raw" ? "tree" : "raw"))}
-              className={`ml-1.5 w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${bodyView === "tree" ? "bg-accent/15" : "hover:bg-black/5"}`}
-              title={bodyView === "tree" ? "Show raw JSON" : "Show JSON tree"}
-            >
-              {bodyView === "tree" ? (
-                <FileCode2 size={14} className="text-accent" />
-              ) : (
-                <ListTree size={14} className="text-text-tertiary" />
-              )}
-            </button>
+            <>
+              <button
+                onClick={() => setJsonPathOpen((v) => !v)}
+                className={`ml-1.5 w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${jsonPathOpen || jsonPath ? "bg-accent/15" : "hover:bg-black/5"}`}
+                title="Filter response with JSONPath"
+              >
+                <Filter size={14} className={jsonPathOpen || jsonPath ? "text-accent" : "text-text-tertiary"} />
+              </button>
+              <button
+                onClick={() => setBodyView((v) => (v === "raw" ? "tree" : "raw"))}
+                className={`ml-1.5 w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${bodyView === "tree" ? "bg-accent/15" : "hover:bg-black/5"}`}
+                title={bodyView === "tree" ? "Show raw JSON" : "Show JSON tree"}
+              >
+                {bodyView === "tree" ? (
+                  <FileCode2 size={14} className="text-accent" />
+                ) : (
+                  <ListTree size={14} className="text-text-tertiary" />
+                )}
+              </button>
+            </>
           )}
           <button
             onClick={() => setSearchOpen((s) => !s)}
@@ -369,6 +413,34 @@ export function ResponsePanel() {
           </button>
         </div>
       </div>
+
+      {/* JSONPath bar */}
+      {jsonPathOpen && activeTab === "body" && bodyIsJson && (
+        <div className="px-4 pb-2">
+          <div className="relative">
+            <Filter size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-tertiary" />
+            <input
+              type="text"
+              value={jsonPath}
+              onChange={(e) => setJsonPath(e.target.value)}
+              placeholder="$.path.to.value  ·  $.items[*].name  ·  $..id"
+              autoFocus
+              className="input-apple w-full text-[12px] py-[5px] pl-8 pr-7 font-mono"
+            />
+            {jsonPath && (
+              <button
+                onClick={() => setJsonPath("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-text-secondary"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+          {jsonPathResult.error && (
+            <div className="mt-1 text-[11px] text-error">{jsonPathResult.error}</div>
+          )}
+        </div>
+      )}
 
       {/* Search bar */}
       {searchOpen && activeTab === "body" && (
@@ -433,23 +505,25 @@ export function ResponsePanel() {
             </pre>
           </div>
         )}
-        {activeTab === "body" && !isBinary && bodyView === "tree" && bodyIsJson && parsedJson !== undefined && (
+        {activeTab === "body" && !isBinary && bodyView === "tree" && bodyIsJson && displayJson !== undefined && (
           <div className="text-[12px] font-mono bg-surface-secondary rounded-apple p-3 overflow-auto json-tree-host">
             <JsonView
-              data={parsedJson as object}
+              data={(typeof displayJson === "object" && displayJson !== null
+                ? displayJson
+                : { value: displayJson }) as object}
               clickToExpandNode
               shouldExpandNode={(level) => level < 2}
               style={treeStyles}
             />
           </div>
         )}
-        {activeTab === "body" && !isBinary && (bodyView === "raw" || !bodyIsJson || parsedJson === undefined) && (
+        {activeTab === "body" && !isBinary && (bodyView === "raw" || !bodyIsJson || displayJson === undefined) && (
           <pre className="text-[12px] font-mono text-text-primary whitespace-pre-wrap break-all leading-[1.65] bg-surface-secondary rounded-apple p-3">
             {searchQuery
               ? highlightedSearchBody
               : bodyIsJson
-              ? highlightJson(formattedBody)
-              : formattedBody}
+              ? highlightJson(displayBody)
+              : displayBody}
           </pre>
         )}
         {activeTab === "headers" && (
@@ -535,6 +609,77 @@ export function ResponsePanel() {
           onClose={() => setDiffOpen(false)}
         />
       )}
+    </div>
+  );
+}
+
+interface TimingPillProps {
+  timeMs: number;
+  timings?: import("../types").ResponseTimings;
+}
+
+/**
+ * Time chip rendered in the response status bar. Shows total ms inline,
+ * reveals a wait/download breakdown on hover (only when the backend
+ * supplied one — responses persisted before this PR don't have it).
+ */
+function TimingPill({ timeMs, timings }: TimingPillProps) {
+  const [open, setOpen] = useState(false);
+  if (!timings) {
+    return <span className="text-[11px] text-text-tertiary">{timeMs} ms</span>;
+  }
+  const { wait_ms, download_ms, total_ms } = timings;
+  const safeTotal = Math.max(total_ms, 1);
+  const waitPct = (wait_ms / safeTotal) * 100;
+  const dlPct = Math.max(0, 100 - waitPct);
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <span className="text-[11px] text-text-tertiary cursor-help underline decoration-dotted underline-offset-2">
+        {total_ms} ms
+      </span>
+      {open && (
+        <div className="absolute left-0 top-full mt-1 w-72 z-40 rounded-apple-lg border border-border-light bg-surface shadow-apple-lg p-3 text-[11px]">
+          <div className="font-semibold text-text-secondary mb-2">Response timing</div>
+          <div className="flex h-2 rounded-full overflow-hidden bg-surface-secondary mb-2">
+            <div className="bg-accent/70" style={{ width: `${waitPct}%` }} />
+            <div className="bg-success/70" style={{ width: `${dlPct}%` }} />
+          </div>
+          <div className="space-y-1">
+            <Row label="Wait (DNS + TCP + TLS + TTFB)" ms={wait_ms} dotClass="bg-accent/70" />
+            <Row label="Download" ms={download_ms} dotClass="bg-success/70" />
+            <div className="border-t border-border-light my-1" />
+            <Row label="Total" ms={total_ms} dotClass="bg-transparent" bold />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Row({
+  label,
+  ms,
+  dotClass,
+  bold,
+}: {
+  label: string;
+  ms: number;
+  dotClass: string;
+  bold?: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className={`inline-block w-2 h-2 rounded-full ${dotClass}`} />
+      <span className={`flex-1 ${bold ? "font-semibold text-text-primary" : "text-text-secondary"}`}>
+        {label}
+      </span>
+      <span className={`font-mono ${bold ? "font-semibold text-text-primary" : "text-text-tertiary"}`}>
+        {ms} ms
+      </span>
     </div>
   );
 }

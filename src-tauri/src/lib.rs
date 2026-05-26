@@ -84,6 +84,22 @@ pub struct RequestPayload {
     pub max_body_bytes: Option<usize>,
 }
 
+/// Phased breakdown of the request's wall-clock time. `total_ms` is what we
+/// previously surfaced as `time_ms`; the new fields split the time between
+/// "everything up to and including the response headers" and "reading the
+/// response body". Reqwest doesn't expose DNS/TCP/TLS individually without
+/// installing a custom connector, so we ship the two-phase split for now;
+/// the frontend renders any zero-valued sub-phase as omitted.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ResponseTimings {
+    /// Time from `send()` start until headers arrived (DNS + TCP + TLS +
+    /// request send + TTFB combined). Postman calls this "wait".
+    pub wait_ms: u64,
+    /// Time to drain the response body once headers arrived.
+    pub download_ms: u64,
+    pub total_ms: u64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ResponseData {
     pub status: u16,
@@ -98,6 +114,8 @@ pub struct ResponseData {
     pub body_truncated: bool,
     pub time_ms: u64,
     pub size_bytes: usize,
+    #[serde(default)]
+    pub timings: ResponseTimings,
 }
 
 /// Heuristic: treat these MIME types as text and decode as UTF-8. Everything
@@ -421,7 +439,10 @@ async fn send_request(
     }
 
     let response = result?;
-    let elapsed = start.elapsed().as_millis() as u64;
+    // Headers have arrived — capture the "wait" phase before we start
+    // draining the body so we can report a real phase split, not just a
+    // single total.
+    let wait_ms = start.elapsed().as_millis() as u64;
 
     let status = response.status().as_u16();
     let status_text = response
@@ -443,10 +464,13 @@ async fn send_request(
         }
     }
 
+    let body_start = Instant::now();
     let body_bytes = response
         .bytes()
         .await
         .map_err(|e| format!("Failed to read body: {}", e))?;
+    let download_ms = body_start.elapsed().as_millis() as u64;
+    let elapsed = start.elapsed().as_millis() as u64;
     let size_bytes = body_bytes.len();
 
     // Truncate before encoding so we don't blow up the IPC channel.
@@ -493,6 +517,11 @@ async fn send_request(
         body_truncated: truncated,
         time_ms: elapsed,
         size_bytes,
+        timings: ResponseTimings {
+            wait_ms,
+            download_ms,
+            total_ms: elapsed,
+        },
     })
 }
 

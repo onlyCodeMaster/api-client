@@ -7,7 +7,11 @@ import { TabBar } from "./components/TabBar";
 import { WsPanel } from "./components/WsPanel";
 import { SsePanel } from "./components/SsePanel";
 import { SearchPalette } from "./components/SearchPalette";
+import { Splitter } from "./components/Splitter";
 import { useRequestStore } from "./store/useRequestStore";
+
+const DEFAULT_SIDEBAR_WIDTH = 256;
+const DEFAULT_REQUEST_PANEL_PCT = 48;
 
 interface WsEvent {
   request_id: string;
@@ -29,7 +33,26 @@ function App() {
   const initialize = useRequestStore((s) => s.initialize);
   const initialized = useRequestStore((s) => s.initialized);
   const activeRequest = useRequestStore((s) => s.activeRequest);
+  const workspace = useRequestStore((s) => s.workspace);
+  const setWindowState = useRequestStore((s) => s.setWindowState);
   const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // Local mirror of the persisted layout numbers so dragging is smooth.
+  // Persistence happens on drag end via setWindowState.
+  const [sidebarWidth, setSidebarWidth] = useState<number>(
+    workspace?.window_state?.sidebar_width ?? DEFAULT_SIDEBAR_WIDTH,
+  );
+  const [reqPanelPct, setReqPanelPct] = useState<number>(
+    workspace?.window_state?.request_panel_height ?? DEFAULT_REQUEST_PANEL_PCT,
+  );
+
+  // Reflect workspace switches (`switchWorkspace` resets these) into local state.
+  useEffect(() => {
+    setSidebarWidth(workspace?.window_state?.sidebar_width ?? DEFAULT_SIDEBAR_WIDTH);
+    setReqPanelPct(
+      workspace?.window_state?.request_panel_height ?? DEFAULT_REQUEST_PANEL_PCT,
+    );
+  }, [workspace?.id]);
 
   useEffect(() => {
     initialize();
@@ -138,13 +161,34 @@ function App() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-bg">
-      <Sidebar />
+      <div style={{ width: sidebarWidth }} className="shrink-0 h-full">
+        <Sidebar />
+      </div>
+      <Splitter
+        orientation="horizontal"
+        initial={sidebarWidth}
+        min={180}
+        max={520}
+        onChange={setSidebarWidth}
+        onCommit={(v) => setWindowState({ sidebar_width: Math.round(v) })}
+      />
       <div className="flex-1 flex flex-col overflow-hidden">
         <TabBar />
         <div className="flex-1 flex flex-col gap-0 p-3 pl-0 h-full">
-          <div className="bg-surface rounded-t-apple-lg shadow-apple overflow-hidden flex flex-col" style={{ height: "48%" }}>
+          <div
+            className="bg-surface rounded-t-apple-lg shadow-apple overflow-hidden flex flex-col"
+            style={{ height: `${reqPanelPct}%` }}
+          >
             <RequestPanel />
           </div>
+          <Splitter
+            orientation="vertical"
+            initial={reqPanelPct}
+            min={20}
+            max={80}
+            onChange={setReqPanelPct}
+            onCommit={(v) => setWindowState({ request_panel_height: Math.round(v) })}
+          />
           <div className="bg-surface rounded-b-apple-lg shadow-apple overflow-hidden flex-1 flex flex-col border-t border-border-light">
             {isWs ? <WsPanel /> : isSse ? <SsePanel /> : <ResponsePanel />}
           </div>
