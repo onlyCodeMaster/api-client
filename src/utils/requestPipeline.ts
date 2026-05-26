@@ -19,6 +19,12 @@ export interface PipelineDefaults {
    *  larger bodies and flags `body_truncated=true`. Optional so older
    *  callers compile; the backend falls back to its 10 MiB default. */
   maxBodyBytes?: number;
+  /** Default redirect policy applied when the request doesn't override it. */
+  defaultRedirectPolicy?: "follow" | "none" | "manual";
+  /** Default redirect cap. */
+  defaultMaxRedirects?: number;
+  /** Default proxy URL. Empty string = no proxy. */
+  defaultProxyUrl?: string;
 }
 
 /** Everything needed to execute one request end-to-end. */
@@ -197,9 +203,14 @@ export async function buildSendPayload(
     timeout_ms: req.timeoutMs ?? defaults.defaultTimeoutMs,
     request_id: req.id,
     verify_tls: req.verifyTls ?? defaults.verifyTlsDefault,
-    redirect_policy: req.redirectPolicy ?? null,
-    max_redirects: req.maxRedirects ?? null,
-    proxy_url: req.proxyUrl?.trim() ? req.proxyUrl.trim() : null,
+    redirect_policy: req.redirectPolicy ?? defaults.defaultRedirectPolicy ?? null,
+    max_redirects:
+      req.maxRedirects ?? defaults.defaultMaxRedirects ?? null,
+    proxy_url: req.proxyUrl?.trim()
+      ? req.proxyUrl.trim()
+      : defaults.defaultProxyUrl?.trim()
+      ? defaults.defaultProxyUrl.trim()
+      : null,
     client_cert:
       req.clientCert && req.clientCert.path
         ? { path: req.clientCert.path, password: req.clientCert.password ?? null }

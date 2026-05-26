@@ -179,6 +179,12 @@ interface RequestState {
    *  SQLite history table. Defaults to 256 KiB so the DB stays bounded
    *  even after thousands of requests. */
   maxHistoryBodyBytes: number;
+  /** Default redirect policy when a request doesn't override it. */
+  defaultRedirectPolicy: "follow" | "none" | "manual";
+  /** Default redirect cap (applies when policy is "follow"). */
+  defaultMaxRedirects: number;
+  /** Default proxy URL when a request doesn't override it. Empty string = no proxy. */
+  defaultProxyUrl: string;
 
   /** Cached response snapshots reconstructed from the history table,
    *  keyed by history entry id. Populated lazily on `initialize` /
@@ -333,6 +339,19 @@ interface RequestState {
   setVerifyTlsDefault: (verify: boolean) => Promise<void>;
   setMaxBodyBytes: (bytes: number) => Promise<void>;
   setMaxHistoryBodyBytes: (bytes: number) => Promise<void>;
+  setDefaultRedirectPolicy: (policy: "follow" | "none" | "manual") => Promise<void>;
+  setDefaultMaxRedirects: (n: number) => Promise<void>;
+  setDefaultProxyUrl: (url: string) => Promise<void>;
+  /** Save the active tab to its source collection (in-place) when it already
+   *  has `collectionId`, or to the named collection/folder otherwise. The
+   *  caller is responsible for prompting the user when there's no source
+   *  collection — this function only persists when the destination is known.
+   *  Returns `true` when a save happened, `false` when the active tab can't
+   *  be saved (no collection picked). */
+  saveActiveRequest: (target?: { collectionId: string; folderId?: string | null }) => Promise<boolean>;
+  /** Clear all entries from a single data store. Used by Settings → Clear data. */
+  clearAllRecent: () => Promise<void>;
+  clearAllCookies: () => Promise<void>;
 
   // Recent opened
   /** Record an item as just-opened and refresh the recents list. */
@@ -453,6 +472,9 @@ export const useRequestStore = create<RequestState>((set, get) => {
     verifyTlsDefault: true,
     maxBodyBytes: 10 * 1024 * 1024,
     maxHistoryBodyBytes: DEFAULT_MAX_HISTORY_BODY_BYTES,
+    defaultRedirectPolicy: "follow",
+    defaultMaxRedirects: 10,
+    defaultProxyUrl: "",
     historyResponses: {},
     recentItems: [],
 
@@ -516,6 +538,29 @@ export const useRequestStore = create<RequestState>((set, get) => {
           }
         } catch {}
 
+        let defaultRedirectPolicy: "follow" | "none" | "manual" = "follow";
+        try {
+          const stored = await invoke<string | null>("get_setting", { key: "default_redirect_policy" });
+          if (stored === "follow" || stored === "none" || stored === "manual") {
+            defaultRedirectPolicy = stored;
+          }
+        } catch {}
+
+        let defaultMaxRedirects = 10;
+        try {
+          const stored = await invoke<string | null>("get_setting", { key: "default_max_redirects" });
+          if (stored) {
+            const v = parseInt(stored, 10);
+            if (Number.isFinite(v) && v >= 0 && v <= 100) defaultMaxRedirects = v;
+          }
+        } catch {}
+
+        let defaultProxyUrl = "";
+        try {
+          const stored = await invoke<string | null>("get_setting", { key: "default_proxy_url" });
+          if (stored) defaultProxyUrl = stored;
+        } catch {}
+
         // Pre-warm the response cache so loadFromHistory can restore without
         // a network call.
         const historyResponses: Record<string, ResponseData> = {};
@@ -552,6 +597,9 @@ export const useRequestStore = create<RequestState>((set, get) => {
           verifyTlsDefault,
           maxBodyBytes,
           maxHistoryBodyBytes,
+          defaultRedirectPolicy,
+          defaultMaxRedirects,
+          defaultProxyUrl,
           historyResponses,
           recentItems,
           tabs,
@@ -824,6 +872,9 @@ export const useRequestStore = create<RequestState>((set, get) => {
             defaultTimeoutMs: get().defaultTimeoutMs,
             verifyTlsDefault: get().verifyTlsDefault,
             maxBodyBytes: get().maxBodyBytes,
+            defaultRedirectPolicy: get().defaultRedirectPolicy,
+            defaultMaxRedirects: get().defaultMaxRedirects,
+            defaultProxyUrl: get().defaultProxyUrl,
           },
         });
       } catch (err) {
@@ -1499,6 +1550,131 @@ export const useRequestStore = create<RequestState>((set, get) => {
         console.error("Failed to persist max history body bytes:", err);
       }
       set({ maxHistoryBodyBytes: bytes });
+    },
+
+    setDefaultRedirectPolicy: async (policy) => {
+      try {
+        await invoke("set_setting", { key: "default_redirect_policy", value: policy });
+      } catch (err) {
+        console.error("Failed to persist default redirect policy:", err);
+      }
+      set({ defaultRedirectPolicy: policy });
+    },
+
+    setDefaultMaxRedirects: async (n) => {
+      try {
+        await invoke("set_setting", { key: "default_max_redirects", value: String(n) });
+      } catch (err) {
+        console.error("Failed to persist default max redirects:", err);
+      }
+      set({ defaultMaxRedirects: n });
+    },
+
+    setDefaultProxyUrl: async (url) => {
+      const trimmed = url.trim();
+      try {
+        await invoke("set_setting", { key: "default_proxy_url", value: trimmed });
+      } catch (err) {
+        console.error("Failed to persist default proxy URL:", err);
+      }
+      set({ defaultProxyUrl: trimmed });
+    },
+
+    saveActiveRequest: async (target) => {
+      const state = get();
+      const req = activeTab(state);
+      if (!req) return false;
+      // Caller-provided target wins; otherwise fall back to whatever
+      // collection this tab was opened from. If neither is known the
+      // caller must show a picker first.
+      const collectionId = target?.collectionId ?? req.collectionId;
+      const folderId = target?.folderId ?? null;
+      if (!collectionId) return false;
+      const col = state.collections.find((c) => c.id === collectionId);
+      if (!col) return false;
+      const now = Date.now();
+      const auth: AuthConfig =
+        req.auth && req.auth.auth_type !== "inherit"
+          ? req.auth
+          : { auth_type: "inherit" };
+      const existing = findRequestInCollection(col, req.id);
+      const updatedReq: CollectionRequest = {
+        id: req.id,
+        name: req.name,
+        method: req.method,
+        url: req.url,
+        headers: req.headers,
+        params: req.params,
+        body: req.body,
+        body_type: req.bodyType,
+        auth,
+        pre_script: req.preScript,
+        test_script: req.testScript,
+        tags: req.tags,
+        created_at: existing?.created_at ?? req.createdAt ?? now,
+        updated_at: now,
+      };
+
+      // Build an updated collection tree, swapping the matching request
+      // wherever it lives (root requests[], or any nested folder).
+      const replaceInFolders = (folders: typeof col.folders): typeof col.folders =>
+        folders.map((f) => ({
+          ...f,
+          requests: f.requests.map((r) => (r.id === updatedReq.id ? updatedReq : r)),
+          folders: replaceInFolders(f.folders),
+        }));
+
+      let updated = {
+        ...col,
+        requests: col.requests.map((r) => (r.id === updatedReq.id ? updatedReq : r)),
+        folders: replaceInFolders(col.folders),
+        updated_at: now,
+      };
+
+      // If the request didn't exist yet anywhere in the tree, append it
+      // to the target location (folder if specified, otherwise root).
+      if (!existing) {
+        if (folderId) {
+          const appendToFolder = (folders: typeof col.folders): typeof col.folders =>
+            folders.map((f) =>
+              f.id === folderId
+                ? { ...f, requests: [...f.requests, updatedReq] }
+                : { ...f, folders: appendToFolder(f.folders) },
+            );
+          updated = { ...updated, folders: appendToFolder(updated.folders) };
+        } else {
+          updated = { ...updated, requests: [...updated.requests, updatedReq] };
+        }
+      }
+
+      await invoke("save_collection", { collection: updated });
+      set((s) => ({
+        ...updateActiveTab(s, { collectionId, auth }),
+        collections: s.collections.map((c) => (c.id === collectionId ? updated : c)),
+      }));
+      return true;
+    },
+
+    clearAllRecent: async () => {
+      try {
+        await invoke("clear_recent");
+      } catch (err) {
+        console.error("Failed to clear recent:", err);
+      }
+      set({ recentItems: [] });
+    },
+
+    clearAllCookies: async () => {
+      const { cookies } = get();
+      const domains = Array.from(new Set(cookies.map((c) => c.domain).filter(Boolean)));
+      for (const domain of domains) {
+        try {
+          await invoke("clear_cookies_by_domain", { domain });
+        } catch (err) {
+          console.error(`Failed to clear cookies for ${domain}:`, err);
+        }
+      }
+      set({ cookies: [] });
     },
 
     // === Recent Opened ===
