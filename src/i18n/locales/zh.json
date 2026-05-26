@@ -1,4 +1,10 @@
 {
+  "time": {
+    "just_now": "刚刚",
+    "minutes_ago": "{{n}} 分钟前",
+    "hours_ago": "{{n}} 小时前",
+    "days_ago": "{{n}} 天前"
+  },
   "common": {
     "ok": "确定",
     "cancel": "取消",
@@ -69,7 +75,10 @@
     "save_request_to_folder": "把当前请求保存到这里",
     "no_collections": "尚无集合",
     "empty_folder": "空",
-    "drop_to_root": "拖到此处移到集合根目录"
+    "drop_to_root": "拖到此处移到集合根目录",
+    "recent": "最近",
+    "recent_empty": "暂无记录",
+    "recent_clear": "清空最近记录"
   },
   "workspace": {
     "workspace": "工作区",
@@ -137,7 +146,11 @@
     "language_english": "English",
     "language_chinese": "简体中文",
     "tls_on": "校验证书(推荐)",
-    "tls_off": "跳过校验 — 存在中间人攻击风险"
+    "tls_off": "跳过校验 — 存在中间人攻击风险",
+    "max_body_bytes": "最大响应体大小",
+    "max_body_bytes_hint": "超过该大小的响应会被截断，但仍会记录完整字节数。范围：1 – 1024 MiB。",
+    "max_history_body_bytes": "最大历史快照大小",
+    "max_history_body_bytes_hint": "每条历史记录保存的响应体上限，超过该值会在入库时被截断以控制本地数据库大小。设为 0 表示不保存响应体。"
   },
   "env": {
     "panel_title": "环境",

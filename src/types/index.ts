@@ -92,6 +92,10 @@ export interface RequestItem {
   redirectPolicy?: "follow" | "none" | "manual";
   /** Cap on redirects when redirectPolicy is "follow". */
   maxRedirects?: number;
+  /** Per-request override for the inline response body cap (bytes). When
+   *  unset, the global setting (Settings → Max response body size) is
+   *  used. Defaults to 10 MiB in the Rust backend. */
+  maxBodyBytes?: number;
   /** Outbound proxy URL (http/https/socks5). */
   proxyUrl?: string;
   /** Client certificate (mTLS). */
@@ -198,6 +202,16 @@ export interface HistoryEntry {
   updated_at: number;
   /** Workspace this entry belongs to. Optional on legacy rows. */
   workspace_id?: string;
+  /** JSON-encoded headers map captured on response. None on legacy rows. */
+  response_headers?: string;
+  /** Response body, truncated to the user's history-body cap. */
+  response_body?: string;
+  /** `"text"` or `"base64"`. Matches ResponseData.body_encoding. */
+  response_body_encoding?: "text" | "base64";
+  /** True if the persisted `response_body` was truncated. */
+  response_body_truncated?: boolean;
+  /** Full response size in bytes (pre-truncation), if known. */
+  response_size_bytes?: number;
 }
 
 // Filesystem collection (matches Rust struct)

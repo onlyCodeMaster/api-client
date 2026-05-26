@@ -21,6 +21,8 @@ import {
   Play,
   Braces,
   Server,
+  History,
+  FileText,
 } from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
 import { EnvironmentPanel } from "./EnvironmentPanel";
@@ -69,9 +71,20 @@ const METHOD_BADGE: Record<string, string> = {
   OPTIONS: "bg-text-tertiary/15 text-text-secondary",
 };
 
+/** Format an epoch-ms timestamp as a coarse relative-time string. Used by
+ *  the Recent Opened list — exact timestamps would clutter the sidebar
+ *  and minute-level precision is rarely useful here. */
+function formatRelativeTime(ts: number, t: (k: string, opts?: Record<string, unknown>) => string): string {
+  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (diffSec < 60) return t("time.just_now");
+  if (diffSec < 3600) return t("time.minutes_ago", { n: Math.floor(diffSec / 60) });
+  if (diffSec < 86400) return t("time.hours_ago", { n: Math.floor(diffSec / 3600) });
+  return t("time.days_ago", { n: Math.floor(diffSec / 86400) });
+}
+
 export function Sidebar() {
   const { t } = useTranslation();
-  const [activeTab, setActiveTab] = useState<"history" | "collections">("history");
+  const [activeTab, setActiveTab] = useState<"history" | "collections" | "recent">("history");
   const [searchQuery, setSearchQuery] = useState("");
   const [showNewCollection, setShowNewCollection] = useState(false);
   const [newCollectionName, setNewCollectionName] = useState("");
@@ -128,6 +141,7 @@ export function Sidebar() {
     collections,
     environments,
     workspace,
+    recentItems,
     createNewRequest,
     loadFromHistory,
     deleteRequestFromHistory,
@@ -137,13 +151,24 @@ export function Sidebar() {
     deleteCollection,
     renameCollection,
     addRequestToCollection,
+    loadRequestFromCollection,
     reorderHistory,
     reorderCollections,
     importPostmanCollection,
     importCollections,
     setActiveEnvironment,
     activeRequestId,
+    clearRecent,
+    refreshRecent,
   } = useRequestStore();
+
+  // Refresh the recents list when the tab is switched on so the user sees
+  // entries recorded in other workspaces / windows.
+  useEffect(() => {
+    if (activeTab === "recent") {
+      refreshRecent();
+    }
+  }, [activeTab, refreshRecent]);
 
   const handleSearch = (query: string) => {
     setSearchQuery(query);
@@ -348,6 +373,12 @@ export function Sidebar() {
             className={`segment flex-1 ${activeTab === "collections" ? "segment-active" : ""}`}
           >
             {t("sidebar.collections")}
+          </button>
+          <button
+            onClick={() => setActiveTab("recent")}
+            className={`segment flex-1 ${activeTab === "recent" ? "segment-active" : ""}`}
+          >
+            {t("sidebar.recent")}
           </button>
         </div>
       </div>
@@ -636,6 +667,63 @@ export function Sidebar() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {activeTab === "recent" && (
+          <div className="space-y-0.5">
+            {recentItems.length === 0 ? (
+              <div className="text-center py-12">
+                <History size={28} className="mx-auto text-text-tertiary mb-2" strokeWidth={1.5} />
+                <p className="text-text-tertiary text-[12px]">{t("sidebar.recent_empty")}</p>
+              </div>
+            ) : (
+              <>
+                {recentItems.map((item) => {
+                  const onClick = () => {
+                    if (item.item_type === "request") {
+                      // Items are stored as either "<collectionId>:<requestId>"
+                      // (recordRecent from loadRequestFromCollection) or
+                      // "history:<id>" (recordRecent from loadFromHistory).
+                      // Anything else is a legacy/external row and we just
+                      // skip it.
+                      const [scope, ...rest] = item.item_id.split(":");
+                      const rest_id = rest.join(":");
+                      if (scope === "history") {
+                        loadFromHistory(rest_id);
+                      } else if (scope && rest_id) {
+                        loadRequestFromCollection(scope, rest_id);
+                      }
+                    }
+                  };
+                  return (
+                    <div
+                      key={item.id}
+                      className="group flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg hover:bg-black/[0.04] active:bg-black/[0.06] cursor-pointer transition-colors"
+                      onClick={onClick}
+                    >
+                      <FileText
+                        size={13}
+                        className="shrink-0 text-text-tertiary"
+                        strokeWidth={1.75}
+                      />
+                      <span className="text-[12px] text-text-secondary truncate flex-1">
+                        {item.name || t("common.untitled")}
+                      </span>
+                      <span className="text-[10px] text-text-tertiary shrink-0">
+                        {formatRelativeTime(item.opened_at, t)}
+                      </span>
+                    </div>
+                  );
+                })}
+                <button
+                  onClick={() => clearRecent()}
+                  className="mt-3 w-full text-center text-[11px] text-text-tertiary hover:text-error transition-colors py-1.5"
+                >
+                  {t("sidebar.recent_clear")}
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>

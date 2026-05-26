@@ -23,6 +23,23 @@ pub struct HistoryEntry {
     /// `migrate_legacy_history_to_workspace` stamps them at startup.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
+    /// JSON-encoded `Record<string, string>` of response headers, or `None`
+    /// if the response wasn't captured (older rows / failed requests).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_headers: Option<String>,
+    /// Response body, truncated to the user's configured history-body cap
+    /// (default 256 KiB) to keep the SQLite file bounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_body: Option<String>,
+    /// `"text"` or `"base64"`. Matches `ResponseData.body_encoding`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_body_encoding: Option<String>,
+    /// True if the inline `response_body` was truncated when persisted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_body_truncated: Option<bool>,
+    /// Full response size in bytes (pre-truncation), if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_size_bytes: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -109,7 +126,12 @@ impl Database {
                 response_time_ms INTEGER,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
-                workspace_id TEXT
+                workspace_id TEXT,
+                response_headers TEXT,
+                response_body TEXT,
+                response_body_encoding TEXT,
+                response_body_truncated INTEGER,
+                response_size_bytes INTEGER
             );
 
             CREATE INDEX IF NOT EXISTS idx_history_updated ON history(updated_at DESC);
@@ -147,21 +169,31 @@ impl Database {
         )
         .map_err(|e| format!("Failed to initialize tables: {}", e))?;
 
-        // Backfill: add workspace_id column to legacy `history` tables that
-        // pre-date the multi-workspace migration. Fresh installs already get
-        // the column from the CREATE TABLE above. The pragma check keeps
-        // this idempotent across restarts.
-        let has_col: bool = {
+        // Backfill: add columns to legacy `history` tables that pre-date
+        // the relevant migrations. Fresh installs already get them from
+        // the CREATE TABLE above. The pragma check keeps this idempotent
+        // across restarts.
+        let column_exists = |col: &str| -> Result<bool, String> {
             let mut stmt = conn
-                .prepare("SELECT 1 FROM pragma_table_info('history') WHERE name = 'workspace_id'")
-                .map_err(|e| format!("Failed to check workspace_id column: {}", e))?;
-            stmt.exists([])
-                .map_err(|e| format!("Failed to check workspace_id column: {}", e))?
+                .prepare("SELECT 1 FROM pragma_table_info('history') WHERE name = ?1")
+                .map_err(|e| format!("Failed to check {} column: {}", col, e))?;
+            stmt.exists([col])
+                .map_err(|e| format!("Failed to check {} column: {}", col, e))
         };
-        if !has_col {
-            conn.execute("ALTER TABLE history ADD COLUMN workspace_id TEXT", [])
-                .map_err(|e| format!("Failed to add workspace_id column: {}", e))?;
-        }
+        let ensure_column = |col: &str, decl: &str| -> Result<(), String> {
+            if !column_exists(col)? {
+                conn.execute(&format!("ALTER TABLE history ADD COLUMN {}", decl), [])
+                    .map_err(|e| format!("Failed to add {} column: {}", col, e))?;
+            }
+            Ok(())
+        };
+        ensure_column("workspace_id", "workspace_id TEXT")?;
+        // Response-snapshot columns (PR 4: history saves full response).
+        ensure_column("response_headers", "response_headers TEXT")?;
+        ensure_column("response_body", "response_body TEXT")?;
+        ensure_column("response_body_encoding", "response_body_encoding TEXT")?;
+        ensure_column("response_body_truncated", "response_body_truncated INTEGER")?;
+        ensure_column("response_size_bytes", "response_size_bytes INTEGER")?;
         // Always (re)ensure the workspace index — covers both the
         // fresh-install path (column created above by execute_batch) and
         // the legacy path (column just added by ALTER TABLE). Doing this
@@ -181,8 +213,8 @@ impl Database {
     pub fn save_history(&self, entry: &HistoryEntry) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT OR REPLACE INTO history (id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at, workspace_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT OR REPLACE INTO history (id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at, workspace_id, response_headers, response_body, response_body_encoding, response_body_truncated, response_size_bytes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 entry.id,
                 entry.name,
@@ -197,6 +229,11 @@ impl Database {
                 entry.created_at,
                 entry.updated_at,
                 entry.workspace_id,
+                entry.response_headers,
+                entry.response_body,
+                entry.response_body_encoding,
+                entry.response_body_truncated.map(|b| if b { 1i64 } else { 0i64 }),
+                entry.response_size_bytes,
             ],
         )
         .map_err(|e| format!("Failed to save history: {}", e))?;
@@ -219,7 +256,7 @@ impl Database {
             Some(ws) => {
                 let mut stmt = conn
                     .prepare(
-                        "SELECT id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at, workspace_id
+                        "SELECT id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at, workspace_id, response_headers, response_body, response_body_encoding, response_body_truncated, response_size_bytes
                          FROM history WHERE workspace_id IS NULL OR workspace_id = ?1
                          ORDER BY updated_at DESC LIMIT ?2 OFFSET ?3",
                     )
@@ -234,7 +271,7 @@ impl Database {
             None => {
                 let mut stmt = conn
                     .prepare(
-                        "SELECT id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at, workspace_id
+                        "SELECT id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at, workspace_id, response_headers, response_body, response_body_encoding, response_body_truncated, response_size_bytes
                          FROM history ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2",
                     )
                     .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -275,7 +312,7 @@ impl Database {
             Some(ws) => {
                 let mut stmt = conn
                     .prepare(
-                        "SELECT id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at, workspace_id
+                        "SELECT id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at, workspace_id, response_headers, response_body, response_body_encoding, response_body_truncated, response_size_bytes
                          FROM history WHERE (url LIKE ?1 OR name LIKE ?1) AND (workspace_id IS NULL OR workspace_id = ?2)
                          ORDER BY updated_at DESC LIMIT 50",
                     )
@@ -290,7 +327,7 @@ impl Database {
             None => {
                 let mut stmt = conn
                     .prepare(
-                        "SELECT id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at, workspace_id
+                        "SELECT id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at, workspace_id, response_headers, response_body, response_body_encoding, response_body_truncated, response_size_bytes
                          FROM history WHERE url LIKE ?1 OR name LIKE ?1 ORDER BY updated_at DESC LIMIT 50",
                     )
                     .map_err(|e| format!("Failed to prepare search: {}", e))?;
@@ -546,6 +583,7 @@ impl Database {
 /// Row mapper for `history` queries. Shared by `get_history` and
 /// `search_history` so the column order stays in sync.
 fn row_to_history(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
+    let truncated_raw: Option<i64> = row.get(16)?;
     Ok(HistoryEntry {
         id: row.get(0)?,
         name: row.get(1)?,
@@ -560,6 +598,11 @@ fn row_to_history(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
         workspace_id: row.get(12)?,
+        response_headers: row.get(13)?,
+        response_body: row.get(14)?,
+        response_body_encoding: row.get(15)?,
+        response_body_truncated: truncated_raw.map(|v| v != 0),
+        response_size_bytes: row.get(17)?,
     })
 }
 
@@ -623,18 +666,66 @@ mod tests {
         let db = Database::from_connection(conn).expect("init_tables on legacy db");
 
         let conn = db.conn.lock().unwrap();
-        let has_col: bool = conn
-            .prepare("SELECT 1 FROM pragma_table_info('history') WHERE name = 'workspace_id'")
-            .unwrap()
-            .exists([])
-            .unwrap();
-        assert!(has_col, "legacy database must gain workspace_id column");
+        let has_col = |col: &str| -> bool {
+            conn.prepare("SELECT 1 FROM pragma_table_info('history') WHERE name = ?1")
+                .unwrap()
+                .exists([col])
+                .unwrap()
+        };
+        assert!(has_col("workspace_id"), "legacy database must gain workspace_id column");
+        // PR 4 columns must be backfilled too.
+        assert!(has_col("response_headers"), "must gain response_headers column");
+        assert!(has_col("response_body"), "must gain response_body column");
+        assert!(has_col("response_body_encoding"), "must gain response_body_encoding column");
+        assert!(has_col("response_body_truncated"), "must gain response_body_truncated column");
+        assert!(has_col("response_size_bytes"), "must gain response_size_bytes column");
         let has_idx: bool = conn
             .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_history_workspace'")
             .unwrap()
             .exists([])
             .unwrap();
         assert!(has_idx, "legacy database must gain the workspace index");
+    }
+
+    /// `save_history` and `get_history` must roundtrip a response snapshot,
+    /// including the new headers/body/encoding/truncated/size fields added
+    /// in PR 4.
+    #[test]
+    fn save_history_roundtrips_response_snapshot() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        let db = Database::from_connection(conn).expect("init_tables");
+
+        let entry = HistoryEntry {
+            id: "h1".into(),
+            name: "Example".into(),
+            method: "GET".into(),
+            url: "https://example.com/x".into(),
+            headers: "[]".into(),
+            params: "[]".into(),
+            body: String::new(),
+            body_type: "none".into(),
+            response_status: Some(200),
+            response_time_ms: Some(42),
+            created_at: 1,
+            updated_at: 1,
+            workspace_id: Some("ws1".into()),
+            response_headers: Some(r#"{"Content-Type":"application/json"}"#.into()),
+            response_body: Some(r#"{"ok":true}"#.into()),
+            response_body_encoding: Some("text".into()),
+            response_body_truncated: Some(false),
+            response_size_bytes: Some(11),
+        };
+        db.save_history(&entry).expect("save");
+
+        let rows = db.get_history(Some("ws1"), 10, 0).expect("read");
+        assert_eq!(rows.len(), 1);
+        let r = &rows[0];
+        assert_eq!(r.response_status, Some(200));
+        assert_eq!(r.response_headers.as_deref(), Some(r#"{"Content-Type":"application/json"}"#));
+        assert_eq!(r.response_body.as_deref(), Some(r#"{"ok":true}"#));
+        assert_eq!(r.response_body_encoding.as_deref(), Some("text"));
+        assert_eq!(r.response_body_truncated, Some(false));
+        assert_eq!(r.response_size_bytes, Some(11));
     }
 
     /// Running `init_tables` repeatedly must remain idempotent — the

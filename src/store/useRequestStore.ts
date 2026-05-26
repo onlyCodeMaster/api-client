@@ -14,6 +14,7 @@ import type {
   Workspace,
   AuthConfig,
   CookieEntry,
+  RecentEntry,
   WsMessage,
   SseEventRecord,
   Protocol,
@@ -24,6 +25,11 @@ import { postmanToCollection } from "../utils/postman";
 import { executeRequestWithScripts } from "../utils/requestPipeline";
 import { substituteAll } from "../utils/dynamicVars";
 import { buildScopedVars } from "../utils/variableScope";
+import {
+  DEFAULT_MAX_HISTORY_BODY_BYTES,
+  buildResponseSnapshot,
+  historyEntryToResponse,
+} from "../utils/historySnapshot";
 import {
   createNewFolder,
   addFolderTo,
@@ -68,11 +74,14 @@ function createNewRequest(): RequestItem {
   };
 }
 
-// Convert RequestItem <-> HistoryEntry for SQLite persistence
+// Convert RequestItem -> HistoryEntry for SQLite persistence. The response
+// snapshot serializers live in `utils/historySnapshot` so they can be
+// unit-tested without spinning up the whole store.
 function requestToHistoryEntry(
   req: RequestItem,
   response?: ResponseData | null,
-  workspaceId?: string
+  workspaceId?: string,
+  maxHistoryBodyBytes: number = DEFAULT_MAX_HISTORY_BODY_BYTES,
 ): HistoryEntry {
   const now = Date.now();
   return {
@@ -84,11 +93,10 @@ function requestToHistoryEntry(
     params: JSON.stringify(req.params),
     body: req.body,
     body_type: req.bodyType,
-    response_status: response?.status,
-    response_time_ms: response?.time_ms,
     created_at: req.createdAt,
     updated_at: now,
     workspace_id: workspaceId,
+    ...buildResponseSnapshot(response, maxHistoryBodyBytes),
   };
 }
 
@@ -156,6 +164,22 @@ interface RequestState {
   defaultTimeoutMs: number;
   /** Default TLS verification policy when a request doesn't override it. */
   verifyTlsDefault: boolean;
+  /** Inline response body cap sent with every `send_request` call (bytes).
+   *  Responses larger than this are truncated server-side and flagged with
+   *  `body_truncated=true`. */
+  maxBodyBytes: number;
+  /** Cap (in bytes) for the response-body snapshot persisted into the
+   *  SQLite history table. Defaults to 256 KiB so the DB stays bounded
+   *  even after thousands of requests. */
+  maxHistoryBodyBytes: number;
+
+  /** Cached response snapshots reconstructed from the history table,
+   *  keyed by history entry id. Populated lazily on `initialize` /
+   *  `searchHistory`. `loadFromHistory` reads from here to restore the
+   *  response panel without a network call. */
+  historyResponses: Record<string, ResponseData>;
+  /** Recent-opened items (newest first). Refreshed via `refreshRecent`. */
+  recentItems: RecentEntry[];
 
   // Computed-like accessors (read from active tab)
   // Derived: activeRequest / response / loading / error
@@ -293,6 +317,16 @@ interface RequestState {
   // Settings
   setDefaultTimeoutMs: (ms: number) => Promise<void>;
   setVerifyTlsDefault: (verify: boolean) => Promise<void>;
+  setMaxBodyBytes: (bytes: number) => Promise<void>;
+  setMaxHistoryBodyBytes: (bytes: number) => Promise<void>;
+
+  // Recent opened
+  /** Record an item as just-opened and refresh the recents list. */
+  recordRecent: (entry: Omit<RecentEntry, "id" | "opened_at"> & { id?: string }) => Promise<void>;
+  /** Re-read the recents list from the database. */
+  refreshRecent: () => Promise<void>;
+  /** Wipe the recents list. */
+  clearRecent: () => Promise<void>;
 
   // WebSocket
   wsConnect: () => Promise<void>;
@@ -403,6 +437,10 @@ export const useRequestStore = create<RequestState>((set, get) => {
     cookies: [],
     defaultTimeoutMs: 30000,
     verifyTlsDefault: true,
+    maxBodyBytes: 10 * 1024 * 1024,
+    maxHistoryBodyBytes: DEFAULT_MAX_HISTORY_BODY_BYTES,
+    historyResponses: {},
+    recentItems: [],
 
     activeRequest: initialReq,
     activeRequestId: initialReq.id,
@@ -446,6 +484,37 @@ export const useRequestStore = create<RequestState>((set, get) => {
           if (stored === "false") verifyTlsDefault = false;
         } catch {}
 
+        let maxBodyBytes = 10 * 1024 * 1024;
+        try {
+          const stored = await invoke<string | null>("get_setting", { key: "max_body_bytes" });
+          if (stored) {
+            const v = parseInt(stored, 10);
+            if (Number.isFinite(v) && v > 0) maxBodyBytes = v;
+          }
+        } catch {}
+
+        let maxHistoryBodyBytes = DEFAULT_MAX_HISTORY_BODY_BYTES;
+        try {
+          const stored = await invoke<string | null>("get_setting", { key: "max_history_body_bytes" });
+          if (stored) {
+            const v = parseInt(stored, 10);
+            if (Number.isFinite(v) && v >= 0) maxHistoryBodyBytes = v;
+          }
+        } catch {}
+
+        // Pre-warm the response cache so loadFromHistory can restore without
+        // a network call.
+        const historyResponses: Record<string, ResponseData> = {};
+        for (const entry of historyEntries) {
+          const r = historyEntryToResponse(entry);
+          if (r) historyResponses[entry.id] = r;
+        }
+
+        let recentItems: RecentEntry[] = [];
+        try {
+          recentItems = await invoke<RecentEntry[]>("get_recent", { limit: 30 });
+        } catch {}
+
         // Restore the user's tabs from the workspace's window_state, if any.
         // Falls back to the default single blank tab when no snapshot exists
           // or when the snapshot is empty.
@@ -467,6 +536,10 @@ export const useRequestStore = create<RequestState>((set, get) => {
           environments,
           defaultTimeoutMs,
           verifyTlsDefault,
+          maxBodyBytes,
+          maxHistoryBodyBytes,
+          historyResponses,
+          recentItems,
           tabs,
           activeTabId,
           initialized: true,
@@ -729,6 +802,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
           defaults: {
             defaultTimeoutMs: get().defaultTimeoutMs,
             verifyTlsDefault: get().verifyTlsDefault,
+            maxBodyBytes: get().maxBodyBytes,
           },
         });
       } catch (err) {
@@ -856,37 +930,62 @@ export const useRequestStore = create<RequestState>((set, get) => {
     },
 
     addToHistory: (request, response) => {
-      const { workspace } = get();
-      const entry = requestToHistoryEntry(request, response, workspace?.id);
+      const { workspace, maxHistoryBodyBytes } = get();
+      const entry = requestToHistoryEntry(request, response, workspace?.id, maxHistoryBodyBytes);
       invoke("save_history", { entry }).catch((err) => console.error("Failed to save history:", err));
       set((state) => {
         const exists = state.history.find((r) => r.id === request.id);
-        if (exists) {
-          return {
-            history: state.history.map((r) => (r.id === request.id ? { ...request, createdAt: Date.now() } : r)),
-          };
+        const nextHistory = exists
+          ? state.history.map((r) => (r.id === request.id ? { ...request, createdAt: Date.now() } : r))
+          : [{ ...request, createdAt: Date.now() }, ...state.history].slice(0, 50);
+        // Mirror the persisted snapshot in memory so loadFromHistory can
+        // restore the response panel without re-running the request.
+        const nextResponses = { ...state.historyResponses };
+        if (response) {
+          nextResponses[request.id] = response;
+        } else {
+          delete nextResponses[request.id];
         }
-        return { history: [{ ...request, createdAt: Date.now() }, ...state.history].slice(0, 50) };
+        return { history: nextHistory, historyResponses: nextResponses };
       });
     },
 
     deleteRequestFromHistory: (id) => {
       invoke("delete_history", { id }).catch((err) => console.error("Failed to delete history:", err));
-      set((state) => ({ history: state.history.filter((r) => r.id !== id) }));
+      set((state) => {
+        const nextResponses = { ...state.historyResponses };
+        delete nextResponses[id];
+        return { history: state.history.filter((r) => r.id !== id), historyResponses: nextResponses };
+      });
     },
 
     clearAllHistory: async () => {
       await invoke("clear_history");
-      set({ history: [] });
+      set({ history: [], historyResponses: {} });
     },
 
     loadFromHistory: (id) => {
-      const { history } = get();
+      const { history, historyResponses } = get();
       const request = history.find((r) => r.id === id);
       if (!request) return;
-      // Clone the request into a fresh tab id to avoid stomping the history entry.
-      const cloned: RequestItem = { ...request, id: generateId() };
+      // Clone the request into a fresh tab id to avoid stomping the history
+      // entry. Carry the cached response so the response panel hydrates
+      // immediately on switch.
+      const newId = generateId();
+      const cloned: RequestItem = { ...request, id: newId };
+      const cachedResponse = historyResponses[id];
       get().openTab(cloned);
+      if (cachedResponse) {
+        set((s) => {
+          const responses = { ...s.responses, [newId]: cachedResponse };
+          return { responses, ...syncDerived({ ...s, responses }) };
+        });
+      }
+      get().recordRecent({
+        item_type: "request",
+        item_id: `history:${id}`,
+        name: request.name || request.url || request.method,
+      }).catch(() => {});
     },
 
     searchHistory: async (query) => {
@@ -897,7 +996,16 @@ export const useRequestStore = create<RequestState>((set, get) => {
           query,
         });
         const history = entries.map(historyEntryToRequest);
-        set({ history });
+        // Update the response cache so search results are also restorable.
+        const cacheUpdates: Record<string, ResponseData> = {};
+        for (const entry of entries) {
+          const r = historyEntryToResponse(entry);
+          if (r) cacheUpdates[entry.id] = r;
+        }
+        set((state) => ({
+          history,
+          historyResponses: { ...state.historyResponses, ...cacheUpdates },
+        }));
       } catch (err) {
         console.error("Failed to search history:", err);
       }
@@ -1016,6 +1124,12 @@ export const useRequestStore = create<RequestState>((set, get) => {
         createdAt: req.created_at,
       };
       get().openTab(requestItem);
+      // Fire-and-forget — don't block the tab switch on persistence.
+      get().recordRecent({
+        item_type: "request",
+        item_id: `${collectionId}:${req.id}`,
+        name: req.name,
+      }).catch(() => {});
     },
 
     deleteRequestFromCollection: async (collectionId, requestId) => {
@@ -1313,6 +1427,74 @@ export const useRequestStore = create<RequestState>((set, get) => {
         console.error("Failed to persist verify-tls default:", err);
       }
       set({ verifyTlsDefault: verify });
+    },
+
+    setMaxBodyBytes: async (bytes) => {
+      try {
+        await invoke("set_setting", { key: "max_body_bytes", value: String(bytes) });
+      } catch (err) {
+        console.error("Failed to persist max body bytes:", err);
+      }
+      set({ maxBodyBytes: bytes });
+    },
+
+    setMaxHistoryBodyBytes: async (bytes) => {
+      try {
+        await invoke("set_setting", { key: "max_history_body_bytes", value: String(bytes) });
+      } catch (err) {
+        console.error("Failed to persist max history body bytes:", err);
+      }
+      set({ maxHistoryBodyBytes: bytes });
+    },
+
+    // === Recent Opened ===
+
+    recordRecent: async (input) => {
+      // Cheap dedupe at the call site: if the most recent item is the same
+      // (type+item_id), we skip the round-trip. Backend also dedupes by id
+      // via INSERT OR REPLACE, but skipping avoids needless writes.
+      const { recentItems } = get();
+      const top = recentItems[0];
+      if (top && top.item_type === input.item_type && top.item_id === input.item_id) {
+        return;
+      }
+      const entry: RecentEntry = {
+        id: input.id ?? generateId(),
+        item_type: input.item_type,
+        item_id: input.item_id,
+        name: input.name,
+        opened_at: Date.now(),
+      };
+      try {
+        await invoke("add_recent", { entry });
+      } catch (err) {
+        console.error("Failed to record recent:", err);
+        return;
+      }
+      // Optimistically push to the head; clamp the visible list to 30.
+      set((s) => ({
+        recentItems: [entry, ...s.recentItems.filter(
+          (r) => !(r.item_type === entry.item_type && r.item_id === entry.item_id),
+        )].slice(0, 30),
+      }));
+    },
+
+    refreshRecent: async () => {
+      try {
+        const items = await invoke<RecentEntry[]>("get_recent", { limit: 30 });
+        set({ recentItems: items });
+      } catch (err) {
+        console.error("Failed to refresh recent:", err);
+      }
+    },
+
+    clearRecent: async () => {
+      try {
+        await invoke("clear_recent");
+        set({ recentItems: [] });
+      } catch (err) {
+        console.error("Failed to clear recent:", err);
+      }
     },
 
     // === WebSocket ===
