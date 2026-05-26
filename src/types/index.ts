@@ -175,6 +175,8 @@ export interface HistoryEntry {
   response_time_ms?: number;
   created_at: number;
   updated_at: number;
+  /** Workspace this entry belongs to. Optional on legacy rows. */
+  workspace_id?: string;
 }
 
 // Filesystem collection (matches Rust struct)
@@ -220,6 +222,8 @@ export interface Collection {
   folders: CollectionFolder[];
   created_at: number;
   updated_at: number;
+  /** Workspace this collection belongs to. Optional on legacy files. */
+  workspace_id?: string;
 }
 
 // Environment
@@ -236,6 +240,8 @@ export interface Environment {
   variables: EnvVariable[];
   created_at: number;
   updated_at: number;
+  /** Workspace this environment belongs to. Optional on legacy files. */
+  workspace_id?: string;
 }
 
 // Workspace

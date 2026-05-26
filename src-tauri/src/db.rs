@@ -19,6 +19,10 @@ pub struct HistoryEntry {
     pub response_time_ms: Option<u64>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Workspace this history entry belongs to. `None` on legacy rows;
+    /// `migrate_legacy_history_to_workspace` stamps them at startup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -97,6 +101,7 @@ impl Database {
 
             CREATE INDEX IF NOT EXISTS idx_history_updated ON history(updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_history_url ON history(url);
+            CREATE INDEX IF NOT EXISTS idx_history_workspace ON history(workspace_id);
 
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -129,6 +134,26 @@ impl Database {
             ",
         )
         .map_err(|e| format!("Failed to initialize tables: {}", e))?;
+
+        // Backfill: add workspace_id column to legacy history tables. Wrapped
+        // in a transaction-safe check so we don't fail when the column
+        // already exists.
+        let has_col: bool = {
+            let mut stmt = conn
+                .prepare("SELECT 1 FROM pragma_table_info('history') WHERE name = 'workspace_id'")
+                .map_err(|e| format!("Failed to check workspace_id column: {}", e))?;
+            stmt.exists([])
+                .map_err(|e| format!("Failed to check workspace_id column: {}", e))?
+        };
+        if !has_col {
+            conn.execute("ALTER TABLE history ADD COLUMN workspace_id TEXT", [])
+                .map_err(|e| format!("Failed to add workspace_id column: {}", e))?;
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_history_workspace ON history(workspace_id)",
+                [],
+            )
+            .map_err(|e| format!("Failed to create workspace index: {}", e))?;
+        }
         Ok(())
     }
 
@@ -137,8 +162,8 @@ impl Database {
     pub fn save_history(&self, entry: &HistoryEntry) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT OR REPLACE INTO history (id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT OR REPLACE INTO history (id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at, workspace_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 entry.id,
                 entry.name,
@@ -152,40 +177,55 @@ impl Database {
                 entry.response_time_ms,
                 entry.created_at,
                 entry.updated_at,
+                entry.workspace_id,
             ],
         )
         .map_err(|e| format!("Failed to save history: {}", e))?;
         Ok(())
     }
 
-    pub fn get_history(&self, limit: usize, offset: usize) -> Result<Vec<HistoryEntry>, String> {
+    /// Fetch history rows. When `workspace_id` is `Some`, only rows whose
+    /// `workspace_id` matches OR is NULL (legacy, unmigrated) are returned.
+    pub fn get_history(
+        &self,
+        workspace_id: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<HistoryEntry>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let mut stmt = conn
-            .prepare("SELECT id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at FROM history ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2")
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
-
-        let rows = stmt
-            .query_map(params![limit as i64, offset as i64], |row| {
-                Ok(HistoryEntry {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    method: row.get(2)?,
-                    url: row.get(3)?,
-                    headers: row.get(4)?,
-                    params: row.get(5)?,
-                    body: row.get(6)?,
-                    body_type: row.get(7)?,
-                    response_status: row.get(8)?,
-                    response_time_ms: row.get(9)?,
-                    created_at: row.get(10)?,
-                    updated_at: row.get(11)?,
-                })
-            })
-            .map_err(|e| format!("Failed to query history: {}", e))?;
-
+        let limit = limit as i64;
+        let offset = offset as i64;
         let mut entries = Vec::new();
-        for row in rows {
-            entries.push(row.map_err(|e| format!("Failed to read row: {}", e))?);
+        match workspace_id {
+            Some(ws) => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at, workspace_id
+                         FROM history WHERE workspace_id IS NULL OR workspace_id = ?1
+                         ORDER BY updated_at DESC LIMIT ?2 OFFSET ?3",
+                    )
+                    .map_err(|e| format!("Failed to prepare query: {}", e))?;
+                let rows = stmt
+                    .query_map(params![ws, limit, offset], row_to_history)
+                    .map_err(|e| format!("Failed to query history: {}", e))?;
+                for row in rows {
+                    entries.push(row.map_err(|e| format!("Failed to read row: {}", e))?);
+                }
+            }
+            None => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at, workspace_id
+                         FROM history ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2",
+                    )
+                    .map_err(|e| format!("Failed to prepare query: {}", e))?;
+                let rows = stmt
+                    .query_map(params![limit, offset], row_to_history)
+                    .map_err(|e| format!("Failed to query history: {}", e))?;
+                for row in rows {
+                    entries.push(row.map_err(|e| format!("Failed to read row: {}", e))?);
+                }
+            }
         }
         Ok(entries)
     }
@@ -204,37 +244,75 @@ impl Database {
         Ok(())
     }
 
-    pub fn search_history(&self, query: &str) -> Result<Vec<HistoryEntry>, String> {
+    pub fn search_history(
+        &self,
+        workspace_id: Option<&str>,
+        query: &str,
+    ) -> Result<Vec<HistoryEntry>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let pattern = format!("%{}%", query);
-        let mut stmt = conn
-            .prepare("SELECT id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at FROM history WHERE url LIKE ?1 OR name LIKE ?1 ORDER BY updated_at DESC LIMIT 50")
-            .map_err(|e| format!("Failed to prepare search: {}", e))?;
-
-        let rows = stmt
-            .query_map(params![pattern], |row| {
-                Ok(HistoryEntry {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    method: row.get(2)?,
-                    url: row.get(3)?,
-                    headers: row.get(4)?,
-                    params: row.get(5)?,
-                    body: row.get(6)?,
-                    body_type: row.get(7)?,
-                    response_status: row.get(8)?,
-                    response_time_ms: row.get(9)?,
-                    created_at: row.get(10)?,
-                    updated_at: row.get(11)?,
-                })
-            })
-            .map_err(|e| format!("Failed to search history: {}", e))?;
-
         let mut entries = Vec::new();
-        for row in rows {
-            entries.push(row.map_err(|e| format!("Failed to read row: {}", e))?);
+        match workspace_id {
+            Some(ws) => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at, workspace_id
+                         FROM history WHERE (url LIKE ?1 OR name LIKE ?1) AND (workspace_id IS NULL OR workspace_id = ?2)
+                         ORDER BY updated_at DESC LIMIT 50",
+                    )
+                    .map_err(|e| format!("Failed to prepare search: {}", e))?;
+                let rows = stmt
+                    .query_map(params![pattern, ws], row_to_history)
+                    .map_err(|e| format!("Failed to search history: {}", e))?;
+                for row in rows {
+                    entries.push(row.map_err(|e| format!("Failed to read row: {}", e))?);
+                }
+            }
+            None => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, name, method, url, headers, params, body, body_type, response_status, response_time_ms, created_at, updated_at, workspace_id
+                         FROM history WHERE url LIKE ?1 OR name LIKE ?1 ORDER BY updated_at DESC LIMIT 50",
+                    )
+                    .map_err(|e| format!("Failed to prepare search: {}", e))?;
+                let rows = stmt
+                    .query_map(params![pattern], row_to_history)
+                    .map_err(|e| format!("Failed to search history: {}", e))?;
+                for row in rows {
+                    entries.push(row.map_err(|e| format!("Failed to read row: {}", e))?);
+                }
+            }
         }
         Ok(entries)
+    }
+
+    /// Stamp every history row with `workspace_id IS NULL` to the given id.
+    /// Used at startup so legacy rows migrate into the default workspace.
+    pub fn migrate_legacy_history_to_workspace(&self, workspace_id: &str) -> Result<usize, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let updated = conn
+            .execute(
+                "UPDATE history SET workspace_id = ?1 WHERE workspace_id IS NULL",
+                params![workspace_id],
+            )
+            .map_err(|e| format!("Failed to migrate legacy history: {}", e))?;
+        Ok(updated)
+    }
+
+    /// Delete all history rows belonging to a workspace. Called when the
+    /// workspace itself is deleted.
+    pub fn delete_workspace_history(&self, workspace_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM history WHERE workspace_id = ?1",
+            params![workspace_id],
+        )
+        .map_err(|e| format!("Failed to delete workspace history: {}", e))?;
+        Ok(())
+    }
+
+    pub fn clear_workspace_history(&self, workspace_id: &str) -> Result<(), String> {
+        self.delete_workspace_history(workspace_id)
     }
 
     // === Settings ===
@@ -444,4 +522,24 @@ impl Database {
             .map_err(|e| format!("Failed to clear recent: {}", e))?;
         Ok(())
     }
+}
+
+/// Row mapper for `history` queries. Shared by `get_history` and
+/// `search_history` so the column order stays in sync.
+fn row_to_history(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
+    Ok(HistoryEntry {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        method: row.get(2)?,
+        url: row.get(3)?,
+        headers: row.get(4)?,
+        params: row.get(5)?,
+        body: row.get(6)?,
+        body_type: row.get(7)?,
+        response_status: row.get(8)?,
+        response_time_ms: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+        workspace_id: row.get(12)?,
+    })
 }

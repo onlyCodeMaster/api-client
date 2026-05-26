@@ -15,8 +15,13 @@ pub fn save_history(db: State<Database>, entry: HistoryEntry) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub fn get_history(db: State<Database>, limit: usize, offset: usize) -> Result<Vec<HistoryEntry>, String> {
-    db.get_history(limit, offset)
+pub fn get_history(
+    db: State<Database>,
+    workspace_id: Option<String>,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<HistoryEntry>, String> {
+    db.get_history(workspace_id.as_deref(), limit, offset)
 }
 
 #[tauri::command]
@@ -30,8 +35,12 @@ pub fn clear_history(db: State<Database>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn search_history(db: State<Database>, query: String) -> Result<Vec<HistoryEntry>, String> {
-    db.search_history(&query)
+pub fn search_history(
+    db: State<Database>,
+    workspace_id: Option<String>,
+    query: String,
+) -> Result<Vec<HistoryEntry>, String> {
+    db.search_history(workspace_id.as_deref(), &query)
 }
 
 // === Settings Commands ===
@@ -127,8 +136,8 @@ pub fn load_collection(id: String) -> Result<CollectionFile, String> {
 }
 
 #[tauri::command]
-pub fn list_collections() -> Result<Vec<CollectionFile>, String> {
-    crate::storage::list_collections()
+pub fn list_collections(workspace_id: Option<String>) -> Result<Vec<CollectionFile>, String> {
+    crate::storage::list_collections(workspace_id.as_deref())
 }
 
 #[tauri::command]
@@ -149,8 +158,8 @@ pub fn load_environment(id: String) -> Result<EnvironmentFile, String> {
 }
 
 #[tauri::command]
-pub fn list_environments() -> Result<Vec<EnvironmentFile>, String> {
-    crate::storage::list_environments()
+pub fn list_environments(workspace_id: Option<String>) -> Result<Vec<EnvironmentFile>, String> {
+    crate::storage::list_environments(workspace_id.as_deref())
 }
 
 #[tauri::command]
@@ -173,6 +182,42 @@ pub fn load_workspace(id: String) -> Result<WorkspaceFile, String> {
 #[tauri::command]
 pub fn load_default_workspace() -> Result<WorkspaceFile, String> {
     crate::storage::load_default_workspace()
+}
+
+#[tauri::command]
+pub fn list_workspaces() -> Result<Vec<WorkspaceFile>, String> {
+    crate::storage::list_workspaces()
+}
+
+#[tauri::command]
+pub fn create_workspace(name: String) -> Result<WorkspaceFile, String> {
+    crate::storage::create_workspace(&name)
+}
+
+/// Cascade-delete a workspace: removes its collections, environments and
+/// SQLite history rows, then deletes the workspace file. Returns the IDs of
+/// the deleted artifacts so the frontend can also drop them from its store.
+#[tauri::command]
+pub fn delete_workspace(
+    db: State<Database>,
+    id: String,
+) -> Result<crate::storage::DeletedWorkspaceArtifacts, String> {
+    let artifacts = crate::storage::delete_workspace(&id)?;
+    db.delete_workspace_history(&id)?;
+    Ok(artifacts)
+}
+
+/// Run once at startup: stamp every legacy unscoped collection /
+/// environment / history row with the default workspace id so they appear in
+/// exactly one workspace going forward.
+#[tauri::command]
+pub fn migrate_legacy_to_workspace(
+    db: State<Database>,
+    workspace_id: String,
+) -> Result<usize, String> {
+    let storage_count = crate::storage::migrate_legacy_to_workspace(&workspace_id)?;
+    let history_count = db.migrate_legacy_history_to_workspace(&workspace_id)?;
+    Ok(storage_count + history_count)
 }
 
 // === Secret / Keychain Commands ===
