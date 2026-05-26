@@ -29,6 +29,12 @@ function generateId(): string {
   return Math.random().toString(36).substring(2, 15);
 }
 
+// Debounce token for tab persistence. Tab content edits fire on every
+// keystroke (URL bar, body editor, ...) and we don't want to serialize +
+// fsync the workspace JSON that often. 500 ms is long enough to coalesce
+// burst typing without losing work if the user closes the window.
+let persistTabsTimer: ReturnType<typeof setTimeout> | null = null;
+
 function createEmptyKeyValue(): KeyValue {
   return { id: generateId(), key: "", value: "", enabled: true };
 }
@@ -154,6 +160,12 @@ interface RequestState {
   closeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
   reorderTabs: (fromId: string, toId: string) => void;
+  /** Move the active tab focus by `delta` (e.g. `-1` for prev, `+1` for next).
+   *  Wraps at both ends. No-op when there are no tabs. */
+  cycleTab: (delta: number) => void;
+  /** Duplicate the active tab: clones the RequestItem with a fresh id and
+   *  reset response state, then makes the clone the active tab. */
+  duplicateActiveTab: () => void;
 
   // Active-tab convenience setters (mutate active tab)
   setActiveRequest: (request: RequestItem) => void;
@@ -224,6 +236,11 @@ interface RequestState {
   /** Patch the workspace's window_state and persist (debounced via
    *  caller's responsibility — caller is expected to commit on drag end). */
   setWindowState: (patch: Partial<NonNullable<Workspace["window_state"]>>) => void;
+
+  /** Snapshot the current tab list + active tab into `window_state.open_tabs`
+   *  and persist (debounced). Wired into every tab-mutating action so users
+   *  keep their tabs across restarts. */
+  persistTabsState: () => void;
 
   // Cookies
   refreshCookies: () => Promise<void>;
@@ -386,7 +403,20 @@ export const useRequestStore = create<RequestState>((set, get) => {
           if (stored === "false") verifyTlsDefault = false;
         } catch {}
 
-        set({
+        // Restore the user's tabs from the workspace's window_state, if any.
+        // Falls back to the default single blank tab when no snapshot exists
+          // or when the snapshot is empty.
+        const savedTabs = workspace.window_state?.open_tabs;
+        const savedActiveId = workspace.window_state?.active_tab_id;
+        const hasSnapshot = Array.isArray(savedTabs) && savedTabs.length > 0;
+        const tabs = hasSnapshot ? savedTabs! : get().tabs;
+        const activeTabId = hasSnapshot
+          ? (savedActiveId && tabs.some((t) => t.id === savedActiveId)
+              ? savedActiveId
+              : tabs[0].id)
+          : get().activeTabId;
+
+        set((s) => ({
           workspace,
           workspaces,
           history,
@@ -394,8 +424,11 @@ export const useRequestStore = create<RequestState>((set, get) => {
           environments,
           defaultTimeoutMs,
           verifyTlsDefault,
+          tabs,
+          activeTabId,
           initialized: true,
-        });
+          ...syncDerived({ ...s, tabs, activeTabId }),
+        }));
       } catch (err) {
         console.error("Failed to initialize store:", err);
         set({ initialized: true });
@@ -408,6 +441,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
       const { tabs } = get();
       if (tabs.find((t) => t.id === request.id)) {
         set((s) => ({ activeTabId: request.id, ...syncDerived({ ...s, activeTabId: request.id }) }));
+        get().persistTabsState();
         return;
       }
       const next = [...tabs, request];
@@ -416,6 +450,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
         activeTabId: request.id,
         ...syncDerived({ ...s, tabs: next, activeTabId: request.id }),
       }));
+      get().persistTabsState();
     },
 
     closeTab: (id) => {
@@ -498,10 +533,12 @@ export const useRequestStore = create<RequestState>((set, get) => {
           loadings: loadRest,
         }),
       }));
+      get().persistTabsState();
     },
 
     setActiveTab: (id) => {
       set((s) => ({ activeTabId: id, ...syncDerived({ ...s, activeTabId: id }) }));
+      get().persistTabsState();
     },
 
     reorderTabs: (fromId, toId) => {
@@ -513,6 +550,41 @@ export const useRequestStore = create<RequestState>((set, get) => {
       const [moved] = next.splice(from, 1);
       next.splice(to, 0, moved);
       set({ tabs: next });
+      get().persistTabsState();
+    },
+
+    cycleTab: (delta) => {
+      const { tabs, activeTabId } = get();
+      if (tabs.length === 0) return;
+      const idx = activeTabId ? tabs.findIndex((t) => t.id === activeTabId) : -1;
+      if (idx === -1) {
+        get().setActiveTab(tabs[0].id);
+        return;
+      }
+      const len = tabs.length;
+      // Modulo arithmetic that handles negative deltas correctly.
+      const nextIdx = (((idx + delta) % len) + len) % len;
+      get().setActiveTab(tabs[nextIdx].id);
+    },
+
+    duplicateActiveTab: () => {
+      const { tabs, activeTabId } = get();
+      const active = tabs.find((t) => t.id === activeTabId);
+      if (!active) return;
+      const now = Date.now();
+      const clone: RequestItem = {
+        ...active,
+        id: generateId(),
+        name: `${active.name} (copy)`,
+        createdAt: now,
+        updatedAt: now,
+        // Deep-copy mutable arrays so future edits to the clone don't bleed
+        // back into the source tab through shared references.
+        headers: active.headers.map((h) => ({ ...h })),
+        params: active.params.map((p) => ({ ...p })),
+        formData: active.formData.map((f) => ({ ...f })),
+      };
+      get().openTab(clone);
     },
 
     setActiveRequest: (request) => {
@@ -521,6 +593,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
 
     updateActiveRequest: (partial) => {
       set((s) => ({ ...updateActiveTab(s, partial), ...syncDerived({ ...s, ...updateActiveTab(s, partial) } as RequestState) }));
+      get().persistTabsState();
     },
 
     setMethod: (method) => set((s) => ({ ...updateActiveTab(s, { method }), ...syncDerived({ ...s, ...updateActiveTab(s, { method }) } as RequestState) })),
@@ -1053,6 +1126,32 @@ export const useRequestStore = create<RequestState>((set, get) => {
       get().saveWorkspaceState();
     },
 
+    persistTabsState: () => {
+      if (persistTabsTimer) clearTimeout(persistTabsTimer);
+      persistTabsTimer = setTimeout(() => {
+        persistTabsTimer = null;
+        const state = get();
+        if (!state.workspace) return;
+        const next = {
+          ...(state.workspace.window_state ?? {}),
+          open_tabs: state.tabs,
+          active_tab_id: state.activeTabId ?? undefined,
+        };
+        const updated: Workspace = {
+          ...state.workspace,
+          window_state: next,
+          updated_at: Date.now(),
+        };
+        // Reflect locally so subsequent reads see the new state. Avoid the
+        // standard `setWindowState` action so we don't fire a redundant
+        // workspace save — the invoke below handles it.
+        set({ workspace: updated });
+        invoke("save_workspace", { workspace: updated }).catch((err) =>
+          console.error("Failed to persist tabs:", err)
+        );
+      }, 500);
+    },
+
     // === Cookies ===
 
     refreshCookies: async () => {
@@ -1298,6 +1397,28 @@ export const useRequestStore = create<RequestState>((set, get) => {
         .filter(([, v]) => v)
         .forEach(([id]) => invoke("sse_close", { requestId: id }).catch(() => {}));
 
+      // Flush any pending tab persistence for the workspace we're leaving so
+      // we don't lose recently typed-into tabs across the switch.
+      if (persistTabsTimer) {
+        clearTimeout(persistTabsTimer);
+        persistTabsTimer = null;
+        if (prev.workspace) {
+          const window_state = {
+            ...(prev.workspace.window_state ?? {}),
+            open_tabs: prev.tabs,
+            active_tab_id: prev.activeTabId ?? undefined,
+          };
+          const flushed: Workspace = {
+            ...prev.workspace,
+            window_state,
+            updated_at: Date.now(),
+          };
+          invoke("save_workspace", { workspace: flushed }).catch((err) =>
+            console.error("Failed to flush previous workspace tabs:", err)
+          );
+        }
+      }
+
       try {
         const [collections, environments, historyEntries] = await Promise.all([
           invoke<Collection[]>("list_collections", { workspaceId }),
@@ -1310,16 +1431,25 @@ export const useRequestStore = create<RequestState>((set, get) => {
         ]);
         const history = historyEntries.map(historyEntryToRequest);
 
-        // Start the new workspace with a single blank request tab so the user
-        // doesn't see references to the previous workspace's collections.
-        const fresh = createNewRequest();
+        // Restore the target workspace's tabs from its window_state, if any.
+        // Falls back to a single fresh blank tab when no snapshot exists.
+        const savedTabs = target.window_state?.open_tabs;
+        const savedActiveId = target.window_state?.active_tab_id;
+        const hasSnapshot = Array.isArray(savedTabs) && savedTabs.length > 0;
+        const restoredTabs = hasSnapshot ? savedTabs! : [createNewRequest()];
+        const restoredActiveId = hasSnapshot
+          ? (savedActiveId && restoredTabs.some((t) => t.id === savedActiveId)
+              ? savedActiveId
+              : restoredTabs[0].id)
+          : restoredTabs[0].id;
+
         set((s) => ({
           workspace: target,
           collections,
           environments,
           history,
-          tabs: [fresh],
-          activeTabId: fresh.id,
+          tabs: restoredTabs,
+          activeTabId: restoredActiveId,
           responses: {},
           errors: {},
           loadings: {},
@@ -1333,8 +1463,8 @@ export const useRequestStore = create<RequestState>((set, get) => {
           sseEvents: {},
           ...syncDerived({
             ...s,
-            tabs: [fresh],
-            activeTabId: fresh.id,
+            tabs: restoredTabs,
+            activeTabId: restoredActiveId,
             responses: {},
             errors: {},
             loadings: {},

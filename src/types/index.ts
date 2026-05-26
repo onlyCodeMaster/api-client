@@ -270,6 +270,11 @@ export interface WindowState {
   sidebar_width?: number;
   request_panel_height?: number;
   sidebar_tab?: string;
+  /** Snapshot of the open tabs from the last session. Restored on workspace
+   *  load so users keep their tabs across app restarts. */
+  open_tabs?: RequestItem[];
+  /** Tab to activate after restoration. Falls back to the first open tab. */
+  active_tab_id?: string;
 }
 
 export interface Workspace {

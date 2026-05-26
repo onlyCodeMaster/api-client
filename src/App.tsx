@@ -133,6 +133,37 @@ function App() {
       return;
     }
 
+    // Cmd+[ / Cmd+]: prev / next tab (and Shift+Cmd+Tab / Cmd+Tab on platforms
+    // where the browser doesn't reserve those — covered here for parity with
+    // the rest of the Cmd+bracket family).
+    if (isMeta && (e.key === "[" || e.key === "]")) {
+      e.preventDefault();
+      useRequestStore.getState().cycleTab(e.key === "]" ? 1 : -1);
+      return;
+    }
+
+    // Cmd+D: duplicate the active tab.
+    if (isMeta && e.key === "d") {
+      e.preventDefault();
+      useRequestStore.getState().duplicateActiveTab();
+      return;
+    }
+
+    // Cmd+,: open the Settings panel. The panel itself lives in the Sidebar,
+    // which subscribes to this custom event in `useEffect`.
+    if (isMeta && e.key === ",") {
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent("api-client:open-settings"));
+      return;
+    }
+
+    // Cmd+F: open the search palette (parity with Cmd+P / Cmd+K).
+    if (isMeta && e.key === "f") {
+      e.preventDefault();
+      setPaletteOpen(true);
+      return;
+    }
+
     // Escape: Cancel request
     if (e.key === "Escape") {
       const { loading } = useRequestStore.getState();

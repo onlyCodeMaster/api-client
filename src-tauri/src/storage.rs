@@ -206,6 +206,17 @@ pub struct WindowState {
     pub sidebar_width: Option<f64>,
     pub request_panel_height: Option<f64>,
     pub sidebar_tab: Option<String>,
+    /// Snapshot of open tabs (`RequestItem` shape on the frontend). Kept as
+    /// opaque JSON because the frontend `RequestItem` carries fields that
+    /// have no Rust counterpart (`formData`, `protocol`, `verifyTls`, …).
+    /// We never read its contents on the backend — just round-trip it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_tabs: Option<serde_json::Value>,
+    /// Active tab id from the most recent save. The frontend rehydrates this
+    /// on initialize / workspace switch so users land on the same tab they
+    /// left from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_tab_id: Option<String>,
 }
 
 // === Secret redaction / hydration helpers ===
