@@ -348,6 +348,7 @@ export function RequestPanel() {
             onChange={setParams}
             keyPlaceholder="Parameter"
             valuePlaceholder="Value"
+            previewVars={scopedVars}
           />
         )}
 
@@ -357,6 +358,7 @@ export function RequestPanel() {
             onChange={setHeaders}
             keyPlaceholder="Header"
             valuePlaceholder="Value"
+            previewVars={scopedVars}
           />
         )}
 
@@ -380,6 +382,7 @@ export function RequestPanel() {
                 keyPlaceholder="Field name"
                 valuePlaceholder="Value"
                 allowFiles
+                previewVars={scopedVars}
               />
             )}
             {activeRequest.bodyType === "graphql" && (
