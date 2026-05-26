@@ -56,6 +56,51 @@ function findFolderAuth(
   return undefined;
 }
 
+/** Tagged location of where the *effective* (resolved) auth lives so the
+ *  store knows which slice to mutate when it refreshes an OAuth2 token. */
+export type AuthSource =
+  | { source: "request" }
+  | { source: "folder"; collectionId: string; folderId: string }
+  | { source: "collection"; collectionId: string };
+
+/** Walk the same chain as `resolveAuth`, but return *where* the auth was
+ *  found so the caller can write updates back to the right place. */
+export function locateAuthSource(
+  req: RequestItem,
+  collections: Collection[]
+): AuthSource | undefined {
+  if (req.auth && req.auth.auth_type !== "inherit") {
+    return { source: "request" };
+  }
+  if (!req.collectionId) return undefined;
+  const col = collections.find((c) => c.id === req.collectionId);
+  if (!col) return undefined;
+
+  const folderId = findFolderIdWithAuth(col.folders, req.id);
+  if (folderId) return { source: "folder", collectionId: col.id, folderId };
+  if (col.auth && col.auth.auth_type !== "inherit") {
+    return { source: "collection", collectionId: col.id };
+  }
+  return undefined;
+}
+
+function findFolderIdWithAuth(
+  folders: CollectionFolder[],
+  requestId: string
+): string | undefined {
+  for (const folder of folders) {
+    if (folder.requests.some((r) => r.id === requestId)) {
+      if (folder.auth && folder.auth.auth_type !== "inherit") {
+        return folder.id;
+      }
+      return undefined;
+    }
+    const deeper = findFolderIdWithAuth(folder.folders, requestId);
+    if (deeper) return deeper;
+  }
+  return undefined;
+}
+
 /**
  * Locate a request inside a collection tree, returning its parent path so the
  * UI can render breadcrumbs / labels for "inherits from X".

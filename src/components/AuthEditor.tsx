@@ -258,31 +258,105 @@ function OAuth2Editor({
     ? t("auth.oauth2_status_valid_until", { when: new Date(expiresAt).toLocaleString() })
     : t("auth.oauth2_status_no_expiry");
 
+  const usePkce = value.oauth2_use_pkce !== false; // default true
+
   const fetchToken = async () => {
     setFetching(true);
     setFetchError(null);
     setFetchOk(false);
     try {
-      const resp = await invoke<{ access_token: string; expires_at: number | null }>(
-        "oauth2_fetch_token",
-        {
+      // authorization_code is a two-step flow:
+      //   1. open browser, await loopback redirect with the code
+      //   2. exchange code + verifier for tokens
+      let extra: Record<string, unknown> = {};
+      if (grant === "authorization_code") {
+        const start = await invoke<{
+          code: string;
+          redirect_uri: string;
+          code_verifier: string;
+          state: string;
+        }>("oauth2_start_authorization_code", {
           request: {
             grant_type: grant,
             token_url: value.oauth2_token_url || "",
             client_id: value.oauth2_client_id || "",
             client_secret: value.oauth2_client_secret || "",
             scope: value.oauth2_scope || null,
-            client_auth: clientAuth,
-            username: grant === "password" ? value.oauth2_username || "" : null,
-            password: grant === "password" ? value.oauth2_password || "" : null,
+            authorization_url: value.oauth2_authorization_url || "",
+            use_pkce: usePkce,
             insecure: false,
           },
-        }
-      );
+        });
+        extra = {
+          authorization_url: value.oauth2_authorization_url || "",
+          code: start.code,
+          redirect_uri: start.redirect_uri,
+          code_verifier: start.code_verifier,
+          use_pkce: usePkce,
+        };
+      }
+      const resp = await invoke<{
+        access_token: string;
+        expires_at: number | null;
+        refresh_token: string | null;
+      }>("oauth2_fetch_token", {
+        request: {
+          grant_type: grant,
+          token_url: value.oauth2_token_url || "",
+          client_id: value.oauth2_client_id || "",
+          client_secret: value.oauth2_client_secret || "",
+          scope: value.oauth2_scope || null,
+          client_auth: clientAuth,
+          username: grant === "password" ? value.oauth2_username || "" : null,
+          password: grant === "password" ? value.oauth2_password || "" : null,
+          insecure: false,
+          ...extra,
+        },
+      });
       onChange({
         ...value,
         oauth2_access_token: resp.access_token,
         oauth2_token_expires_at: resp.expires_at ?? undefined,
+        // Only overwrite the cached refresh_token if the provider returned
+        // a new one. Some providers (Google, Auth0) only emit it on the
+        // first exchange and expect the client to keep using the same one.
+        oauth2_refresh_token: resp.refresh_token ?? value.oauth2_refresh_token,
+      });
+      setFetchOk(true);
+    } catch (err) {
+      setFetchError(String(err));
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  const refreshToken = async () => {
+    if (!value.oauth2_refresh_token) return;
+    setFetching(true);
+    setFetchError(null);
+    setFetchOk(false);
+    try {
+      const resp = await invoke<{
+        access_token: string;
+        expires_at: number | null;
+        refresh_token: string | null;
+      }>("oauth2_fetch_token", {
+        request: {
+          grant_type: "refresh_token",
+          token_url: value.oauth2_token_url || "",
+          client_id: value.oauth2_client_id || "",
+          client_secret: value.oauth2_client_secret || "",
+          scope: value.oauth2_scope || null,
+          client_auth: clientAuth,
+          refresh_token: value.oauth2_refresh_token,
+          insecure: false,
+        },
+      });
+      onChange({
+        ...value,
+        oauth2_access_token: resp.access_token,
+        oauth2_token_expires_at: resp.expires_at ?? undefined,
+        oauth2_refresh_token: resp.refresh_token ?? value.oauth2_refresh_token,
       });
       setFetchOk(true);
     } catch (err) {
@@ -298,6 +372,12 @@ function OAuth2Editor({
         <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.oauth2_grant")}</label>
         <div className="segmented-control mt-1">
           <button
+            onClick={() => onChange({ ...value, oauth2_grant_type: "authorization_code" })}
+            className={`segment ${grant === "authorization_code" ? "segment-active" : ""}`}
+          >
+            {t("auth.oauth2_grant_authorization_code")}
+          </button>
+          <button
             onClick={() => onChange({ ...value, oauth2_grant_type: "client_credentials" })}
             className={`segment ${grant === "client_credentials" ? "segment-active" : ""}`}
           >
@@ -311,6 +391,33 @@ function OAuth2Editor({
           </button>
         </div>
       </div>
+
+      {grant === "authorization_code" && (
+        <>
+          <div>
+            <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.oauth2_authorization_url")}</label>
+            <input
+              type="text"
+              value={value.oauth2_authorization_url || ""}
+              onChange={(e) => onChange({ ...value, oauth2_authorization_url: e.target.value })}
+              placeholder={t("auth.oauth2_authorization_url_placeholder")}
+              className="input-apple w-full font-mono text-[12px] mt-1"
+              spellCheck={false}
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              id="oauth2-use-pkce"
+              type="checkbox"
+              checked={usePkce}
+              onChange={(e) => onChange({ ...value, oauth2_use_pkce: e.target.checked })}
+            />
+            <label htmlFor="oauth2-use-pkce" className="text-[12px] text-text-secondary">
+              {t("auth.oauth2_use_pkce")}
+            </label>
+          </div>
+        </>
+      )}
 
       <div>
         <label className="text-[11px] font-medium text-text-secondary uppercase tracking-wider">{t("auth.oauth2_token_url")}</label>
@@ -439,6 +546,18 @@ function OAuth2Editor({
         {hasToken && (
           <div className="mt-2 text-[11px] text-text-tertiary">
             {t("auth.oauth2_cached_token")} <span className={isExpired ? "text-error" : "text-text-secondary"}>{tokenStatus}</span>
+            {value.oauth2_refresh_token && (
+              <>
+                {" — "}
+                <button
+                  type="button"
+                  onClick={refreshToken}
+                  className="text-accent hover:underline"
+                >
+                  {t("auth.oauth2_refresh")}
+                </button>
+              </>
+            )}
             {" — "}
             <button
               type="button"
@@ -447,6 +566,7 @@ function OAuth2Editor({
                   ...value,
                   oauth2_access_token: "",
                   oauth2_token_expires_at: undefined,
+                  oauth2_refresh_token: undefined,
                 })
               }
               className="text-accent hover:underline"

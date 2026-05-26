@@ -30,8 +30,8 @@ export interface AuthConfig {
   api_key_in?: "header" | "query";
 
   // OAuth2 — populated only when auth_type === "oauth2".
-  /** Grant type. Only non-interactive grants are supported here. */
-  oauth2_grant_type?: "client_credentials" | "password";
+  /** Grant type. */
+  oauth2_grant_type?: "client_credentials" | "password" | "authorization_code";
   oauth2_token_url?: string;
   oauth2_client_id?: string;
   /** Stored in keychain (never written to collection JSON in plaintext). */
@@ -48,6 +48,14 @@ export interface AuthConfig {
   oauth2_access_token?: string;
   /** Unix millis when the cached token stops being valid. */
   oauth2_token_expires_at?: number;
+  /** Provider authorization endpoint (used for grant_type=authorization_code). */
+  oauth2_authorization_url?: string;
+  /** Cached refresh_token from the last successful authorization_code /
+   *  password exchange. Stored in keychain; used for transparent refresh. */
+  oauth2_refresh_token?: string;
+  /** Whether to send `code_challenge` on the authorization request. Defaults
+   *  to true; some legacy providers reject PKCE for confidential clients. */
+  oauth2_use_pkce?: boolean;
 
   // AWS SigV4 — populated only when auth_type === "sigv4".
   aws_access_key_id?: string;
