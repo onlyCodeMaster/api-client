@@ -1,7 +1,10 @@
 /**
- * Slice owning the "Recently Opened" sidebar tab — three actions to
+ * Slice owning the "Recently Opened" sidebar tab — four actions to
  * record a freshly-opened item, refresh the list from disk, and wipe
- * it.
+ * it (the sidebar's per-tab `clearRecent` and the Settings panel's
+ * "Clear all data" entry point `clearAllRecent` both flush the same
+ * underlying SQLite table; they exist as separate actions so the two
+ * UI surfaces can render distinct loading / confirmation flows).
  *
  * The backing store is SQLite via the `add_recent` / `get_recent` /
  * `clear_recent` Tauri commands. The slice's only responsibility is
@@ -19,7 +22,7 @@ import type { RequestState } from "../storeTypes";
 /** Subset of `RequestState` exposed by this slice. */
 export type RecentSlice = Pick<
   RequestState,
-  "recordRecent" | "refreshRecent" | "clearRecent"
+  "recordRecent" | "refreshRecent" | "clearRecent" | "clearAllRecent"
 >;
 
 export function createRecentSlice(
@@ -81,6 +84,15 @@ export function createRecentSlice(
       } catch (err) {
         console.error("Failed to clear recent:", err);
       }
+    },
+
+    clearAllRecent: async () => {
+      try {
+        await invoke("clear_recent");
+      } catch (err) {
+        console.error("Failed to clear recent:", err);
+      }
+      set({ recentItems: [] });
     },
   };
 }
