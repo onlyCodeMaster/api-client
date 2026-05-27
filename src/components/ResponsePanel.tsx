@@ -12,6 +12,7 @@ import { evaluateJsonPath } from "../utils/jsonPath";
 import { resolveRequestUrl } from "../utils/resolveUrl";
 import { exportCurl } from "../utils/curl";
 import { buildHarLog } from "../utils/har";
+import { buildScopedVars } from "../utils/variableScope";
 import { SaveToVariableModal } from "./SaveToVariableModal";
 
 type ResponseTab = "body" | "headers" | "tests";
@@ -166,7 +167,7 @@ export function ResponsePanel() {
   // user gets non-blocking visual feedback. Each entry is { kind, text };
   // it auto-clears after 2 s via the timeout below.
   const [actionFlash, setActionFlash] = useState<string | null>(null);
-  const { response, loading, error, activeRequest, testResults, scriptLogs, scriptError, responseHistory, environments, workspace } = useRequestStore();
+  const { response, loading, error, activeRequest, testResults, scriptLogs, scriptError, responseHistory, environments, workspace, collections } = useRequestStore();
   const snapshots = activeRequest ? responseHistory[activeRequest.id] ?? [] : [];
   const canDiff = snapshots.length >= 2;
 
@@ -273,22 +274,26 @@ export function ResponsePanel() {
     }
   };
 
-  /** Snapshot of the active environment's variable values, used for URL /
-   *  cURL / HAR exports. We can't always replay transient (per-send) vars
-   *  because they're already discarded by the time the user clicks Copy,
-   *  so the exports use just the env scope — same behaviour as Postman. */
-  const envVars = useMemo<Record<string, string>>(() => {
-    const activeEnvId = workspace?.active_environment_id;
-    const env = activeEnvId
-      ? environments.find((e) => e.id === activeEnvId)
-      : undefined;
-    if (!env) return {};
-    const out: Record<string, string> = {};
-    for (const v of env.variables) {
-      if (v.enabled && v.key) out[v.key] = v.value;
-    }
-    return out;
-  }, [environments, workspace]);
+  /** Full scope chain (global → collection → folder → environment) used
+   *  for URL / cURL / HAR exports. Mirrors what `requestPipeline` builds
+   *  at send time — minus transient script overrides, which are already
+   *  discarded by the time the user clicks Copy. Using the full chain
+   *  keeps the three response-panel copy actions in lock-step with the
+   *  request-panel "Copy as cURL" button, so a `{{var}}` defined at any
+   *  layer resolves consistently regardless of which copy entry point the
+   *  user used. */
+  const envVars = useMemo<Record<string, string>>(
+    () =>
+      activeRequest
+        ? buildScopedVars({
+            workspace,
+            collections,
+            environments,
+            request: activeRequest,
+          })
+        : {},
+    [workspace, collections, environments, activeRequest],
+  );
 
   const flash = (msg: string) => {
     setActionFlash(msg);
