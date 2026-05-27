@@ -864,6 +864,24 @@ export const useRequestStore = create<RequestState>((set, get) => {
         : undefined;
       const transientVars: Record<string, string> = {};
 
+      // Per-scope maps so scripts can mutate each layer independently via
+      // pm.globals / pm.collectionVariables. Captured as snapshots here;
+      // mutations land back on these maps and we diff to persist below.
+      const globalVars: Record<string, string> = {};
+      for (const v of state.workspace?.variables ?? []) {
+        if (v.enabled && v.key) globalVars[v.key] = v.value;
+      }
+      const globalBaseline = { ...globalVars };
+
+      const owningCollection = req.collectionId
+        ? state.collections.find((c) => c.id === req.collectionId)
+        : undefined;
+      const collectionVars: Record<string, string> = {};
+      for (const v of owningCollection?.variables ?? []) {
+        if (v.enabled && v.key) collectionVars[v.key] = v.value;
+      }
+      const collectionBaseline = { ...collectionVars };
+
       let result: Awaited<ReturnType<typeof executeRequestWithScripts>>;
       try {
         result = await executeRequestWithScripts({
@@ -871,6 +889,8 @@ export const useRequestStore = create<RequestState>((set, get) => {
           collections: get().collections,
           envVars,
           transientVars,
+          globalVars,
+          collectionVars,
           defaults: pipelineDefaultsFrom(get()),
         });
       } catch (err) {
@@ -887,6 +907,66 @@ export const useRequestStore = create<RequestState>((set, get) => {
           }),
         }));
         return;
+      }
+
+      // Persist global-scope mutations (pm.globals.set/unset). Diff against
+      // the pre-script baseline so we only touch what the script actually
+      // changed.
+      if (state.workspace) {
+        const globalChanges: Record<string, string> = {};
+        for (const [k, v] of Object.entries(globalVars)) {
+          if (globalBaseline[k] !== v) globalChanges[k] = v;
+        }
+        const globalDeletions = Object.keys(globalBaseline).filter(
+          (k) => !(k in globalVars),
+        );
+        if (Object.keys(globalChanges).length > 0 || globalDeletions.length > 0) {
+          const prev = state.workspace.variables ?? [];
+          const nextVars = prev
+            .filter((v) => !v.enabled || !v.key || !globalDeletions.includes(v.key))
+            .map((v) =>
+              v.enabled && v.key && v.key in globalChanges
+                ? { ...v, value: globalChanges[v.key] }
+                : v,
+            );
+          for (const k of Object.keys(globalChanges)) {
+            if (!prev.some((v) => v.key === k)) {
+              nextVars.push({ key: k, value: globalChanges[k], enabled: true, is_secret: false });
+            }
+          }
+          get()
+            .setGlobalVariables(nextVars)
+            .catch((e) => console.error("Failed to persist global var mutations:", e));
+        }
+      }
+
+      // Persist collection-scope mutations (pm.collectionVariables.set/unset).
+      if (owningCollection) {
+        const colChanges: Record<string, string> = {};
+        for (const [k, v] of Object.entries(collectionVars)) {
+          if (collectionBaseline[k] !== v) colChanges[k] = v;
+        }
+        const colDeletions = Object.keys(collectionBaseline).filter(
+          (k) => !(k in collectionVars),
+        );
+        if (Object.keys(colChanges).length > 0 || colDeletions.length > 0) {
+          const prev = owningCollection.variables ?? [];
+          const nextVars = prev
+            .filter((v) => !v.enabled || !v.key || !colDeletions.includes(v.key))
+            .map((v) =>
+              v.enabled && v.key && v.key in colChanges
+                ? { ...v, value: colChanges[v.key] }
+                : v,
+            );
+          for (const k of Object.keys(colChanges)) {
+            if (!prev.some((v) => v.key === k)) {
+              nextVars.push({ key: k, value: colChanges[k], enabled: true, is_secret: false });
+            }
+          }
+          get()
+            .setCollectionVariables(owningCollection.id, nextVars)
+            .catch((e) => console.error("Failed to persist collection var mutations:", e));
+        }
       }
 
       // Persist script-induced mutations to the env layer only. Script writes
