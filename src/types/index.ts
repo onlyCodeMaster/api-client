@@ -21,13 +21,54 @@ export interface AuthConfig {
    *   the parent has auth configured.
    * - `"bearer" | "basic" | "api_key" | "oauth2"`: concrete schemes.
    */
-  auth_type: "inherit" | "none" | "bearer" | "basic" | "api_key" | "oauth2" | "sigv4";
+  auth_type:
+    | "inherit"
+    | "none"
+    | "bearer"
+    | "basic"
+    | "api_key"
+    | "oauth2"
+    | "sigv4"
+    | "digest"
+    | "oauth1"
+    | "jwt";
   bearer_token?: string;
   basic_username?: string;
   basic_password?: string;
   api_key_key?: string;
   api_key_value?: string;
   api_key_in?: "header" | "query";
+
+  // HTTP Digest (RFC 7616) — populated when auth_type === "digest".
+  /** Digest username (sent in the response). */
+  digest_username?: string;
+  /** Digest password (stored in keychain). */
+  digest_password?: string;
+
+  // OAuth 1.0a (RFC 5849) — populated when auth_type === "oauth1".
+  oauth1_consumer_key?: string;
+  /** Stored in keychain. */
+  oauth1_consumer_secret?: string;
+  oauth1_token?: string;
+  /** Stored in keychain. */
+  oauth1_token_secret?: string;
+  oauth1_signature_method?: "HMAC-SHA1" | "HMAC-SHA256" | "PLAINTEXT";
+  oauth1_realm?: string;
+  /** Where to inject the `oauth_*` parameters. Default "header". */
+  oauth1_add_to?: "header" | "query";
+
+  // JWT HMAC signer — populated when auth_type === "jwt".
+  jwt_algorithm?: "HS256" | "HS384" | "HS512";
+  /** Stored in keychain. */
+  jwt_secret?: string;
+  /** Treat the secret as base64-encoded bytes. */
+  jwt_secret_is_base64?: boolean;
+  /** Claims as a JSON string. */
+  jwt_payload?: string;
+  /** Header name to put the token in (default "Authorization"). */
+  jwt_request_header?: string;
+  /** Prefix before the token (default "Bearer "). Use empty string for no prefix. */
+  jwt_header_prefix?: string;
 
   // OAuth2 — populated only when auth_type === "oauth2".
   /** Grant type. */
