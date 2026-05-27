@@ -10,6 +10,13 @@ interface Props {
   onClose: () => void;
   /** Called after a successful save. */
   onSaved?: () => void;
+  /**
+   * Pre-populate the error banner. Used by the ⌘S keyboard shortcut so
+   * that when an in-place save fails, we open this modal *with* the
+   * backend error already visible — instead of failing silently and
+   * leaving the user thinking the save succeeded.
+   */
+  initialError?: string | null;
 }
 
 /** A single selectable destination inside the tree: either a collection
@@ -34,7 +41,7 @@ function destinationEquals(a: Destination | null, b: Destination): boolean {
  * folder) is selectable via the collection row itself. The dialog also
  * shows a name field so the user can rename before saving.
  */
-export function SaveToCollectionModal({ onClose, onSaved }: Props) {
+export function SaveToCollectionModal({ onClose, onSaved, initialError }: Props) {
   const { t } = useTranslation();
   const collections = useRequestStore((s) => s.collections);
   const activeRequest = useRequestStore((s) => s.activeRequest);
@@ -56,7 +63,7 @@ export function SaveToCollectionModal({ onClose, onSaved }: Props) {
   });
   const [name, setName] = useState(activeRequest?.name || "Untitled Request");
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError ?? null);
 
   const toggleCollection = (id: string) => {
     setExpanded((prev) => {
