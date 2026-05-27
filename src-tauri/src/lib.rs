@@ -1227,22 +1227,72 @@ mod tests {
     }
 
     #[test]
-    fn persist_set_cookies_skips_malformed() {
-        // A garbage Set-Cookie header must not bring down the request — we
-        // skip it and continue with the rest. (No panic, no insert.)
+    fn persist_set_cookies_skips_malformed_keeps_valid() {
+        // A garbage Set-Cookie header must not bring down the request: the
+        // loop must skip it and continue persisting subsequent valid ones.
+        //
+        // We exercise BOTH skip paths in persist_set_cookies:
+        //   1. `to_str()` failure  — header bytes that aren't visible ASCII.
+        //   2. `Cookie::parse()` failure — well-formed ASCII but not a
+        //      valid cookie string (empty value here triggers cookie::ParseError).
+        //
+        // After all three headers are processed, only the trailing valid
+        // cookie should be in the DB. This pins the "skip-don't-crash"
+        // contract — if either skip path is removed, the test will either
+        // panic on unwrap (loud failure) OR end up with len > 1.
         let conn = Connection::open_in_memory().expect("open in-memory db");
         let db = db::Database::from_connection(conn).expect("init_tables");
         let url = url::Url::parse("https://example.com/").unwrap();
         let mut headers = reqwest::header::HeaderMap::new();
-        // Invalid UTF-8 bytes in the header value — to_str() will fail.
-        headers.insert(
+
+        // Skip path #1: bytes outside the visible-ASCII range make to_str()
+        // return Err (the http crate accepts them via from_bytes but they
+        // can't be losslessly converted to &str).
+        if let Ok(non_visible) = reqwest::header::HeaderValue::from_bytes(&[0xC3, 0x28]) {
+            headers.append(reqwest::header::SET_COOKIE, non_visible);
+        }
+
+        // Skip path #2: parseable as a string, but not as a cookie. An empty
+        // header value cannot be a cookie (no name=value pair).
+        headers.append(
             reqwest::header::SET_COOKIE,
-            reqwest::header::HeaderValue::from_bytes(b"valid=ok; Path=/")
-                .expect("header value"),
+            reqwest::header::HeaderValue::from_static(""),
         );
+
+        // Trailing valid cookie — must survive both skips and be persisted.
+        headers.append(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_static("session=ok; Path=/"),
+        );
+
+        // Sanity-check the test fixture itself: prove the "malformed" inputs
+        // actually fail their respective parser steps. If a future cookie-crate
+        // version starts accepting these, the test would silently pass with
+        // 3 cookies — make that loud instead.
+        if let Some(non_visible) = headers
+            .iter()
+            .find_map(|(k, v)| (k == reqwest::header::SET_COOKIE && v.to_str().is_err()).then_some(v))
+        {
+            assert!(
+                non_visible.to_str().is_err(),
+                "fixture invariant: non-visible-ASCII header must fail to_str()"
+            );
+        }
+        assert!(
+            cookie::Cookie::parse("".to_string()).is_err(),
+            "fixture invariant: empty string must fail Cookie::parse()"
+        );
+
         persist_set_cookies(&db, &url, &headers);
+
         let all = db.get_all_cookies().expect("get_all_cookies");
-        assert_eq!(all.len(), 1);
+        assert_eq!(
+            all.len(),
+            1,
+            "malformed headers must be skipped, only the valid cookie persisted; got {:?}",
+            all
+        );
+        assert_eq!(all[0].name, "session");
         assert_eq!(all[0].value, "ok");
     }
 
