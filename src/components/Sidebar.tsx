@@ -24,12 +24,13 @@ import {
   History,
   FileText,
 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import { useRequestStore } from "../store/useRequestStore";
 import { EnvironmentPanel } from "./EnvironmentPanel";
 import { CookiesPanel } from "./CookiesPanel";
 import { SettingsPanel } from "./SettingsPanel";
 import { collectionToPostman, postmanToCollection } from "../utils/postman";
-import { openapiToCollection } from "../utils/openapi";
+import { openapiToCollection, exportOpenApi, openApiToMockRoutes } from "../utils/openapi";
 import { insomniaToCollections } from "../utils/insomnia";
 import { harToCollection } from "../utils/har";
 import { httpFileToCollection } from "../utils/http-file";
@@ -100,6 +101,8 @@ export function Sidebar() {
   const [envSearch, setEnvSearch] = useState("");
   const [editingAuthCollectionId, setEditingAuthCollectionId] = useState<string | null>(null);
   const [runnerCollectionId, setRunnerCollectionId] = useState<string | null>(null);
+  /** id of the collection whose export-format dropdown is currently open, or null. */
+  const [exportMenuColId, setExportMenuColId] = useState<string | null>(null);
   const [variableScope, setVariableScope] = useState<
     { kind: "global" } | { kind: "collection"; collectionId: string } | null
   >(null);
@@ -246,18 +249,43 @@ export function Sidebar() {
     }
   };
 
-  const exportPostman = (colId: string) => {
-    const col = collections.find((c) => c.id === colId);
-    if (!col) return;
-    const data = collectionToPostman(col);
-    const json = JSON.stringify(data, null, 2);
-    const blob = new Blob([json], { type: "application/json" });
+  const downloadAsFile = (filename: string, content: string, mime: string) => {
+    const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${col.name.replace(/[^a-z0-9-_ ]/gi, "_")}.postman_collection.json`;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const exportPostman = (colId: string) => {
+    const col = collections.find((c) => c.id === colId);
+    if (!col) return;
+    const json = JSON.stringify(collectionToPostman(col), null, 2);
+    const safe = col.name.replace(/[^a-z0-9-_ ]/gi, "_");
+    downloadAsFile(`${safe}.postman_collection.json`, json, "application/json");
+  };
+
+  const exportAsOpenApi = (colId: string) => {
+    const col = collections.find((c) => c.id === colId);
+    if (!col) return;
+    const safe = col.name.replace(/[^a-z0-9-_ ]/gi, "_");
+    downloadAsFile(`${safe}.openapi.json`, exportOpenApi(col), "application/json");
+  };
+
+  const generateMocksFromOpenApi = async (colId: string) => {
+    const col = collections.find((c) => c.id === colId);
+    if (!col || !workspace?.id) return;
+    // Export this collection to OpenAPI in memory, then derive mock routes
+    // from the result. The user sees the new mocks immediately in the Mock
+    // Server panel.
+    const spec = exportOpenApi(col);
+    const routes = openApiToMockRoutes(spec);
+    for (const route of routes) {
+      await invoke("save_mock_route", { workspaceId: workspace.id, route });
+    }
+    setShowMockServer(true);
   };
 
   return (
@@ -632,16 +660,44 @@ export function Sidebar() {
                     >
                       <Play size={11} className="text-text-tertiary" />
                     </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        exportPostman(collection.id);
-                      }}
-                      className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-accent/10 rounded-md transition-all"
-                      title="Export as Postman v2.1"
-                    >
-                      <Download size={11} className="text-text-tertiary" />
-                    </button>
+                    <div className="relative">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExportMenuColId(exportMenuColId === collection.id ? null : collection.id);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-accent/10 rounded-md transition-all"
+                        title={t("sidebar.export_collection")}
+                      >
+                        <Download size={11} className="text-text-tertiary" />
+                      </button>
+                      {exportMenuColId === collection.id && (
+                        <div
+                          className="absolute right-0 top-full mt-1 bg-bg-primary border border-border rounded-apple shadow-lg py-1 z-50 min-w-[180px]"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            onClick={() => { exportPostman(collection.id); setExportMenuColId(null); }}
+                            className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-black/5 dark:hover:bg-white/10"
+                          >
+                            {t("sidebar.export_postman")}
+                          </button>
+                          <button
+                            onClick={() => { exportAsOpenApi(collection.id); setExportMenuColId(null); }}
+                            className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-black/5 dark:hover:bg-white/10"
+                          >
+                            {t("sidebar.export_openapi")}
+                          </button>
+                          <div className="border-t border-border my-1" />
+                          <button
+                            onClick={() => { generateMocksFromOpenApi(collection.id); setExportMenuColId(null); }}
+                            className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-black/5 dark:hover:bg-white/10"
+                          >
+                            {t("sidebar.generate_mocks")}
+                          </button>
+                        </div>
+                      )}
+                    </div>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
