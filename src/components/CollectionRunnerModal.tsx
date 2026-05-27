@@ -149,11 +149,30 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
           environments,
           request: requestItem,
         });
+        // Per-scope snapshots so pm.globals / pm.collectionVariables work
+        // identically to single-send: each script run gets a writable
+        // map, mutations land back on the workspace / collection on
+        // disk just like the single-send path persists them.
+        const globalVars: Record<string, string> = {};
+        for (const v of workspace?.variables ?? []) {
+          if (v.enabled && v.key) globalVars[v.key] = v.value;
+        }
+        const owningCollection = collections.find((c) => c.id === collectionId);
+        const collectionVars: Record<string, string> = {};
+        for (const v of owningCollection?.variables ?? []) {
+          if (v.enabled && v.key) collectionVars[v.key] = v.value;
+        }
         const result = await executeRequestWithScripts({
           request: requestItem,
           collections,
           envVars,
           transientVars,
+          globalVars,
+          collectionVars,
+          // The CSV row is the iteration data Postman exposes to scripts;
+          // read-only — scripts can read pm.iterationData.get("x") for
+          // data-driven runs.
+          iterationData: dataRow,
           // Snapshot the live store via getState so the runner picks up
           // settings tweaks the user makes mid-run, and so the field list
           // stays in lock-step with useRequestStore.sendRequest (both go
