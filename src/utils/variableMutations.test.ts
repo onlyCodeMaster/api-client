@@ -80,7 +80,7 @@ describe("applyVarMutations", () => {
       deletions: [],
     });
     expect(out).toHaveLength(source.length + 1);
-    const added = out.at(-1);
+    const added = out[out.length - 1];
     expect(added).toEqual({
       key: "fresh",
       value: "v",
