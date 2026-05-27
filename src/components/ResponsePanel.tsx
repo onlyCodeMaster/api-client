@@ -334,7 +334,11 @@ export function ResponsePanel() {
 
   const copyAsCurl = async () => {
     if (!activeRequest) return;
-    await navigator.clipboard.writeText(exportCurl(activeRequest));
+    // Pass envVars so {{var}} placeholders in the URL / headers / body /
+    // params are resolved against the active env — matches the behaviour
+    // of Copy URL / Copy as HAR, so all three exports produce something
+    // the user can immediately run / share.
+    await navigator.clipboard.writeText(exportCurl(activeRequest, envVars));
     flash(t("response.copy_curl"));
     setMoreOpen(false);
   };
