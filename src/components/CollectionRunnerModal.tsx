@@ -213,12 +213,15 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
       filters,
     });
     if (!path) return;
+    // Derive iteration count from actual results, not the input field
+    // (the input may have changed post-run, or data file may override it).
+    const actualIterations = Math.max(...results.map((r) => r.iteration), 0);
     const content =
       format === "junit"
-        ? exportJUnit(results, col.name, iterations)
+        ? exportJUnit(results, col.name, actualIterations)
         : format === "json"
-          ? exportJson(results, col.name, iterations)
-          : exportHtml(results, col.name, iterations);
+          ? exportJson(results, col.name, actualIterations)
+          : exportHtml(results, col.name, actualIterations);
     await invoke("write_file", { path, contents: content });
   };
 

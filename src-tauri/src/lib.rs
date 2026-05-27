@@ -897,7 +897,8 @@ pub fn run() {
     // user via the dialog plugin, now it just needs us to write the bytes).
     #[tauri::command]
     async fn write_file(path: String, contents: String) -> Result<(), String> {
-        std::fs::write(&path, contents.as_bytes())
+        tokio::fs::write(&path, contents.as_bytes())
+            .await
             .map_err(|e| format!("Failed to write {path}: {e}"))
     }
 
