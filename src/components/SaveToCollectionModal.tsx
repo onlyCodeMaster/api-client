@@ -4,6 +4,10 @@ import { useTranslation } from "react-i18next";
 import { X, ChevronRight, ChevronDown, Folder, FolderOpen, Layers } from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
 import type { Collection, CollectionFolder } from "../types";
+import {
+  initialSelectedDestination,
+  type SaveDestination,
+} from "../utils/saveToCollection";
 
 interface Props {
   /** Closes the modal. */
@@ -19,11 +23,8 @@ interface Props {
   initialError?: string | null;
 }
 
-/** A single selectable destination inside the tree: either a collection
- *  root or a specific folder within a collection. */
-type Destination =
-  | { kind: "collection"; collectionId: string }
-  | { kind: "folder"; collectionId: string; folderId: string };
+/** Alias kept for the component's local readability. */
+type Destination = SaveDestination;
 
 function destinationEquals(a: Destination | null, b: Destination): boolean {
   if (!a) return false;
@@ -49,18 +50,20 @@ export function SaveToCollectionModal({ onClose, onSaved, initialError }: Props)
   const updateActiveRequest = useRequestStore((s) => s.updateActiveRequest);
 
   // Auto-expand the collection that the active tab currently belongs to
-  // (if any) so the user lands close to where they last saved.
+  // (if any) so the user lands close to where they last saved. Skip when
+  // the tab points at a collection that has since been deleted — there's
+  // nothing useful to expand.
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     const initial = new Set<string>();
-    if (activeRequest?.collectionId) initial.add(activeRequest.collectionId);
+    const cid = activeRequest?.collectionId;
+    if (cid && collections.some((c) => c.id === cid)) initial.add(cid);
     return initial;
   });
-  const [selected, setSelected] = useState<Destination | null>(() => {
-    if (activeRequest?.collectionId) {
-      return { kind: "collection", collectionId: activeRequest.collectionId };
-    }
-    return null;
-  });
+  // Pre-select the active tab's current collection — but only if it still
+  // exists. See `initialSelectedDestination` for the rationale.
+  const [selected, setSelected] = useState<Destination | null>(() =>
+    initialSelectedDestination(activeRequest?.collectionId, collections),
+  );
   const [name, setName] = useState(activeRequest?.name || "Untitled Request");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(initialError ?? null);
@@ -82,9 +85,17 @@ export function SaveToCollectionModal({ onClose, onSaved, initialError }: Props)
     });
   };
 
+  // Defence in depth: even after the modal is open, the collections list
+  // is reactive — if a collection is deleted while we're sitting on the
+  // dialog, the Save button should disable itself rather than dispatch a
+  // save that the backend will immediately reject.
+  const selectedCollectionExists = useMemo(
+    () => (selected ? collections.some((c) => c.id === selected.collectionId) : false),
+    [selected, collections],
+  );
   const canSave = useMemo(
-    () => selected !== null && name.trim().length > 0 && !saving,
-    [selected, name, saving],
+    () => selected !== null && selectedCollectionExists && name.trim().length > 0 && !saving,
+    [selected, selectedCollectionExists, name, saving],
   );
 
   const onSubmit = async () => {
