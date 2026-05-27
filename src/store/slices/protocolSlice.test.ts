@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { StoreApi } from "zustand";
 import { createProtocolSlice } from "./protocolSlice";
 import type { RequestState } from "../storeTypes";
+import { mockRequestState } from "../__test-utils__/mockRequestState";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
@@ -20,28 +21,13 @@ import { invoke } from "@tauri-apps/api/core";
  */
 
 function makeStore(initialState: Partial<RequestState> = {}) {
-  let state = {
-    activeTabId: null,
-    tabs: [],
-    wsMessages: {},
-    wsConnected: {},
-    sseEvents: {},
-    sseConnected: {},
-    errors: {},
-    responses: {},
-    loadings: {},
-    workspace: null,
-    collections: [],
-    environments: [],
-    defaultTimeoutMs: 30000,
-    ...initialState,
-  } as unknown as RequestState;
+  let state: RequestState = mockRequestState(initialState);
   const set: StoreApi<RequestState>["setState"] = (partial) => {
     const next =
       typeof partial === "function"
         ? (partial as (s: RequestState) => Partial<RequestState>)(state)
         : partial;
-    state = { ...state, ...next } as RequestState;
+    state = { ...state, ...next };
   };
   const get: StoreApi<RequestState>["getState"] = () => state;
   return { set, get, getState: () => state };
@@ -108,7 +94,7 @@ describe("createProtocolSlice", () => {
 
     it("marks disconnected for kind=close and kind=error", () => {
       const { set, get, getState } = makeStore({
-        wsConnected: { req1: true } as Record<string, boolean>,
+        wsConnected: { req1: true },
       });
       const slice = createProtocolSlice(set, get);
       slice.appendWsEvent("req1", "close");
@@ -121,7 +107,7 @@ describe("createProtocolSlice", () => {
 
     it("preserves the existing connected flag for unrelated event kinds", () => {
       const { set, get, getState } = makeStore({
-        wsConnected: { req1: true } as Record<string, boolean>,
+        wsConnected: { req1: true },
       });
       const slice = createProtocolSlice(set, get);
       slice.appendWsEvent("req1", "message", "hi");

@@ -1,12 +1,10 @@
 /**
- * Top-level shape of the Zustand store + the two state-derivation helpers
- * that read from it. Lives in a separate module from `useRequestStore.ts`
- * so action slices (e.g. `slices/protocolSlice.ts`) can reference the
- * type and the derivation helpers without pulling in the store creator
- * itself — that would create a circular import (store -> slice -> store).
- *
- * No behavior change vs. the original location; this file is pure
- * declarations.
+ * Top-level shape of the Zustand store + the two state-derivation
+ * helpers that read from it. This file contains only types and pure
+ * derivation functions — no store creation, no Tauri `invoke` calls —
+ * so action slices in `./slices/*.ts` can import the type without
+ * pulling in the store creator (which would create a circular
+ * dependency: store → slice → store).
  */
 
 import type {
