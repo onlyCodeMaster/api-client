@@ -1,7 +1,7 @@
 /**
- * Slice extracted from `useRequestStore.ts` covering the two streaming
- * protocol implementations (WebSocket + Server-Sent Events) that the
- * sidebar's "WebSocket" / "SSE" protocol toggles delegate to.
+ * Slice owning the two streaming protocol implementations (WebSocket +
+ * Server-Sent Events) that the sidebar's "WebSocket" / "SSE" protocol
+ * toggles delegate to.
  *
  * Each action follows the same recipe:
  *
