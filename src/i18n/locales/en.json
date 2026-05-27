@@ -359,7 +359,11 @@
     "summary_passed_failed": "{{passed}} passed, {{failed}} failed",
     "summary_errored": ", {{count}} errored",
     "summary_completed": "{{count}} requests completed",
-    "hint": "Configure and click Run to execute all requests sequentially."
+    "hint": "Configure and click Run to execute all requests sequentially.",
+    "export": "Export",
+    "export_junit": "JUnit XML",
+    "export_json": "JSON",
+    "export_html": "HTML Report"
   },
   "mock": {
     "title": "Mock Server",

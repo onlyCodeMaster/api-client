@@ -892,6 +892,15 @@ pub fn run() {
     let mock_server = Arc::new(mock_server::MockServerState::new());
     cookies.preload_from_db(&database);
 
+    // --- Utility: write plain text to a user-chosen path (used by the
+    // Collection Runner export flow — the frontend already prompted the
+    // user via the dialog plugin, now it just needs us to write the bytes).
+    #[tauri::command]
+    async fn write_file(path: String, contents: String) -> Result<(), String> {
+        std::fs::write(&path, contents.as_bytes())
+            .map_err(|e| format!("Failed to write {path}: {e}"))
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -971,6 +980,8 @@ pub fn run() {
             commands::list_mock_routes,
             commands::save_mock_route,
             commands::delete_mock_route,
+            // Utility
+            write_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

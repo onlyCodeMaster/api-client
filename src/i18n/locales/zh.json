@@ -355,7 +355,11 @@
     "summary_passed_failed": "{{passed}} 通过，{{failed}} 失败",
     "summary_errored": "，{{count}} 个出错",
     "summary_completed": "完成 {{count}} 个请求",
-    "hint": "配置后点击运行，会按顺序依次发出所有请求。"
+    "hint": "配置后点击运行，会按顺序依次发出所有请求。",
+    "export": "导出",
+    "export_junit": "JUnit XML",
+    "export_json": "JSON",
+    "export_html": "HTML 报告"
   },
   "mock": {
     "title": "Mock 服务器",
