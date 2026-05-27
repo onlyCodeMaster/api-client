@@ -20,6 +20,32 @@ import {
   DEFAULT_MAX_HISTORY_BODY_BYTES,
   buildResponseSnapshot,
 } from "../utils/historySnapshot";
+import type { RequestState } from "./storeTypes";
+
+/**
+ * Apply a patch to the currently focused tab and return the partial
+ * state to feed into a Zustand `set()`. Returns an empty object when
+ * no tab is focused so the caller can safely spread the result
+ * unconditionally.
+ *
+ * Returns `{ tabs, activeRequest }`; callers that need to recompute
+ * the other derived fields (`response`, `loading`, `error`) should
+ * follow up with a `syncDerived(...)` spread.
+ */
+export function updateActiveTab(
+  state: RequestState,
+  patch: Partial<RequestItem>,
+): Partial<RequestState> {
+  if (!state.activeTabId) return {};
+  const tabs = state.tabs.map((t) =>
+    t.id === state.activeTabId ? { ...t, ...patch } : t,
+  );
+  const active = tabs.find((t) => t.id === state.activeTabId) || null;
+  return {
+    tabs,
+    activeRequest: active,
+  };
+}
 
 /** Short random id (alphanumeric, 13 chars). Used for tabs / kv rows / new
  *  requests / etc. — anywhere we just need a non-cryptographic local id. */
