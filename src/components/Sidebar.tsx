@@ -64,6 +64,11 @@ function isPostman(d: unknown): boolean {
 export function Sidebar() {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<"history" | "collections" | "recent">("history");
+  // History search query lives here — not inside SidebarHistoryTab — so
+  // that switching to another tab and back doesn't clear the input
+  // while the store-level `history` array is still filtered (which
+  // would render an empty search box over a filtered list).
+  const [historySearchQuery, setHistorySearchQuery] = useState("");
   const [showNewCollection, setShowNewCollection] = useState(false);
   const [newCollectionName, setNewCollectionName] = useState("");
   const [showEnvPanel, setShowEnvPanel] = useState(false);
@@ -377,7 +382,12 @@ export function Sidebar() {
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 pb-2">
-        {activeTab === "history" && <SidebarHistoryTab />}
+        {activeTab === "history" && (
+          <SidebarHistoryTab
+            searchQuery={historySearchQuery}
+            setSearchQuery={setHistorySearchQuery}
+          />
+        )}
 
         {activeTab === "collections" && (
           <div>

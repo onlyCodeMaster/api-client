@@ -3,6 +3,18 @@ import { useTranslation } from "react-i18next";
 import { Search, X, Clock, Trash2 } from "lucide-react";
 import { useRequestStore } from "../store/useRequestStore";
 
+interface SidebarHistoryTabProps {
+  /**
+   * Lifted to the parent `Sidebar` (which never unmounts when the user
+   * switches tabs) so the filter survives History/Collections/Recent
+   * tab switches. If we stored it locally, switching away and back
+   * would clear the search box but leave the store's `history` array
+   * filtered — the user would see an empty input over a filtered list.
+   */
+  searchQuery: string;
+  setSearchQuery: (q: string) => void;
+}
+
 const METHOD_BADGE: Record<string, string> = {
   GET: "bg-success/15 text-success",
   POST: "bg-orange/15 text-orange",
@@ -19,11 +31,15 @@ const METHOD_BADGE: Record<string, string> = {
  * button. Extracted from `Sidebar.tsx` so the parent stays focused on
  * layout + tab switching.
  *
- * Search state (`searchQuery`) is owned locally — when the box is cleared
- * we explicitly call `initialize()` to fall back to the default history
- * listing (mirrors the previous inline implementation).
+ * Search state lives on the parent `Sidebar` (see prop docs above) so
+ * the filter persists across tab switches. When the box is cleared we
+ * explicitly call `initialize()` to refetch the full history listing
+ * (mirrors the previous inline implementation).
  */
-export function SidebarHistoryTab() {
+export function SidebarHistoryTab({
+  searchQuery,
+  setSearchQuery,
+}: SidebarHistoryTabProps) {
   const { t } = useTranslation();
   const history = useRequestStore((s) => s.history);
   const activeRequestId = useRequestStore((s) => s.activeRequestId);
@@ -35,7 +51,6 @@ export function SidebarHistoryTab() {
   const searchHistory = useRequestStore((s) => s.searchHistory);
   const reorderHistory = useRequestStore((s) => s.reorderHistory);
 
-  const [searchQuery, setSearchQuery] = useState("");
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
   const handleSearch = (query: string) => {
