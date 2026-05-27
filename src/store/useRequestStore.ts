@@ -22,7 +22,10 @@ import type {
   ScriptLog,
 } from "../types";
 import { postmanToCollection } from "../utils/postman";
-import { executeRequestWithScripts } from "../utils/requestPipeline";
+import {
+  executeRequestWithScripts,
+  pipelineDefaultsFrom,
+} from "../utils/requestPipeline";
 import { substituteAll } from "../utils/dynamicVars";
 import { buildScopedVars } from "../utils/variableScope";
 import {
@@ -868,14 +871,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
           collections: get().collections,
           envVars,
           transientVars,
-          defaults: {
-            defaultTimeoutMs: get().defaultTimeoutMs,
-            verifyTlsDefault: get().verifyTlsDefault,
-            maxBodyBytes: get().maxBodyBytes,
-            defaultRedirectPolicy: get().defaultRedirectPolicy,
-            defaultMaxRedirects: get().defaultMaxRedirects,
-            defaultProxyUrl: get().defaultProxyUrl,
-          },
+          defaults: pipelineDefaultsFrom(get()),
         });
       } catch (err) {
         // Bubble-up failures from the script worker (worker import failure,

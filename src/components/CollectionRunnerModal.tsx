@@ -3,7 +3,10 @@ import { createPortal } from "react-dom";
 import { Play, X, Square, CheckCircle2, XCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useRequestStore } from "../store/useRequestStore";
-import { executeRequestWithScripts } from "../utils/requestPipeline";
+import {
+  executeRequestWithScripts,
+  pipelineDefaultsFrom,
+} from "../utils/requestPipeline";
 import { buildScopedVars } from "../utils/variableScope";
 import { CodeEditor } from "./CodeEditor";
 import type {
@@ -75,8 +78,7 @@ interface Props {
 
 export function CollectionRunnerModal({ collectionId, onClose }: Props) {
   const { t } = useTranslation();
-  const { collections, environments, workspace, defaultTimeoutMs, verifyTlsDefault, maxBodyBytes } =
-    useRequestStore();
+  const { collections, environments, workspace } = useRequestStore();
 
   const col = collections.find((c) => c.id === collectionId);
 
@@ -152,7 +154,11 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
           collections,
           envVars,
           transientVars,
-          defaults: { defaultTimeoutMs, verifyTlsDefault, maxBodyBytes },
+          // Snapshot the live store via getState so the runner picks up
+          // settings tweaks the user makes mid-run, and so the field list
+          // stays in lock-step with useRequestStore.sendRequest (both go
+          // through the same `pipelineDefaultsFrom` helper).
+          defaults: pipelineDefaultsFrom(useRequestStore.getState()),
         });
 
         const entry: RunResult = {
