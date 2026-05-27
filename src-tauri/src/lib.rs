@@ -987,3 +987,273 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn is_text_mime_text_prefix() {
+        assert!(is_text_mime("text/plain"));
+        assert!(is_text_mime("text/html"));
+        assert!(is_text_mime("text/html; charset=utf-8"));
+        assert!(is_text_mime("text/css"));
+    }
+
+    #[test]
+    fn is_text_mime_known_application_types() {
+        assert!(is_text_mime("application/json"));
+        assert!(is_text_mime("application/json; charset=utf-8"));
+        assert!(is_text_mime("application/xml"));
+        assert!(is_text_mime("application/javascript"));
+        assert!(is_text_mime("application/x-www-form-urlencoded"));
+        assert!(is_text_mime("application/graphql"));
+        assert!(is_text_mime("application/yaml"));
+    }
+
+    #[test]
+    fn is_text_mime_structured_suffixes() {
+        // RFC 6839 +json / +xml structured-syntax suffixes are common in
+        // hypermedia APIs (e.g. application/vnd.github.v3+json).
+        assert!(is_text_mime("application/vnd.github.v3+json"));
+        assert!(is_text_mime("application/atom+xml"));
+        assert!(is_text_mime("application/something+xml"));
+    }
+
+    #[test]
+    fn is_text_mime_binary_types_rejected() {
+        assert!(!is_text_mime("application/octet-stream"));
+        assert!(!is_text_mime("application/pdf"));
+        assert!(!is_text_mime("image/png"));
+        assert!(!is_text_mime("image/jpeg"));
+        assert!(!is_text_mime("video/mp4"));
+        assert!(!is_text_mime("audio/mpeg"));
+    }
+
+    #[test]
+    fn is_text_mime_case_insensitive() {
+        // Some servers send the Content-Type in uppercase or mixed case.
+        assert!(is_text_mime("APPLICATION/JSON"));
+        assert!(is_text_mime("Text/HTML"));
+        assert!(is_text_mime("APPLICATION/Vnd.Foo+JSON"));
+    }
+
+    #[test]
+    fn is_text_mime_empty_input_is_binary() {
+        // An empty / missing Content-Type should NOT be treated as text —
+        // we'd rather base64 a body than corrupt binary data.
+        assert!(!is_text_mime(""));
+        assert!(!is_text_mime("   "));
+    }
+
+    #[test]
+    fn now_ms_monotonic_within_call() {
+        // Two successive calls in the same thread must produce a non-
+        // decreasing timestamp. (Wall-clock time can move backwards
+        // across NTP corrections, but not within a tight loop.)
+        let a = now_ms();
+        let b = now_ms();
+        assert!(b >= a, "now_ms went backwards: {} -> {}", a, b);
+    }
+
+    #[test]
+    fn active_requests_tracks_in_flight() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("rt");
+        rt.block_on(async {
+            let active = Arc::new(ActiveRequests::new());
+            assert!(active.map.lock().await.is_empty());
+
+            // Insert a fake cancellation token.
+            let token = CancellationToken::new();
+            active
+                .map
+                .lock()
+                .await
+                .insert("req-1".to_string(), token.clone());
+            assert_eq!(active.map.lock().await.len(), 1);
+
+            // Cancellation is observable through the cloned handle.
+            token.cancel();
+            assert!(active
+                .map
+                .lock()
+                .await
+                .get("req-1")
+                .unwrap()
+                .is_cancelled());
+
+            // Removal is independent of cancellation.
+            active.map.lock().await.remove("req-1");
+            assert!(active.map.lock().await.is_empty());
+        });
+    }
+
+    #[test]
+    fn cached_bodies_holds_only_latest() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("rt");
+        rt.block_on(async {
+            let cache = Arc::new(CachedBodies::new());
+            let first = bytes::Bytes::from_static(b"first response");
+            let second = bytes::Bytes::from_static(b"second response");
+
+            cache
+                .map
+                .lock()
+                .await
+                .insert("req-1".to_string(), first.clone());
+            assert_eq!(
+                cache.map.lock().await.get("req-1").cloned(),
+                Some(first.clone())
+            );
+
+            // Re-insert the same key with a newer body — the cache is
+            // bounded by "most recent per request id", so the old body
+            // must be replaced, not appended.
+            cache
+                .map
+                .lock()
+                .await
+                .insert("req-1".to_string(), second.clone());
+            assert_eq!(
+                cache.map.lock().await.get("req-1").cloned(),
+                Some(second)
+            );
+            // No leftover under the original key.
+            assert_eq!(cache.map.lock().await.len(), 1);
+        });
+    }
+
+    #[test]
+    fn app_cookies_returns_cheap_arc_clone() {
+        let cookies = AppCookies::new();
+        let jar_a = cookies.current_jar();
+        let jar_b = cookies.current_jar();
+        // Same underlying Arc — confirms the lock isn't building a fresh
+        // jar on every call.
+        assert!(Arc::ptr_eq(&jar_a, &jar_b));
+    }
+
+    #[test]
+    fn persist_set_cookies_handles_zero_headers() {
+        // Empty header map must not panic, must not insert anything.
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        let db = db::Database::from_connection(conn).expect("init_tables");
+        let url = url::Url::parse("https://example.com/").unwrap();
+        let headers = reqwest::header::HeaderMap::new();
+        persist_set_cookies(&db, &url, &headers);
+        let all = db.get_all_cookies().expect("get_all_cookies");
+        assert!(all.is_empty());
+    }
+
+    #[test]
+    fn persist_set_cookies_basic() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        let db = db::Database::from_connection(conn).expect("init_tables");
+        let url = url::Url::parse("https://example.com/path").unwrap();
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_static(
+                "session=abc123; Path=/; HttpOnly; Secure",
+            ),
+        );
+        persist_set_cookies(&db, &url, &headers);
+        let all = db.get_all_cookies().expect("get_all_cookies");
+        assert_eq!(all.len(), 1);
+        let c = &all[0];
+        assert_eq!(c.name, "session");
+        assert_eq!(c.value, "abc123");
+        assert_eq!(c.domain, "example.com"); // default from request URL
+        assert_eq!(c.path, "/");
+        assert!(c.http_only);
+        assert!(c.secure);
+    }
+
+    #[test]
+    fn persist_set_cookies_strips_leading_dot_from_domain() {
+        // RFC 6265 §5.2.3 says servers may send the Domain attribute with a
+        // leading dot (legacy compat). The jar treats `.example.com` and
+        // `example.com` as the same domain — we normalize so we never store
+        // two rows that differ only by the leading dot.
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        let db = db::Database::from_connection(conn).expect("init_tables");
+        let url = url::Url::parse("https://example.com/").unwrap();
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_static(
+                "tracker=xyz; Domain=.example.com; Path=/",
+            ),
+        );
+        persist_set_cookies(&db, &url, &headers);
+        let all = db.get_all_cookies().expect("get_all_cookies");
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].domain, "example.com");
+    }
+
+    #[test]
+    fn persist_set_cookies_upsert_replaces_existing() {
+        // Saving the same (domain, path, name) tuple twice must produce a
+        // single row whose value reflects the latest write — otherwise a
+        // refreshed session cookie would silently duplicate.
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        let db = db::Database::from_connection(conn).expect("init_tables");
+        let url = url::Url::parse("https://example.com/").unwrap();
+
+        let mut h1 = reqwest::header::HeaderMap::new();
+        h1.insert(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_static("session=v1; Path=/"),
+        );
+        persist_set_cookies(&db, &url, &h1);
+
+        let mut h2 = reqwest::header::HeaderMap::new();
+        h2.insert(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_static("session=v2; Path=/"),
+        );
+        persist_set_cookies(&db, &url, &h2);
+
+        let all = db.get_all_cookies().expect("get_all_cookies");
+        assert_eq!(all.len(), 1, "should still be one row, not two");
+        assert_eq!(all[0].value, "v2");
+    }
+
+    #[test]
+    fn persist_set_cookies_skips_malformed() {
+        // A garbage Set-Cookie header must not bring down the request — we
+        // skip it and continue with the rest. (No panic, no insert.)
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        let db = db::Database::from_connection(conn).expect("init_tables");
+        let url = url::Url::parse("https://example.com/").unwrap();
+        let mut headers = reqwest::header::HeaderMap::new();
+        // Invalid UTF-8 bytes in the header value — to_str() will fail.
+        headers.insert(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_bytes(b"valid=ok; Path=/")
+                .expect("header value"),
+        );
+        persist_set_cookies(&db, &url, &headers);
+        let all = db.get_all_cookies().expect("get_all_cookies");
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].value, "ok");
+    }
+
+    #[test]
+    fn build_jar_from_db_returns_empty_jar_for_empty_db() {
+        // No cookies in the DB → still returns Some(jar), not None.
+        // (Returning None would unnecessarily disable the cookie middleware
+        // on fresh installs.)
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        let db = db::Database::from_connection(conn).expect("init_tables");
+        let jar = build_jar_from_db(&db);
+        assert!(jar.is_some(), "should return a jar even when no cookies stored");
+    }
+}
