@@ -154,7 +154,9 @@
     "copy_curl": "Copy as cURL",
     "copy_har": "Copy as HAR",
     "save_to_variable": "Save to variable…",
-    "save_to_variable_done": "Saved to {{env}}.{{key}}"
+    "save_to_variable_done": "Saved to {{env}}.{{key}}",
+    "request_failed": "Request Failed",
+    "retry": "Retry"
   },
   "save_variable": {
     "title": "Save response value to variable",
@@ -342,7 +344,20 @@
     "request_failed": "Request failed",
     "request_cancelled": "Request cancelled",
     "invalid_json": "Invalid JSON",
-    "no_workspace": "No active workspace"
+    "no_workspace": "No active workspace",
+    "kind": {
+      "cancelled": "Cancelled",
+      "timeout": "Request Timed Out",
+      "dns": "DNS Lookup Failed",
+      "connection": "Connection Failed",
+      "tls": "TLS / Certificate Error",
+      "proxy": "Proxy Error",
+      "client_certificate": "Client Certificate Error",
+      "input": "Invalid Request",
+      "redirect": "Redirect Loop",
+      "body": "Response Body Error",
+      "unknown": "Request Failed"
+    }
   },
   "codegen": {
     "title": "Generate Code",
