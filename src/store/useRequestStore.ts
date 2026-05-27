@@ -21,13 +21,7 @@ import {
   DEFAULT_MAX_HISTORY_BODY_BYTES,
   historyEntryToResponse,
 } from "../utils/historySnapshot";
-import { resolveAuth, locateAuthSource } from "../utils/auth";
-import {
-  shouldRefreshOAuth2,
-  buildRefreshRequest,
-  applyRefreshResult,
-  updateFolderAuth,
-} from "../utils/oauth2Refresh";
+import { refreshOAuth2Token, updateFolderAuth } from "../utils/oauth2Refresh";
 import {
   createNewRequest,
   findRequestInCollection,
@@ -472,33 +466,24 @@ export const useRequestStore = create<RequestState>((set, get) => {
     },
 
     ensureFreshOAuth2: async (req) => {
-      const { collections } = get();
-      const auth = resolveAuth(req, collections);
-      if (!shouldRefreshOAuth2(auth)) return;
-
-      const payload = buildRefreshRequest(auth!);
-      const resp = await invoke<{
-        access_token: string;
-        expires_at: number | null;
-        refresh_token: string | null;
-      }>("oauth2_fetch_token", { request: payload });
-
-      const newAuth = applyRefreshResult(auth!, resp);
-      const src = locateAuthSource(req, collections);
-      if (!src) return;
-
-      switch (src.source) {
+      const outcome = await refreshOAuth2Token(req, get().collections, invoke);
+      if (outcome.kind === "noop") return;
+      const { newAuth, source } = outcome;
+      switch (source.source) {
         case "request":
           get().updateActiveRequest({ auth: newAuth });
           break;
         case "collection":
-          await get().setCollectionAuth(src.collectionId, newAuth);
+          await get().setCollectionAuth(source.collectionId, newAuth);
           break;
         case "folder": {
-          const col = collections.find((c) => c.id === src.collectionId);
+          const col = get().collections.find(
+            (c) => c.id === source.collectionId,
+          );
           if (!col) break;
-          const updated = updateFolderAuth(col, src.folderId, newAuth);
-          await get().updateCollection(updated);
+          await get().updateCollection(
+            updateFolderAuth(col, source.folderId, newAuth),
+          );
           break;
         }
       }
