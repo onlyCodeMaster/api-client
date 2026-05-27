@@ -13,8 +13,8 @@
  *      appending newly-introduced keys as enabled, non-secret rows
  *      (`applyVarMutations`).
  *
- * Each scope used to inline its own ~30-line copy of this logic. This
- * module exists so all three callers go through one tested path.
+ * All three scope callers (globals, collection, environment) share
+ * this single implementation so the logic is tested in one place.
  */
 
 import type { EnvVariable } from "../types";
