@@ -458,8 +458,6 @@
     "type_digest": "Digest 摘要",
     "type_oauth1": "OAuth 1.0",
     "type_jwt": "JWT Bearer",
-    "username": "用户名",
-    "password": "密码",
     "digest_notice": "首次请求若返回 401，将自动用 Digest 响应再次发起请求。支持 MD5 / SHA-256 与 qop=auth / auth-int。",
     "oauth1_consumer_key": "Consumer Key",
     "oauth1_consumer_secret": "Consumer Secret",

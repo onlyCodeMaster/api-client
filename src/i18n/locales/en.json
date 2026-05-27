@@ -463,8 +463,6 @@
     "type_digest": "Digest",
     "type_oauth1": "OAuth 1.0",
     "type_jwt": "JWT Bearer",
-    "username": "Username",
-    "password": "Password",
     "digest_notice": "Sends an initial request; on 401, retries with the computed Digest response. Supports MD5 / SHA-256 and qop=auth / auth-int.",
     "oauth1_consumer_key": "Consumer Key",
     "oauth1_consumer_secret": "Consumer Secret",
