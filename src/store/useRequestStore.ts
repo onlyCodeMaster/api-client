@@ -32,7 +32,6 @@ import { substituteAll } from "../utils/dynamicVars";
 import { buildScopedVars } from "../utils/variableScope";
 import {
   DEFAULT_MAX_HISTORY_BODY_BYTES,
-  buildResponseSnapshot,
   historyEntryToResponse,
 } from "../utils/historySnapshot";
 import { resolveAuth, locateAuthSource } from "../utils/auth";
@@ -55,86 +54,20 @@ import {
   reorderRequestsInContainer,
   type NodeContainer,
 } from "../utils/folderTree";
-
-function generateId(): string {
-  return Math.random().toString(36).substring(2, 15);
-}
+import {
+  generateId,
+  createEmptyKeyValue,
+  createNewRequest,
+  requestToHistoryEntry,
+  historyEntryToRequest,
+  findRequestInCollection,
+} from "./storeHelpers";
 
 // Debounce token for tab persistence. Tab content edits fire on every
 // keystroke (URL bar, body editor, ...) and we don't want to serialize +
 // fsync the workspace JSON that often. 500 ms is long enough to coalesce
 // burst typing without losing work if the user closes the window.
 let persistTabsTimer: ReturnType<typeof setTimeout> | null = null;
-
-function createEmptyKeyValue(): KeyValue {
-  return { id: generateId(), key: "", value: "", enabled: true };
-}
-
-function createNewRequest(): RequestItem {
-  return {
-    id: generateId(),
-    name: "New Request",
-    method: "GET",
-    url: "",
-    headers: [createEmptyKeyValue()],
-    params: [createEmptyKeyValue()],
-    body: "",
-    bodyType: "none",
-    formData: [createEmptyKeyValue()],
-    protocol: "http",
-    createdAt: Date.now(),
-  };
-}
-
-// Convert RequestItem -> HistoryEntry for SQLite persistence. The response
-// snapshot serializers live in `utils/historySnapshot` so they can be
-// unit-tested without spinning up the whole store.
-function requestToHistoryEntry(
-  req: RequestItem,
-  response?: ResponseData | null,
-  workspaceId?: string,
-  maxHistoryBodyBytes: number = DEFAULT_MAX_HISTORY_BODY_BYTES,
-): HistoryEntry {
-  const now = Date.now();
-  return {
-    id: req.id,
-    name: req.name,
-    method: req.method,
-    url: req.url,
-    headers: JSON.stringify(req.headers),
-    params: JSON.stringify(req.params),
-    body: req.body,
-    body_type: req.bodyType,
-    created_at: req.createdAt,
-    updated_at: now,
-    workspace_id: workspaceId,
-    ...buildResponseSnapshot(response, maxHistoryBodyBytes),
-  };
-}
-
-function historyEntryToRequest(entry: HistoryEntry): RequestItem {
-  let headers: KeyValue[] = [];
-  let params: KeyValue[] = [];
-  try { headers = JSON.parse(entry.headers); } catch { headers = [createEmptyKeyValue()]; }
-  try { params = JSON.parse(entry.params); } catch { params = [createEmptyKeyValue()]; }
-  if (headers.length === 0) headers = [createEmptyKeyValue()];
-  if (params.length === 0) params = [createEmptyKeyValue()];
-
-  return {
-    id: entry.id,
-    name: entry.name,
-    method: entry.method as HttpMethod,
-    url: entry.url,
-    headers,
-    params,
-    body: entry.body,
-    bodyType: entry.body_type as RequestItem["bodyType"],
-    formData: [createEmptyKeyValue()],
-    protocol: "http",
-    createdAt: entry.created_at,
-    updatedAt: entry.updated_at,
-  };
-}
 
 interface RequestState {
   // Data
@@ -399,25 +332,6 @@ interface RequestState {
 function activeTab(state: RequestState): RequestItem | null {
   if (!state.activeTabId) return null;
   return state.tabs.find((t) => t.id === state.activeTabId) ?? null;
-}
-
-/** Search a collection (including nested folders) for a request by id. */
-function findRequestInCollection(
-  collection: Collection,
-  requestId: string
-): CollectionRequest | null {
-  const direct = collection.requests.find((r) => r.id === requestId);
-  if (direct) return direct;
-  const walk = (folders: typeof collection.folders): CollectionRequest | null => {
-    for (const f of folders) {
-      const here = f.requests.find((r) => r.id === requestId);
-      if (here) return here;
-      const deeper = walk(f.folders);
-      if (deeper) return deeper;
-    }
-    return null;
-  };
-  return walk(collection.folders);
 }
 
 function updateActiveTab(
