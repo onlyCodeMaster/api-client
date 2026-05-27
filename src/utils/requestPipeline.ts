@@ -13,6 +13,7 @@ import { signSigV4 } from "./sigv4";
 import { signJwt } from "./jwt";
 import { signOauth1 } from "./oauth1";
 import { parseDigestChallenge, buildDigestAuthHeader } from "./digest";
+import { toRequestError } from "./requestError";
 
 /** Defaults pulled from the request store / settings panel. */
 export interface PipelineDefaults {
@@ -82,7 +83,15 @@ export interface PipelineInput {
 /** Per-request execution report — what both the tab UI and the runner display. */
 export interface PipelineResult {
   response?: ResponseData;
-  error?: string;
+  /**
+   * Structured failure from the send phase. Frontend code that wants the
+   * raw human-readable string should read `error.message`.
+   *
+   * For backwards compatibility with the collection runner / runner export
+   * format, callers may also serialize this via `.message` when emitting
+   * legacy string-only payloads.
+   */
+  error?: import("../types").RequestError;
   tests: TestResult[];
   logs: ScriptLog[];
   scriptError?: string;
@@ -393,7 +402,7 @@ export async function executeRequestWithScripts(input: PipelineInput): Promise<P
 
   // --- Send -------------------------------------------------------------------
   let response: ResponseData | undefined;
-  let error: string | undefined;
+  let error: import("../types").RequestError | undefined;
   let finalUrl = req.url;
   let bodyStr: string | null = null;
   let headerMap: Record<string, string> = {};
@@ -437,7 +446,7 @@ export async function executeRequestWithScripts(input: PipelineInput): Promise<P
       }
     }
   } catch (e) {
-    error = String(e);
+    error = toRequestError(e);
   }
 
   // --- Post-response (test) script -------------------------------------------

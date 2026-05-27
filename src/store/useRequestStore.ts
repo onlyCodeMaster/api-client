@@ -20,7 +20,9 @@ import type {
   Protocol,
   TestResult,
   ScriptLog,
+  RequestError,
 } from "../types";
+import { makeRequestError, toRequestError } from "../utils/requestError";
 import { postmanToCollection } from "../utils/postman";
 import {
   executeRequestWithScripts,
@@ -148,7 +150,7 @@ interface RequestState {
   tabs: RequestItem[];
   activeTabId: string | null;
   responses: Record<string, ResponseData | null>;
-  errors: Record<string, string | null>;
+  errors: Record<string, RequestError | null>;
   loadings: Record<string, boolean>;
   /** Test results from the most recent post-response script, keyed by request id. */
   testResults: Record<string, TestResult[] | null>;
@@ -203,7 +205,7 @@ interface RequestState {
   activeRequestId: string | null;
   response: ResponseData | null;
   loading: boolean;
-  error: string | null;
+  error: RequestError | null;
 
   // === Actions ===
   initialize: () => Promise<void>;
@@ -896,13 +898,13 @@ export const useRequestStore = create<RequestState>((set, get) => {
       } catch (err) {
         // Bubble-up failures from the script worker (worker import failure,
         // unexpected exceptions) — never leave the loading spinner stuck.
-        const msg = err instanceof Error ? err.message : String(err);
+        const structured = toRequestError(err);
         set((s) => ({
-          errors: { ...s.errors, [reqId]: msg },
+          errors: { ...s.errors, [reqId]: structured },
           loadings: { ...s.loadings, [reqId]: false },
           ...syncDerived({
             ...s,
-            errors: { ...s.errors, [reqId]: msg },
+            errors: { ...s.errors, [reqId]: structured },
             loadings: { ...s.loadings, [reqId]: false },
           }),
         }));
@@ -1094,13 +1096,14 @@ export const useRequestStore = create<RequestState>((set, get) => {
       if (!req) return;
       if (!state.loadings[req.id]) return;
       invoke("cancel_request", { requestId: req.id }).catch(() => {});
+      const cancelled = makeRequestError("cancelled", "CANCELLED", "Request cancelled");
       set((s) => ({
         loadings: { ...s.loadings, [req.id]: false },
-        errors: { ...s.errors, [req.id]: "Request cancelled" },
+        errors: { ...s.errors, [req.id]: cancelled },
         ...syncDerived({
           ...s,
           loadings: { ...s.loadings, [req.id]: false },
-          errors: { ...s.errors, [req.id]: "Request cancelled" },
+          errors: { ...s.errors, [req.id]: cancelled },
         }),
       }));
     },
@@ -1834,9 +1837,10 @@ export const useRequestStore = create<RequestState>((set, get) => {
           },
         });
       } catch (err) {
+        const structured = toRequestError(err);
         set((s) => ({
-          errors: { ...s.errors, [reqId]: String(err) },
-          ...syncDerived({ ...s, errors: { ...s.errors, [reqId]: String(err) } }),
+          errors: { ...s.errors, [reqId]: structured },
+          ...syncDerived({ ...s, errors: { ...s.errors, [reqId]: structured } }),
         }));
       }
     },
@@ -1857,9 +1861,10 @@ export const useRequestStore = create<RequestState>((set, get) => {
           },
         }));
       } catch (err) {
+        const structured = toRequestError(err);
         set((s) => ({
-          errors: { ...s.errors, [req.id]: String(err) },
-          ...syncDerived({ ...s, errors: { ...s.errors, [req.id]: String(err) } }),
+          errors: { ...s.errors, [req.id]: structured },
+          ...syncDerived({ ...s, errors: { ...s.errors, [req.id]: structured } }),
         }));
       }
     },
@@ -1931,9 +1936,10 @@ export const useRequestStore = create<RequestState>((set, get) => {
           },
         });
       } catch (err) {
+        const structured = toRequestError(err);
         set((s) => ({
-          errors: { ...s.errors, [reqId]: String(err) },
-          ...syncDerived({ ...s, errors: { ...s.errors, [reqId]: String(err) } }),
+          errors: { ...s.errors, [reqId]: structured },
+          ...syncDerived({ ...s, errors: { ...s.errors, [reqId]: structured } }),
         }));
       }
     },

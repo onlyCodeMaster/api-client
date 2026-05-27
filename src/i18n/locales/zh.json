@@ -154,7 +154,9 @@
     "copy_curl": "复制为 cURL",
     "copy_har": "复制为 HAR",
     "save_to_variable": "保存到变量…",
-    "save_to_variable_done": "已保存到 {{env}}.{{key}}"
+    "save_to_variable_done": "已保存到 {{env}}.{{key}}",
+    "request_failed": "请求失败",
+    "retry": "重试"
   },
   "save_variable": {
     "title": "将响应值保存到变量",
@@ -338,7 +340,20 @@
     "request_failed": "请求失败",
     "request_cancelled": "请求已取消",
     "invalid_json": "JSON 格式错误",
-    "no_workspace": "无活动工作区"
+    "no_workspace": "无活动工作区",
+    "kind": {
+      "cancelled": "已取消",
+      "timeout": "请求超时",
+      "dns": "DNS 解析失败",
+      "connection": "连接失败",
+      "tls": "TLS / 证书错误",
+      "proxy": "代理错误",
+      "client_certificate": "客户端证书错误",
+      "input": "请求参数无效",
+      "redirect": "重定向异常",
+      "body": "响应体读取失败",
+      "unknown": "请求失败"
+    }
   },
   "codegen": {
     "title": "生成代码",

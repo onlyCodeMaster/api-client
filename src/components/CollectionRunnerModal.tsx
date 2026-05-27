@@ -178,7 +178,7 @@ export function CollectionRunnerModal({ collectionId, onClose }: Props) {
           status: result.response?.status,
           timeMs: result.response?.time_ms,
           tests: result.tests,
-          error: result.error || result.scriptError,
+          error: result.error?.message || result.scriptError,
           iteration: iter + 1,
         };
         setResults((prev) => [...prev, entry]);

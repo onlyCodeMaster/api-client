@@ -2,6 +2,7 @@ pub mod commands;
 pub mod db;
 pub mod mock_server;
 pub mod oauth2;
+pub mod request_error;
 pub mod secrets;
 pub mod sse;
 pub mod storage;
@@ -336,7 +337,8 @@ async fn send_request(
     cached_bodies: State<'_, Arc<CachedBodies>>,
     db: State<'_, db::Database>,
     payload: RequestPayload,
-) -> Result<ResponseData, String> {
+) -> Result<ResponseData, request_error::RequestError> {
+    use request_error::{from_reqwest, RequestError};
     let timeout = Duration::from_millis(payload.timeout_ms.unwrap_or(30000));
     // Default is the safe behavior: verify TLS. Only skip when the frontend
     // explicitly opts out (per-request or via the global setting).
@@ -357,29 +359,48 @@ async fn send_request(
 
     if let Some(proxy_url) = payload.proxy_url.as_deref() {
         if !proxy_url.is_empty() {
-            let proxy = reqwest::Proxy::all(proxy_url)
-                .map_err(|e| format!("Invalid proxy URL: {}", e))?;
+            let proxy = reqwest::Proxy::all(proxy_url).map_err(|e| {
+                RequestError::new(
+                    request_error::ErrorKind::Proxy,
+                    "INVALID_PROXY_URL",
+                    format!("Invalid proxy URL: {}", e),
+                )
+            })?;
             builder = builder.proxy(proxy);
         }
     }
 
     if let Some(cert) = &payload.client_cert {
         if !cert.path.is_empty() {
-            let pkcs12_bytes = tokio::fs::read(&cert.path)
-                .await
-                .map_err(|e| format!("Failed to read client certificate '{}': {}", cert.path, e))?;
+            let pkcs12_bytes = tokio::fs::read(&cert.path).await.map_err(|e| {
+                RequestError::new(
+                    request_error::ErrorKind::ClientCertificate,
+                    "CLIENT_CERT_READ_FAILED",
+                    format!("Failed to read client certificate '{}': {}", cert.path, e),
+                )
+            })?;
             let identity = reqwest::Identity::from_pkcs12_der(
                 &pkcs12_bytes,
                 cert.password.as_deref().unwrap_or(""),
             )
-            .map_err(|e| format!("Invalid client certificate: {}", e))?;
+            .map_err(|e| {
+                RequestError::new(
+                    request_error::ErrorKind::ClientCertificate,
+                    "CLIENT_CERT_INVALID",
+                    format!("Invalid client certificate: {}", e),
+                )
+            })?;
             builder = builder.identity(identity);
         }
     }
 
-    let client = builder
-        .build()
-        .map_err(|e| format!("Failed to create client: {}", e))?;
+    let client = builder.build().map_err(|e| {
+        RequestError::new(
+            request_error::ErrorKind::Unknown,
+            "CLIENT_BUILD_FAILED",
+            format!("Failed to create client: {}", e),
+        )
+    })?;
 
     // Register cancellation token
     let cancel_token = CancellationToken::new();
@@ -394,10 +415,18 @@ async fn send_request(
         if !h.enabled || h.key.is_empty() {
             continue;
         }
-        let name = HeaderName::from_bytes(h.key.as_bytes())
-            .map_err(|e| format!("Invalid header name '{}': {}", h.key, e))?;
-        let value = HeaderValue::from_str(&h.value)
-            .map_err(|e| format!("Invalid header value '{}': {}", h.value, e))?;
+        let name = HeaderName::from_bytes(h.key.as_bytes()).map_err(|e| {
+            RequestError::input(
+                "INVALID_HEADER_NAME",
+                format!("Invalid header name '{}': {}", h.key, e),
+            )
+        })?;
+        let value = HeaderValue::from_str(&h.value).map_err(|e| {
+            RequestError::input(
+                "INVALID_HEADER_VALUE",
+                format!("Invalid header value '{}': {}", h.value, e),
+            )
+        })?;
         headers.insert(name, value);
     }
 
@@ -405,7 +434,9 @@ async fn send_request(
         .method
         .to_uppercase()
         .parse::<reqwest::Method>()
-        .map_err(|e| format!("Invalid method: {}", e))?;
+        .map_err(|e| {
+            RequestError::input("INVALID_METHOD", format!("Invalid method: {}", e))
+        })?;
 
     let mut request_builder = client.request(method, &payload.url).headers(headers);
 
@@ -420,7 +451,10 @@ async fn send_request(
                 if field.is_file {
                     if let Some(path) = &field.file_path {
                         let bytes = tokio::fs::read(path).await.map_err(|e| {
-                            format!("Failed to read file '{}': {}", path, e)
+                            RequestError::input(
+                                "FILE_READ_FAILED",
+                                format!("Failed to read file '{}': {}", path, e),
+                            )
                         })?;
                         let file_name = std::path::Path::new(path)
                             .file_name()
@@ -445,9 +479,9 @@ async fn send_request(
     let start = Instant::now();
 
     // Race between request and cancellation
-    let result = tokio::select! {
-        res = request_builder.send() => res.map_err(|e| format!("Request failed: {}", e)),
-        _ = cancel_token.cancelled() => Err("Request cancelled".to_string()),
+    let result: Result<reqwest::Response, RequestError> = tokio::select! {
+        res = request_builder.send() => res.map_err(from_reqwest),
+        _ = cancel_token.cancelled() => Err(RequestError::cancelled()),
     };
 
     // Cleanup
@@ -483,10 +517,7 @@ async fn send_request(
     }
 
     let body_start = Instant::now();
-    let body_bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to read body: {}", e))?;
+    let body_bytes = response.bytes().await.map_err(from_reqwest)?;
     let download_ms = body_start.elapsed().as_millis() as u64;
     let elapsed = start.elapsed().as_millis() as u64;
     let size_bytes = body_bytes.len();

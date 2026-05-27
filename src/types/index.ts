@@ -220,6 +220,40 @@ export interface ResponseTimings {
   total_ms: number;
 }
 
+/**
+ * Stable error category returned by the backend `send_request` command.
+ * The frontend uses this to pick icons, troubleshooting hints, and decide
+ * whether to show a "Retry" button. Wire shape matches Rust
+ * `request_error::ErrorKind` (snake_case via serde).
+ */
+export type RequestErrorKind =
+  | "cancelled"
+  | "timeout"
+  | "dns"
+  | "connection"
+  | "tls"
+  | "proxy"
+  | "client_certificate"
+  | "input"
+  | "redirect"
+  | "body"
+  | "unknown";
+
+/**
+ * Structured error returned from `send_request`. The frontend either gets
+ * one of these from a backend rejection or constructs one for purely
+ * frontend failures (worker errors, etc.) via `toRequestError()`.
+ */
+export interface RequestError {
+  kind: RequestErrorKind;
+  /** Finer-grained sub-code, e.g. `"INVALID_HEADER_NAME"`. */
+  code: string;
+  /** Human-readable description suitable for direct display. */
+  message: string;
+  /** Whether retrying the request unchanged is likely to succeed. */
+  retryable: boolean;
+}
+
 export interface ResponseData {
   status: number;
   status_text: string;
