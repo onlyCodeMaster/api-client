@@ -152,6 +152,24 @@ export function Sidebar() {
     }
   }, [activeTab, refreshRecent]);
 
+  // Reset the history filter when the workspace changes. `switchWorkspace`
+  // replaces the store's `history` array with the new workspace's full
+  // (unfiltered) history, but the search input is React local state and
+  // would otherwise keep showing the previous workspace's query —
+  // leaving the user with a stale "foo" in the box over an unfiltered
+  // list of the new workspace.
+  //
+  // Using the prev-ref pattern from
+  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+  // rather than a useEffect — eslint's `react-hooks/set-state-in-effect`
+  // rule (correctly) flags the useEffect form as a cascading-render
+  // anti-pattern.
+  const prevWorkspaceIdRef = useRef(workspace?.id);
+  if (prevWorkspaceIdRef.current !== workspace?.id) {
+    prevWorkspaceIdRef.current = workspace?.id;
+    setHistorySearchQuery("");
+  }
+
   const handleAddCollection = async () => {
     const name = newCollectionName.trim();
     if (!name) return;
