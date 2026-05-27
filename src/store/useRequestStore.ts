@@ -49,38 +49,20 @@ import {
   generateId,
   createEmptyKeyValue,
   createNewRequest,
-  requestToHistoryEntry,
-  historyEntryToRequest,
   findRequestInCollection,
+  historyEntryToRequest,
+  updateActiveTab,
 } from "./storeHelpers";
+import { createEnvironmentsSlice } from "./slices/environmentsSlice";
+import { createHistorySlice } from "./slices/historySlice";
 import { createProtocolSlice } from "./slices/protocolSlice";
 import { createRecentSlice } from "./slices/recentSlice";
+import { createTabSlice } from "./slices/tabSlice";
 import { createWorkspaceSlice } from "./slices/workspaceSlice";
 
 // `RequestState`, `activeTab`, and `syncDerived` live in
 // `./storeTypes.ts` so slice modules in `./slices/*.ts` can reference
 // them without creating a circular import (store → slice → store).
-
-/**
- * Apply a patch to the currently focused tab and return the partial
- * state to feed into `set()`. Kept inline here (not on `storeTypes.ts`)
- * because it's only consumed by the active-tab setters defined later in
- * this file — the slices in `./slices/*.ts` don't need it.
- */
-function updateActiveTab(
-  state: RequestState,
-  patch: Partial<RequestItem>
-): Partial<RequestState> {
-  if (!state.activeTabId) return {};
-  const tabs = state.tabs.map((t) =>
-    t.id === state.activeTabId ? { ...t, ...patch } : t
-  );
-  const active = tabs.find((t) => t.id === state.activeTabId) || null;
-  return {
-    tabs,
-    activeRequest: active,
-  };
-}
 
 export const useRequestStore = create<RequestState>((set, get) => {
   const initialReq = createNewRequest();
@@ -254,197 +236,8 @@ export const useRequestStore = create<RequestState>((set, get) => {
       }
     },
 
-    // === Tabs ===
-
-    openTab: (request) => {
-      const { tabs } = get();
-      if (tabs.find((t) => t.id === request.id)) {
-        set((s) => ({ activeTabId: request.id, ...syncDerived({ ...s, activeTabId: request.id }) }));
-        get().persistTabsState();
-        return;
-      }
-      const next = [...tabs, request];
-      set((s) => ({
-        tabs: next,
-        activeTabId: request.id,
-        ...syncDerived({ ...s, tabs: next, activeTabId: request.id }),
-      }));
-      get().persistTabsState();
-    },
-
-    closeTab: (id) => {
-      const state = get();
-      const { tabs, activeTabId, responses, errors, loadings, wsConnected, wsMessages,
-        testResults, scriptLogs, scriptError, responseHistory, sseConnected, sseEvents } = state;
-      // If a WebSocket is still open in this tab, close it on the backend
-      if (wsConnected[id]) {
-        invoke("ws_close", { requestId: id }).catch(() => {});
-      }
-      // Same for an open SSE stream
-      if (sseConnected[id]) {
-        invoke("sse_close", { requestId: id }).catch(() => {});
-      }
-      // If an HTTP request is still in flight, cancel it
-      if (loadings[id]) {
-        invoke("cancel_request", { requestId: id }).catch(() => {});
-      }
-      if (tabs.length === 1) {
-        // Replace with a fresh new request rather than zero tabs. Reset every
-        // per-request map so we don't keep stale entries (notably
-        // responseHistory, which can hold large response bodies).
-        const fresh = createNewRequest();
-        set((s) => ({
-          tabs: [fresh],
-          activeTabId: fresh.id,
-          responses: {},
-          errors: {},
-          loadings: {},
-          testResults: {},
-          scriptLogs: {},
-          scriptError: {},
-          responseHistory: {},
-          wsConnected: {},
-          wsMessages: {},
-          sseConnected: {},
-          sseEvents: {},
-          ...syncDerived({ ...s, tabs: [fresh], activeTabId: fresh.id, responses: {}, errors: {}, loadings: {} }),
-        }));
-        // Persist the fresh-tab state too — otherwise the workspace file
-        // keeps the closed tab snapshot and the next launch restores it.
-        get().persistTabsState();
-        return;
-      }
-      const idx = tabs.findIndex((t) => t.id === id);
-      const remaining = tabs.filter((t) => t.id !== id);
-      let nextActive = activeTabId;
-      if (activeTabId === id) {
-        const fallback = remaining[Math.max(0, idx - 1)] ?? remaining[0];
-        nextActive = fallback.id;
-      }
-      const respRest = { ...responses }; delete respRest[id];
-      const errRest = { ...errors }; delete errRest[id];
-      const loadRest = { ...loadings }; delete loadRest[id];
-      const wsConnRest = { ...wsConnected }; delete wsConnRest[id];
-      const wsMsgRest = { ...wsMessages }; delete wsMsgRest[id];
-      const testResultsRest = { ...testResults }; delete testResultsRest[id];
-      const scriptLogsRest = { ...scriptLogs }; delete scriptLogsRest[id];
-      const scriptErrorRest = { ...scriptError }; delete scriptErrorRest[id];
-      const responseHistoryRest = { ...responseHistory }; delete responseHistoryRest[id];
-      const sseConnRest = { ...sseConnected }; delete sseConnRest[id];
-      const sseEventsRest = { ...sseEvents }; delete sseEventsRest[id];
-      set((s) => ({
-        tabs: remaining,
-        activeTabId: nextActive,
-        responses: respRest,
-        errors: errRest,
-        loadings: loadRest,
-        wsConnected: wsConnRest,
-        wsMessages: wsMsgRest,
-        testResults: testResultsRest,
-        scriptLogs: scriptLogsRest,
-        scriptError: scriptErrorRest,
-        responseHistory: responseHistoryRest,
-        sseConnected: sseConnRest,
-        sseEvents: sseEventsRest,
-        ...syncDerived({
-          ...s,
-          tabs: remaining,
-          activeTabId: nextActive,
-          responses: respRest,
-          errors: errRest,
-          loadings: loadRest,
-        }),
-      }));
-      get().persistTabsState();
-    },
-
-    setActiveTab: (id) => {
-      set((s) => ({ activeTabId: id, ...syncDerived({ ...s, activeTabId: id }) }));
-      get().persistTabsState();
-    },
-
-    reorderTabs: (fromId, toId) => {
-      const { tabs } = get();
-      const from = tabs.findIndex((t) => t.id === fromId);
-      const to = tabs.findIndex((t) => t.id === toId);
-      if (from === -1 || to === -1 || from === to) return;
-      const next = [...tabs];
-      const [moved] = next.splice(from, 1);
-      next.splice(to, 0, moved);
-      set({ tabs: next });
-      get().persistTabsState();
-    },
-
-    cycleTab: (delta) => {
-      const { tabs, activeTabId } = get();
-      if (tabs.length === 0) return;
-      const idx = activeTabId ? tabs.findIndex((t) => t.id === activeTabId) : -1;
-      if (idx === -1) {
-        get().setActiveTab(tabs[0].id);
-        return;
-      }
-      const len = tabs.length;
-      // Modulo arithmetic that handles negative deltas correctly.
-      const nextIdx = (((idx + delta) % len) + len) % len;
-      get().setActiveTab(tabs[nextIdx].id);
-    },
-
-    duplicateActiveTab: () => {
-      const { tabs, activeTabId } = get();
-      const active = tabs.find((t) => t.id === activeTabId);
-      if (!active) return;
-      const now = Date.now();
-      const clone: RequestItem = {
-        ...active,
-        id: generateId(),
-        name: `${active.name} (copy)`,
-        createdAt: now,
-        updatedAt: now,
-        // Deep-copy mutable arrays so future edits to the clone don't bleed
-        // back into the source tab through shared references.
-        headers: active.headers.map((h) => ({ ...h })),
-        params: active.params.map((p) => ({ ...p })),
-        formData: active.formData.map((f) => ({ ...f })),
-      };
-      get().openTab(clone);
-    },
-
-    setActiveRequest: (request) => {
-      get().openTab(request);
-    },
-
-    updateActiveRequest: (partial) => {
-      set((s) => ({ ...updateActiveTab(s, partial), ...syncDerived({ ...s, ...updateActiveTab(s, partial) } as RequestState) }));
-      get().persistTabsState();
-    },
-
-    // All individual setters delegate to updateActiveRequest so the
-    // workspace persistence layer fires for every keystroke-driven change
-    // (debounced inside persistTabsState). Without this, edits typed into
-    // RequestPanel — URL, headers, body, scripts, … — would only be
-    // written to disk when the user happens to perform a structural tab
-    // action (open/close/switch), and a crash mid-edit would lose work.
-    setMethod: (method) => get().updateActiveRequest({ method }),
-    setUrl: (url) => get().updateActiveRequest({ url }),
-    setHeaders: (headers) => get().updateActiveRequest({ headers }),
-    setParams: (params) => get().updateActiveRequest({ params }),
-    setBody: (body) => get().updateActiveRequest({ body }),
-    setBodyType: (bodyType) => get().updateActiveRequest({ bodyType }),
-    setFormData: (formData) => get().updateActiveRequest({ formData }),
-    setAuth: (auth) => get().updateActiveRequest({ auth }),
-    setName: (name) => get().updateActiveRequest({ name }),
-    setTimeoutMs: (timeoutMs) => get().updateActiveRequest({ timeoutMs }),
-    setVerifyTls: (verifyTls) => get().updateActiveRequest({ verifyTls }),
-    setRedirectPolicy: (redirectPolicy) => get().updateActiveRequest({ redirectPolicy }),
-    setMaxRedirects: (maxRedirects) => get().updateActiveRequest({ maxRedirects }),
-    setProxyUrl: (proxyUrl) => get().updateActiveRequest({ proxyUrl }),
-    setClientCert: (clientCert) => get().updateActiveRequest({ clientCert }),
-    setProtocol: (protocol) => get().updateActiveRequest({ protocol }),
-    setGraphqlQuery: (graphqlQuery) => get().updateActiveRequest({ graphqlQuery }),
-    setGraphqlVariables: (graphqlVariables) => get().updateActiveRequest({ graphqlVariables }),
-    setPreScript: (preScript) => get().updateActiveRequest({ preScript }),
-    setTestScript: (testScript) => get().updateActiveRequest({ testScript }),
-    setTags: (tags) => get().updateActiveRequest({ tags }),
+    // === Tabs + active-tab field setters ===
+    ...createTabSlice(set, get),
 
     sendRequest: async () => {
       const state = get();
@@ -749,98 +542,8 @@ export const useRequestStore = create<RequestState>((set, get) => {
       get().openTab(newReq);
     },
 
-    addToHistory: (request, response) => {
-      const { workspace, maxHistoryBodyBytes } = get();
-      const entry = requestToHistoryEntry(request, response, workspace?.id, maxHistoryBodyBytes);
-      invoke("save_history", { entry }).catch((err) => console.error("Failed to save history:", err));
-      set((state) => {
-        const exists = state.history.find((r) => r.id === request.id);
-        const nextHistory = exists
-          ? state.history.map((r) => (r.id === request.id ? { ...request, createdAt: Date.now() } : r))
-          : [{ ...request, createdAt: Date.now() }, ...state.history].slice(0, 50);
-        // Mirror the persisted snapshot in memory so loadFromHistory can
-        // restore the response panel without re-running the request.
-        const nextResponses = { ...state.historyResponses };
-        if (response) {
-          nextResponses[request.id] = response;
-        } else {
-          delete nextResponses[request.id];
-        }
-        return { history: nextHistory, historyResponses: nextResponses };
-      });
-    },
-
-    deleteRequestFromHistory: (id) => {
-      invoke("delete_history", { id }).catch((err) => console.error("Failed to delete history:", err));
-      set((state) => {
-        const nextResponses = { ...state.historyResponses };
-        delete nextResponses[id];
-        return { history: state.history.filter((r) => r.id !== id), historyResponses: nextResponses };
-      });
-    },
-
-    clearAllHistory: async () => {
-      await invoke("clear_history");
-      set({ history: [], historyResponses: {} });
-    },
-
-    loadFromHistory: (id) => {
-      const { history, historyResponses } = get();
-      const request = history.find((r) => r.id === id);
-      if (!request) return;
-      // Clone the request into a fresh tab id to avoid stomping the history
-      // entry. Carry the cached response so the response panel hydrates
-      // immediately on switch.
-      const newId = generateId();
-      const cloned: RequestItem = { ...request, id: newId };
-      const cachedResponse = historyResponses[id];
-      get().openTab(cloned);
-      if (cachedResponse) {
-        set((s) => {
-          const responses = { ...s.responses, [newId]: cachedResponse };
-          return { responses, ...syncDerived({ ...s, responses }) };
-        });
-      }
-      get().recordRecent({
-        item_type: "request",
-        item_id: `history:${id}`,
-        name: request.name || request.url || request.method,
-      }).catch(() => {});
-    },
-
-    searchHistory: async (query) => {
-      try {
-        const { workspace } = get();
-        const entries = await invoke<HistoryEntry[]>("search_history", {
-          workspaceId: workspace?.id,
-          query,
-        });
-        const history = entries.map(historyEntryToRequest);
-        // Update the response cache so search results are also restorable.
-        const cacheUpdates: Record<string, ResponseData> = {};
-        for (const entry of entries) {
-          const r = historyEntryToResponse(entry);
-          if (r) cacheUpdates[entry.id] = r;
-        }
-        set((state) => ({
-          history,
-          historyResponses: { ...state.historyResponses, ...cacheUpdates },
-        }));
-      } catch (err) {
-        console.error("Failed to search history:", err);
-      }
-    },
-
-    reorderHistory: (fromId, toId) => {
-      const { history } = get();
-      const from = history.findIndex((r) => r.id === fromId);
-      const to = history.findIndex((r) => r.id === toId);
-      if (from === -1 || to === -1 || from === to) return;
-      const next = [...history];
-      const [moved] = next.splice(from, 1);
-      next.splice(to, 0, moved);
-      set({ history: next });
-    },
+    // === History ===
+    ...createHistorySlice(set, get),
 
     // === Collections ===
 
@@ -1129,49 +832,7 @@ export const useRequestStore = create<RequestState>((set, get) => {
     },
 
     // === Environments ===
-
-    addEnvironment: async (name) => {
-      const now = Date.now();
-      const { workspace } = get();
-      const env: Environment = {
-        id: generateId(),
-        name,
-        variables: [],
-        created_at: now,
-        updated_at: now,
-        workspace_id: workspace?.id,
-      };
-      await invoke("save_environment", { env });
-      set((state) => ({ environments: [...state.environments, env] }));
-    },
-
-    deleteEnvironment: async (id) => {
-      await invoke("delete_environment", { id });
-      set((state) => ({ environments: state.environments.filter((e) => e.id !== id) }));
-    },
-
-    updateEnvironment: async (env) => {
-      const updated = { ...env, updated_at: Date.now() };
-      await invoke("save_environment", { env: updated });
-      set((state) => ({ environments: state.environments.map((e) => (e.id === env.id ? updated : e)) }));
-    },
-
-    refreshEnvironments: async () => {
-      const { workspace } = get();
-      const environments = await invoke<Environment[]>("list_environments", {
-        workspaceId: workspace?.id,
-      });
-      set({ environments });
-    },
-
-    setActiveEnvironment: (id) => {
-      set((state) => ({
-        workspace: state.workspace ? { ...state.workspace, active_environment_id: id ?? undefined } : null,
-      }));
-      get().saveWorkspaceState();
-    },
-
-
+    ...createEnvironmentsSlice(set, get),
 
     // === Cookies ===
 
