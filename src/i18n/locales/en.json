@@ -143,7 +143,29 @@
     "binary_notice": "Binary response ({{type}}, {{size}}). Hex dump of first 4 KiB:",
     "tests_passed": "{{passed}}/{{total}} passed",
     "tests_failed": "{{failed}}/{{total}} failed",
-    "no_response": "Send a request to see the response"
+    "no_response": "Send a request to see the response",
+    "more_actions": "More actions",
+    "copy_body": "Copy body",
+    "copy_url": "Copy URL",
+    "copy_curl": "Copy as cURL",
+    "copy_har": "Copy as HAR",
+    "save_to_variable": "Save to variable…",
+    "save_to_variable_done": "Saved to {{env}}.{{key}}"
+  },
+  "save_variable": {
+    "title": "Save response value to variable",
+    "environment": "Environment",
+    "no_environments": "You don't have any environments yet. Create one from the sidebar first.",
+    "variable_name": "Variable name",
+    "variable_name_placeholder": "authToken",
+    "json_path": "JSONPath (optional)",
+    "preview": "Preview",
+    "preview_empty": "(empty value)",
+    "mark_secret": "Mark as secret (redacted in logs)",
+    "error_path_no_match": "JSONPath didn't match anything in this body.",
+    "error_path_on_non_json": "Response body isn't valid JSON — JSONPath can't be applied.",
+    "error_binary_no_path": "Response body is binary. Set a JSONPath that extracts a string, or save to file instead.",
+    "error_env_missing": "Selected environment no longer exists."
   },
   "settings": {
     "settings": "Settings",
