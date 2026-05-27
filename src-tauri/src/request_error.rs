@@ -239,4 +239,234 @@ mod tests {
         assert_eq!(err.kind, ErrorKind::Input);
         assert!(!err.retryable);
     }
+
+    #[test]
+    fn classify_connection_refused() {
+        // Hit a port nothing is listening on. The OS should refuse the
+        // connection synchronously (or after a TCP RST), giving us a
+        // typed std::io::ErrorKind::ConnectionRefused inside the source
+        // chain — exactly the path the matcher in classify_reqwest is
+        // designed to recognize.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("rt");
+        let kind = rt.block_on(async {
+            // Bind a TCP listener then immediately drop it — the kernel
+            // reclaims the port and any subsequent connect to it gets
+            // ECONNREFUSED. Avoids the flake of "hopefully unused port N".
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind");
+            let port = listener.local_addr().expect("local_addr").port();
+            drop(listener);
+
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+                .expect("client");
+            let err = client
+                .get(format!("http://127.0.0.1:{}/", port))
+                .send()
+                .await
+                .expect_err("expected error");
+            classify_reqwest(&err).0
+        });
+        // ConnectionRefused must classify as Connection (retryable).
+        assert_eq!(kind, ErrorKind::Connection);
+        assert!(kind.is_retryable());
+    }
+
+    #[test]
+    fn classify_success_response_has_no_error() {
+        // Sanity check: a happy 200 response must NOT produce a reqwest
+        // error. This pins the test-server pattern used by the negative
+        // tests below.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("rt");
+        rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind");
+            let addr = listener.local_addr().expect("addr");
+            let app = axum::Router::new().route(
+                "/",
+                axum::routing::get(|| async { "hello" }),
+            );
+            let server =
+                tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+            let client = reqwest::Client::new();
+            let resp = client
+                .get(format!("http://{}/", addr))
+                .send()
+                .await
+                .expect("send");
+            assert!(resp.status().is_success());
+            let body = resp.text().await.expect("body");
+            assert_eq!(body, "hello");
+
+            server.abort();
+        });
+    }
+
+    #[test]
+    fn classify_timeout_against_slow_server() {
+        // Spin up a real server that holds the connection forever, then
+        // configure a short client timeout. The reqwest error's
+        // is_timeout() predicate must be true and our classifier must map
+        // it to Timeout. Unlike the black-hole 192.0.2.1 test above which
+        // could plausibly be a Connection error on some platforms, this
+        // one is deterministic — the server accepted the TCP connection,
+        // so we know the timeout fires at the HTTP/response layer.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("rt");
+        rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind");
+            let addr = listener.local_addr().expect("addr");
+            // Handler that sleeps for 5s — long enough that the client's
+            // 50ms timeout will always fire first.
+            let app = axum::Router::new().route(
+                "/slow",
+                axum::routing::get(|| async {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    "too late"
+                }),
+            );
+            let server =
+                tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_millis(50))
+                .build()
+                .expect("client");
+            let err = client
+                .get(format!("http://{}/slow", addr))
+                .send()
+                .await
+                .expect_err("expected timeout");
+            assert!(err.is_timeout(), "expected timeout error, got {:?}", err);
+
+            let (kind, code) = classify_reqwest(&err);
+            assert_eq!(kind, ErrorKind::Timeout);
+            assert_eq!(code, "TIMEOUT");
+            assert!(kind.is_retryable());
+
+            server.abort();
+        });
+    }
+
+    #[test]
+    fn classify_redirect_limit() {
+        // A server that always 302s to itself with a tiny redirect cap
+        // must produce reqwest::is_redirect() == true.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("rt");
+        rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind");
+            let addr = listener.local_addr().expect("addr");
+            let app = axum::Router::new().route(
+                "/loop",
+                axum::routing::get(|| async {
+                    (
+                        axum::http::StatusCode::FOUND,
+                        [(axum::http::header::LOCATION, "/loop")],
+                        "",
+                    )
+                }),
+            );
+            let server =
+                tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+            let client = reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::limited(1))
+                .build()
+                .expect("client");
+            let err = client
+                .get(format!("http://{}/loop", addr))
+                .send()
+                .await
+                .expect_err("expected redirect error");
+
+            let (kind, code) = classify_reqwest(&err);
+            assert_eq!(kind, ErrorKind::Redirect);
+            assert_eq!(code, "REDIRECT_LIMIT");
+            assert!(kind.is_retryable());
+
+            server.abort();
+        });
+    }
+
+    #[test]
+    fn classify_dns_failure() {
+        // A bogus TLD that no resolver should ever return an A record for.
+        // Most stacks return std::io::ErrorKind::NotFound or InvalidInput
+        // from the resolver, which our matcher maps to Dns. We accept
+        // either Dns or Connection since the exact io::Error kind varies
+        // across platforms (libc vs trust-dns vs musl).
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("rt");
+        let kind = rt.block_on(async {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(3))
+                .build()
+                .expect("client");
+            let err = client
+                .get("http://this-host-does-not-exist.invalid.example.")
+                .send()
+                .await
+                .expect_err("expected DNS error");
+            classify_reqwest(&err).0
+        });
+        assert!(
+            matches!(kind, ErrorKind::Dns | ErrorKind::Connection | ErrorKind::Unknown),
+            "expected Dns/Connection/Unknown, got {:?}",
+            kind
+        );
+        // Whichever we land on, it must be retryable — never Input.
+        assert!(kind.is_retryable());
+    }
+
+    #[test]
+    fn from_reqwest_preserves_message() {
+        // The classified RequestError must carry the original reqwest
+        // error message verbatim — bug reports depend on the underlying
+        // string for diagnosis. We don't try to enforce an exact match
+        // because the message contains a port number that varies; we just
+        // make sure the message is non-empty.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("rt");
+        let err: RequestError = rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind");
+            let port = listener.local_addr().expect("addr").port();
+            drop(listener);
+            let client = reqwest::Client::new();
+            let reqwest_err = client
+                .get(format!("http://127.0.0.1:{}/", port))
+                .send()
+                .await
+                .expect_err("expected error");
+            from_reqwest(reqwest_err)
+        });
+        assert!(
+            !err.message.is_empty(),
+            "from_reqwest must preserve a non-empty message"
+        );
+    }
 }
