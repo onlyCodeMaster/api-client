@@ -71,13 +71,35 @@ export function readonlyScopeApi(
 
 // ---- Chai-flavoured assertion chain ----------------------------------------
 
+export interface ChainHave {
+  status: (code: number) => void;
+  property: (key: string) => void;
+  lengthOf: (n: number) => void;
+  length: (n: number) => void;
+}
+
+export interface ChainBe {
+  readonly ok: void;
+  readonly true: void;
+  readonly false: void;
+  readonly null: void;
+  readonly undefined: void;
+  readonly empty: void;
+  a: (type: string) => void;
+  an: (type: string) => void;
+  above: (n: number) => void;
+  below: (n: number) => void;
+  greaterThan: (n: number) => void;
+  lessThan: (n: number) => void;
+}
+
 export interface ChainTo {
   equal: (expected: unknown) => void;
   eql: (expected: unknown) => void;
   include: (expected: unknown) => void;
   match: (re: RegExp) => void;
-  have: Record<string, unknown>;
-  be: Record<string, unknown>;
+  have: ChainHave;
+  be: ChainBe;
   above: (n: number) => void;
   below: (n: number) => void;
   greaterThan: (n: number) => void;
@@ -140,7 +162,7 @@ export function buildChain(actual: unknown, negate: boolean): ChainNode {
       `expected ${actual} to be below ${n}`,
     );
 
-  const have = {
+  const have: ChainHave = {
     status: (code: number) => {
       const r = actual as { status?: number };
       failIfNot(
@@ -154,7 +176,6 @@ export function buildChain(actual: unknown, negate: boolean): ChainNode {
       failIfNot(hasIt, `expected object to have property "${key}"`);
     },
     lengthOf,
-    /** `.have.length` is an alias used by some scripts. */
     length: lengthOf,
   };
 
@@ -277,7 +298,7 @@ export function buildChain(actual: unknown, negate: boolean): ChainNode {
     include,
     match: matchFn,
     have,
-    be,
+    be: be as unknown as ChainBe,
     above: aboveFn,
     below: belowFn,
     greaterThan: aboveFn,
